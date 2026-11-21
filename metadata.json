@@ -1,0 +1,6 @@
+{
+  "name": "CPI-CPS Report Card",
+  "description": "Offline report card app for C.P.S. School (Nursery-5th) and C.P.I. School (6th-8th), Harikaranpur Bijaura Ghazipur (U.P.) with unified 10/30/60 marks, A4 Landscape slips, A4 Portrait Annual cards, and ZIP/JSON export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

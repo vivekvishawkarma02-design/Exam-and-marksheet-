@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">CPI-CPS Report Card</string>
+    <string name="cps_default_name">C.P.S. SCHOOL</string>
+    <string name="cpi_default_name">C.P.I. SCHOOL</string>
+    <string name="school_default_address">Harikaranpur Bijaura Ghazipur (U.P.)</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_students">Students</string>
+    <string name="nav_marks">Marks</string>
+    <string name="nav_reports">Reports</string>
+    <string name="nav_settings">Settings</string>
+</resources>

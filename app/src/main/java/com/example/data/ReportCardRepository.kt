@@ -101,6 +101,16 @@ class ReportCardRepository(private val dao: ReportCardDao) {
         return previous
     }
 
+    suspend fun saveMarksBatch(marks: List<MarkEntity>) {
+        if (marks.isNotEmpty()) {
+            dao.upsertMarks(marks)
+        }
+    }
+
+    suspend fun getAllStudents(): List<StudentEntity> = dao.getAllStudents()
+
+    suspend fun getAllSubjects(): List<SubjectEntity> = dao.getAllSubjects()
+
     suspend fun saveCoScholastic(studentId: Long, termNo: Int, areaCode: String, grade: String) {
         dao.upsertCoScholastic(CoScholasticEntity(studentId, termNo, areaCode, grade))
     }

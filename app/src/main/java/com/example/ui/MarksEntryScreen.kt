@@ -26,12 +26,14 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -82,6 +84,7 @@ fun MarksEntryScreen(
 ) {
     var selectedExam by remember { mutableStateOf(ExamType.HALF_YEARLY) }
     var entryMode by remember { mutableStateOf(MarksEntryMode.CLASS_GRID) }
+    var showMarksCsvDialog by remember { mutableStateOf(false) }
     val subjects = remember(uiState.filter.className, uiState.subjects) {
         uiState.subjectsForClass(uiState.filter.className)
     }
@@ -141,18 +144,36 @@ fun MarksEntryScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    if (uiState.lastMarkUndo != null) {
-                        TextButton(
-                            onClick = viewModel::undoLastMarkEdit,
-                            modifier = Modifier.testTag("undo_mark_button")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (uiState.lastMarkUndo != null) {
+                            TextButton(
+                                onClick = viewModel::undoLastMarkEdit,
+                                modifier = Modifier.testTag("undo_mark_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Undo,
+                                    contentDescription = "Undo last mark edit",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Undo", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = { showMarksCsvDialog = true },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            modifier = Modifier.testTag("import_marks_csv_button")
                         ) {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Filled.Undo,
-                                contentDescription = "Undo last mark edit",
+                                imageVector = Icons.Default.UploadFile,
+                                contentDescription = "Import Marks CSV",
                                 modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Undo", fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("CSV", style = MaterialTheme.typography.labelLarge)
                         }
                     }
                 }
@@ -308,6 +329,13 @@ fun MarksEntryScreen(
             )
         }
     }
+
+    MarksCsvImportController(
+        uiState = uiState,
+        viewModel = viewModel,
+        showSetupDialog = showMarksCsvDialog,
+        onDismissSetupDialog = { showMarksCsvDialog = false }
+    )
 }
 
 @Composable

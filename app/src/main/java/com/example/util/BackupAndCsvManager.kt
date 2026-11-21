@@ -7,6 +7,9 @@ import com.example.data.SchoolSettingsEntity
 import com.example.data.StudentEntity
 import com.example.data.SubjectEntity
 import com.example.data.TermInfoEntity
+import com.example.domain.MarkComponent
+import com.example.domain.MarkValidationResult
+import com.example.domain.ReportCalculations
 import com.example.domain.SchoolClass
 import org.json.JSONArray
 import org.json.JSONObject
@@ -14,6 +17,19 @@ import org.json.JSONObject
 data class CsvImportResult(
     val parsedStudents: List<StudentEntity>,
     val skippedRows: Int
+)
+
+data class MarksCsvIssue(
+    val rowNumber: Int,
+    val summary: String
+)
+
+data class MarksCsvParseResult(
+    val validMarks: List<MarkEntity>,
+    val matchedStudentIds: Set<Long>,
+    val processedRowCount: Int,
+    val skippedEmptyCells: Int,
+    val issues: List<MarksCsvIssue>
 )
 
 object BackupAndCsvManager {
@@ -364,6 +380,277 @@ object BackupAndCsvManager {
             )
         }
         return CsvImportResult(parsed, skipped)
+    }
+
+    const val MARKS_CSV_HEADER =
+        "session,class,section,rollNo,admNo,studentName,subject,T1_IA,T1_UT,T1_EXAM,T2_IA,T2_UT,T2_EXAM"
+
+    /**
+     * Generates a standardized marks CSV template pre-populated with students & subjects for the
+     * selected class/section (including any already-saved marks) so teachers can quickly fill
+     * marks in Excel or Google Sheets for a new academic session.
+     */
+    fun generateMarksCsvTemplate(
+        session: String,
+        className: String,
+        section: String,
+        students: List<StudentEntity>,
+        subjects: List<String>,
+        existingMarksByStudent: Map<Long, Map<Pair<String, String>, String>> = emptyMap()
+    ): String {
+        val sb = StringBuilder()
+        sb.appendLine(MARKS_CSV_HEADER)
+        val effectiveSubjects = subjects.ifEmpty { listOf("ENGLISH", "HINDI", "MATH") }
+
+        if (students.isEmpty()) {
+            effectiveSubjects.forEach { sub ->
+                sb.appendLine(
+                    listOf(
+                        session,
+                        className,
+                        section,
+                        "1",
+                        "ADM-001",
+                        "Sample Student",
+                        sub,
+                        "", "", "", "", "", ""
+                    ).joinToString(",") { escapeCsvCell(it) }
+                )
+            }
+            return sb.toString()
+        }
+
+        students.sortedBy { it.rollNo }.forEach { st ->
+            val stMarks = existingMarksByStudent[st.id].orEmpty()
+            effectiveSubjects.forEach { sub ->
+                sb.appendLine(
+                    listOf(
+                        st.session,
+                        st.className,
+                        st.section,
+                        st.rollNo.toString(),
+                        st.admNo,
+                        st.name,
+                        sub,
+                        stMarks[sub to MarkComponent.T1_IA.key].orEmpty(),
+                        stMarks[sub to MarkComponent.T1_UT.key].orEmpty(),
+                        stMarks[sub to MarkComponent.T1_EXAM.key].orEmpty(),
+                        stMarks[sub to MarkComponent.T2_IA.key].orEmpty(),
+                        stMarks[sub to MarkComponent.T2_UT.key].orEmpty(),
+                        stMarks[sub to MarkComponent.T2_EXAM.key].orEmpty()
+                    ).joinToString(",") { escapeCsvCell(it) }
+                )
+            }
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Parses and validates a standardized marks CSV against existing students and class subjects.
+     * Supports matching by (session, admNo) first and (session, class, section, rollNo) as fallback.
+     * Blank mark cells are safely skipped; invalid marks (e.g., > 10/30/60) are reported as row issues.
+     */
+    fun parseMarksCsv(
+        csvText: String,
+        students: List<StudentEntity>,
+        subjectsByGroup: Map<Int, List<String>>,
+        defaultSession: String,
+        defaultClass: String,
+        defaultSection: String
+    ): MarksCsvParseResult {
+        val cleanedText = csvText.removePrefix("\uFEFF")
+        val rawLines = cleanedText.lines()
+            .mapIndexed { idx, line -> (idx + 1) to line.trim() }
+            .filter { it.second.isNotEmpty() }
+
+        if (rawLines.isEmpty()) {
+            return MarksCsvParseResult(
+                validMarks = emptyList(),
+                matchedStudentIds = emptySet(),
+                processedRowCount = 0,
+                skippedEmptyCells = 0,
+                issues = listOf(MarksCsvIssue(1, "CSV file is empty."))
+            )
+        }
+
+        val firstCols = splitCsvLine(rawLines.first().second).map(::normalizeHeaderKey)
+        val hasHeader = firstCols.any {
+            it == "subject" || it == "subjectname" || it.contains("t1ia") || it.contains("t1ut") ||
+                it.contains("t1exam") || it.contains("t2ia") || it.contains("adm") || it.contains("roll")
+        }
+
+        val dataLines = if (hasHeader) rawLines.drop(1) else rawLines
+        val headerMap = if (hasHeader) {
+            firstCols.withIndex().associate { (idx, name) -> name to idx }
+        } else {
+            emptyMap()
+        }
+
+        fun colIndex(aliases: List<String>, fallback: Int): Int {
+            if (!hasHeader) return fallback
+            for (alias in aliases) {
+                headerMap[alias]?.let { return it }
+            }
+            for (alias in aliases) {
+                headerMap.entries.firstOrNull { it.key.contains(alias) }?.value?.let { return it }
+            }
+            return -1
+        }
+
+        val idxSession = colIndex(listOf("session", "academicsession", "year"), fallback = 0)
+        val idxClass = colIndex(listOf("class", "classname", "grade", "std"), fallback = 1)
+        val idxSection = colIndex(listOf("section", "sec"), fallback = 2)
+        val idxRoll = colIndex(listOf("rollno", "roll", "rn"), fallback = 3)
+        val idxAdm = colIndex(listOf("admno", "admissionno", "admission", "adm"), fallback = 4)
+        val idxName = colIndex(listOf("studentname", "name"), fallback = 5)
+        val idxSubject = colIndex(listOf("subjectname", "subject", "sub"), fallback = 6)
+
+        val compColumns: List<Pair<MarkComponent, Int>> = listOf(
+            MarkComponent.T1_IA to colIndex(listOf("t1ia", "term1ia", "t1intass", "ia1", "intass1", "internal1"), fallback = 7),
+            MarkComponent.T1_UT to colIndex(listOf("t1ut", "t1ut1", "term1ut", "ut1", "unittest1"), fallback = 8),
+            MarkComponent.T1_EXAM to colIndex(listOf("t1exam", "t1hy", "term1exam", "hy", "hyexam", "halfyearly"), fallback = 9),
+            MarkComponent.T2_IA to colIndex(listOf("t2ia", "term2ia", "t2intass", "ia2", "intass2", "internal2"), fallback = 10),
+            MarkComponent.T2_UT to colIndex(listOf("t2ut", "t2ut2", "term2ut", "ut2", "unittest2"), fallback = 11),
+            MarkComponent.T2_EXAM to colIndex(listOf("t2exam", "t2yearly", "term2exam", "yearly", "annual", "finalexam"), fallback = 12)
+        )
+
+        if (idxSubject < 0) {
+            return MarksCsvParseResult(
+                validMarks = emptyList(),
+                matchedStudentIds = emptySet(),
+                processedRowCount = 0,
+                skippedEmptyCells = 0,
+                issues = listOf(MarksCsvIssue(1, "Missing required 'subject' column in CSV header."))
+            )
+        }
+        if (compColumns.all { it.second < 0 }) {
+            return MarksCsvParseResult(
+                validMarks = emptyList(),
+                matchedStudentIds = emptySet(),
+                processedRowCount = 0,
+                skippedEmptyCells = 0,
+                issues = listOf(
+                    MarksCsvIssue(
+                        1,
+                        "No mark columns found. Expected columns such as T1_IA, T1_UT, T1_EXAM, T2_IA, T2_UT, T2_EXAM."
+                    )
+                )
+            )
+        }
+
+        // Fast lookup indices for matching students
+        val bySessionAndAdm = students.associateBy {
+            it.session.trim().lowercase() to it.admNo.trim().lowercase()
+        }
+        val bySessionClassSecRoll = students.associateBy {
+            listOf(
+                it.session.trim().lowercase(),
+                SchoolClass.fromName(it.className).displayName.lowercase(),
+                it.section.trim().uppercase(),
+                it.rollNo.toString()
+            )
+        }
+
+        val dedupedMarks = LinkedHashMap<Triple<Long, String, String>, MarkEntity>()
+        val matchedStudents = LinkedHashSet<Long>()
+        val issues = mutableListOf<MarksCsvIssue>()
+        var skippedEmpty = 0
+
+        dataLines.forEach { (rowNum, line) ->
+            val cols = splitCsvLine(line)
+            fun getCol(index: Int): String = if (index in cols.indices) cols[index].trim() else ""
+
+            val session = getCol(idxSession).ifEmpty { defaultSession }.trim()
+            val rawClass = getCol(idxClass).ifEmpty { defaultClass }.trim()
+            val normalizedClass = SchoolClass.fromName(rawClass).displayName
+            val section = getCol(idxSection).uppercase().ifEmpty { defaultSection.uppercase() }
+            val admNo = getCol(idxAdm)
+            val rollNo = getCol(idxRoll).toIntOrNull()
+            val csvName = getCol(idxName)
+            val rawSubject = getCol(idxSubject)
+
+            if (rawSubject.isEmpty()) {
+                issues += MarksCsvIssue(rowNum, "Row $rowNum: Missing subject name.")
+                return@forEach
+            }
+
+            val student = when {
+                admNo.isNotEmpty() -> bySessionAndAdm[session.lowercase() to admNo.lowercase()]
+                    ?: rollNo?.let {
+                        bySessionClassSecRoll[listOf(session.lowercase(), normalizedClass.lowercase(), section, it.toString())]
+                    }
+                rollNo != null -> bySessionClassSecRoll[listOf(session.lowercase(), normalizedClass.lowercase(), section, rollNo.toString())]
+                else -> null
+            }
+
+            if (student == null) {
+                val idLabel = when {
+                    admNo.isNotEmpty() -> "Adm '$admNo'"
+                    rollNo != null -> "Class $normalizedClass-$section Roll $rollNo"
+                    csvName.isNotEmpty() -> "'$csvName'"
+                    else -> "Unknown student"
+                }
+                issues += MarksCsvIssue(rowNum, "Row $rowNum: Student $idLabel not found in session $session.")
+                return@forEach
+            }
+
+            // Resolve subject name case-insensitively against configured subjects for the student's class group
+            val group = SchoolClass.fromName(student.className).group.id
+            val configuredSubjects = subjectsByGroup[group].orEmpty()
+            val resolvedSubject = configuredSubjects.firstOrNull { it.equals(rawSubject, ignoreCase = true) }
+                ?: rawSubject.uppercase()
+
+            var rowMatchedAny = false
+            compColumns.forEach { (component, colIdx) ->
+                if (colIdx < 0) return@forEach
+                val cellVal = getCol(colIdx)
+                if (cellVal.isEmpty()) {
+                    skippedEmpty++
+                    return@forEach
+                }
+                when (val validation = ReportCalculations.validateMarkInput(cellVal, component.maxMarks)) {
+                    is MarkValidationResult.Valid -> {
+                        if (validation.normalized.isNotEmpty()) {
+                            val key = Triple(student.id, resolvedSubject, component.key)
+                            dedupedMarks[key] = MarkEntity(
+                                studentId = student.id,
+                                subjectName = resolvedSubject,
+                                componentKey = component.key,
+                                rawValue = validation.normalized
+                            )
+                            rowMatchedAny = true
+                        }
+                    }
+                    is MarkValidationResult.Invalid -> {
+                        issues += MarksCsvIssue(
+                            rowNum,
+                            "Row $rowNum (${student.name}, $resolvedSubject, ${component.key}): ${validation.message}"
+                        )
+                    }
+                }
+            }
+            if (rowMatchedAny) {
+                matchedStudents += student.id
+            }
+        }
+
+        return MarksCsvParseResult(
+            validMarks = dedupedMarks.values.toList(),
+            matchedStudentIds = matchedStudents,
+            processedRowCount = dataLines.size,
+            skippedEmptyCells = skippedEmpty,
+            issues = issues
+        )
+    }
+
+    private fun normalizeHeaderKey(raw: String): String =
+        raw.removePrefix("\uFEFF")
+            .lowercase()
+            .replace(Regex("[^a-z0-9]"), "")
+
+    private fun escapeCsvCell(value: String): String {
+        val needsQuotes = value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r')
+        return if (needsQuotes) "\"${value.replace("\"", "\"\"")}\"" else value
     }
 
     private fun splitCsvLine(line: String): List<String> {

@@ -236,4 +236,88 @@ class ExampleRobolectricTest {
         assertEquals("6th", result.parsedStudents[0].className)
         assertEquals("2nd", result.parsedStudents[1].className)
     }
+
+    @Test
+    fun `standardized marks csv template and validated parser support admNo and roll fallback`() {
+        val students = listOf(
+            StudentEntity(
+                id = 101L,
+                session = "2026-2027",
+                admNo = "CPS-26-001",
+                name = "Aarav Verma",
+                fatherName = "Rajesh Verma",
+                motherName = "Sunita Devi",
+                dob = "10-05-2018",
+                mobile = "9839000001",
+                address = "Harikaranpur",
+                className = "2nd",
+                section = "A",
+                rollNo = 1
+            ),
+            StudentEntity(
+                id = 102L,
+                session = "2026-2027",
+                admNo = "CPS-26-002",
+                name = "Diya Sharma",
+                fatherName = "Anil Sharma",
+                motherName = "Meera Sharma",
+                dob = "15-08-2018",
+                mobile = "9839000002",
+                address = "Bijaura",
+                className = "2nd",
+                section = "A",
+                rollNo = 2
+            )
+        )
+        val subjects = listOf("ENGLISH", "HINDI", "MATH")
+        val existingMarks = mapOf(
+            101L to mapOf(("ENGLISH" to MarkComponent.T1_IA.key) to "9")
+        )
+
+        // 1. Verify standardized CSV template generation
+        val template = BackupAndCsvManager.generateMarksCsvTemplate(
+            session = "2026-2027",
+            className = "2nd",
+            section = "A",
+            students = students,
+            subjects = subjects,
+            existingMarksByStudent = existingMarks
+        )
+        val templateLines = template.trim().lines()
+        assertEquals(BackupAndCsvManager.MARKS_CSV_HEADER, templateLines.first())
+        assertEquals(1 + students.size * subjects.size, templateLines.size)
+        assertTrue(templateLines[1].contains("CPS-26-001") && templateLines[1].contains(",ENGLISH,9,"))
+
+        // 2. Verify CSV parsing with UTF-8 BOM, AdmNo match, Roll fallback, AB handling, blank skip & invalid warnings
+        val csvInput = "\uFEFF" + """
+            session,class,section,rollNo,admNo,studentName,subject,T1_IA,T1_UT,T1_EXAM,T2_IA,T2_UT,T2_EXAM
+            2026-2027,2nd,A,1,CPS-26-001,Aarav Verma,English,9,26,52,ab,28,55
+            2026-2027,II,A,2,,Diya Sharma,MATH,8,25,,12,24,65
+            2026-2027,2nd,A,99,CPS-UNKNOWN,Ghost,HINDI,8,20,40,8,20,40
+        """.trimIndent()
+
+        val parsed = BackupAndCsvManager.parseMarksCsv(
+            csvText = csvInput,
+            students = students,
+            subjectsByGroup = mapOf(2 to subjects),
+            defaultSession = "2026-2027",
+            defaultClass = "2nd",
+            defaultSection = "A"
+        )
+
+        // Row 1: 6 valid marks (including "ab" -> "AB", "English" -> "ENGLISH")
+        // Row 2: 3 valid marks (T1_IA=8, T1_UT=25, T2_UT=24), 1 blank skipped (T1_EXAM), 2 invalid (T2_IA=12>10, T2_EXAM=65>60)
+        // Row 3: 1 unmatched student issue
+        assertEquals(9, parsed.validMarks.size)
+        assertEquals(setOf(101L, 102L), parsed.matchedStudentIds)
+        assertEquals(3, parsed.processedRowCount)
+        assertEquals(1, parsed.skippedEmptyCells)
+        assertEquals(3, parsed.issues.size)
+
+        val aaravT2Ia = parsed.validMarks.first { it.studentId == 101L && it.subjectName == "ENGLISH" && it.componentKey == MarkComponent.T2_IA.key }
+        assertEquals("AB", aaravT2Ia.rawValue)
+
+        val diyaMathT1Ut = parsed.validMarks.first { it.studentId == 102L && it.subjectName == "MATH" && it.componentKey == MarkComponent.T1_UT.key }
+        assertEquals("25", diyaMathT1Ut.rawValue)
+    }
 }

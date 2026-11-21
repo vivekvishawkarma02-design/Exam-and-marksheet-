@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -114,6 +115,7 @@ fun SettingsScreen(
     var renamingSubject by remember { mutableStateOf<SubjectEntity?>(null) }
     var deletingSubject by remember { mutableStateOf<SubjectEntity?>(null) }
     var confirmClearSample by remember { mutableStateOf(false) }
+    var showMarksCsvDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(focusBackupSection) {
         if (focusBackupSection) {
@@ -855,6 +857,20 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Import Backup JSON (Replace or Merge)")
                     }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    OutlinedButton(
+                        onClick = { showMarksCsvDialog = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("settings_import_marks_csv_button")
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Import Marks from CSV / Download Template")
+                    }
                 }
             }
         }
@@ -915,6 +931,13 @@ fun SettingsScreen(
     }
 
     // Dialogs
+    MarksCsvImportController(
+        uiState = uiState,
+        viewModel = viewModel,
+        showSetupDialog = showMarksCsvDialog,
+        onDismissSetupDialog = { showMarksCsvDialog = false }
+    )
+
     if (showAddSessionDialog) {
         SingleInputDialog(
             title = "Add Academic Session",

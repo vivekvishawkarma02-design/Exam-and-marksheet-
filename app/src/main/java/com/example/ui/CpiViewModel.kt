@@ -29,6 +29,7 @@ import com.example.domain.SlipLayoutMode
 import com.example.domain.StudentPerformanceReport
 import com.example.util.BackupAndCsvManager
 import com.example.util.ImageUtils
+import com.example.util.MarksCsvIssue
 import com.example.util.PdfExportHelper
 import com.example.util.PdfReportGenerator
 import com.example.util.StudentReportBundle
@@ -65,6 +66,14 @@ data class PdfPreviewState(
     val reportType: ReportType = ReportType.ANNUAL,
     val batchScope: Boolean = false,
     val error: String? = null
+)
+
+data class MarksCsvImportPreview(
+    val validMarks: List<MarkEntity>,
+    val matchedStudentCount: Int,
+    val processedRowCount: Int,
+    val skippedEmptyCells: Int,
+    val issues: List<MarksCsvIssue>
 )
 
 data class CpiUiState(
@@ -218,6 +227,9 @@ class CpiViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _pendingImportBackup = MutableStateFlow<FullBackupData?>(null)
     val pendingImportBackup: StateFlow<FullBackupData?> = _pendingImportBackup.asStateFlow()
+
+    private val _pendingMarksCsvImport = MutableStateFlow<MarksCsvImportPreview?>(null)
+    val pendingMarksCsvImport: StateFlow<MarksCsvImportPreview?> = _pendingMarksCsvImport.asStateFlow()
 
     val uiState: StateFlow<CpiUiState> = combine(
         combine(
@@ -417,6 +429,98 @@ class CpiViewModel(application: Application) : AndroidViewModel(application) {
             )
             _lastUndo.value = null
             emitMessage("Undid mark edit for ${snapshot.studentName} (${snapshot.subjectName})")
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // STANDARDIZED MARKS CSV TEMPLATE EXPORT & IMPORT
+    // -------------------------------------------------------------------------
+    fun exportMarksCsvTemplateToUri(destinationUri: Uri) {
+        val state = uiState.value
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                val students = state.filteredStudents
+                val subjects = state.subjectsForClass(state.filter.className)
+                val existingByStudent = students.associate { st ->
+                    st.id to state.marksMapForStudent(st.id)
+                }
+                val csv = BackupAndCsvManager.generateMarksCsvTemplate(
+                    session = state.filter.session,
+                    className = state.filter.className,
+                    section = state.filter.section,
+                    students = students,
+                    subjects = subjects,
+                    existingMarksByStudent = existingByStudent
+                )
+                PdfExportHelper.writeTextToUri(getApplication(), csv, destinationUri)
+            }
+            emitMessage(
+                if (ok) {
+                    "Saved marks CSV template for Class ${state.filter.className}-${state.filter.section}"
+                } else {
+                    "Could not save marks CSV template"
+                }
+            )
+        }
+    }
+
+    fun prepareMarksCsvImportFromUri(uri: Uri) {
+        val state = uiState.value
+        viewModelScope.launch {
+            val preview = withContext(Dispatchers.IO) {
+                val csvText = PdfExportHelper.readTextFromUri(getApplication(), uri)
+                    ?: return@withContext null
+                val students = repository.getAllStudents()
+                val subjectsByGroup = ClassGroup.entries.associate { group ->
+                    val configured = repository.getAllSubjects()
+                        .filter { it.classGroup == group.id }
+                        .sortedBy { it.sortOrder }
+                        .map { it.name }
+                    group.id to configured.ifEmpty { DefaultSubjects.forGroup(group) }
+                }
+                val parsed = BackupAndCsvManager.parseMarksCsv(
+                    csvText = csvText,
+                    students = students,
+                    subjectsByGroup = subjectsByGroup,
+                    defaultSession = state.filter.session,
+                    defaultClass = state.filter.className,
+                    defaultSection = state.filter.section
+                )
+                MarksCsvImportPreview(
+                    validMarks = parsed.validMarks,
+                    matchedStudentCount = parsed.matchedStudentIds.size,
+                    processedRowCount = parsed.processedRowCount,
+                    skippedEmptyCells = parsed.skippedEmptyCells,
+                    issues = parsed.issues
+                )
+            }
+            if (preview == null) {
+                emitMessage("Could not read marks CSV file.")
+            } else {
+                _pendingMarksCsvImport.value = preview
+            }
+        }
+    }
+
+    fun cancelPendingMarksCsvImport() {
+        _pendingMarksCsvImport.value = null
+    }
+
+    fun confirmMarksCsvImport() {
+        val preview = _pendingMarksCsvImport.value ?: return
+        _pendingMarksCsvImport.value = null
+        if (preview.validMarks.isEmpty()) {
+            emitMessage("No valid marks to import.")
+            return
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.saveMarksBatch(preview.validMarks)
+            }
+            val issueSuffix = if (preview.issues.isNotEmpty()) " (${preview.issues.size} warning(s) skipped)" else ""
+            emitMessage(
+                "Imported ${preview.validMarks.size} mark(s) for ${preview.matchedStudentCount} student(s)$issueSuffix"
+            )
         }
     }
 

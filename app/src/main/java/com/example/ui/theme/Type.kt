@@ -27,8 +27,8 @@ val AppTypography = Typography(
         fontFamily = DisplayFontFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 28.sp,
-        lineHeight = 34.sp,
-        letterSpacing = (-0.2).sp
+        lineHeight = 40.sp,
+        letterSpacing = 0.3.sp
     ),
     headlineMedium = TextStyle(
         fontFamily = DisplayFontFamily,

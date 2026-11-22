@@ -84,15 +84,43 @@ A native Android application (**Kotlin**, **Jetpack Compose**, **Material 3**, *
 
 ---
 
-## Firebase Setup (`google-services.json`)
+## Firebase Setup (`google-services.json`, Auth Providers & SHA Fingerprints)
 
 Keep private Firebase credentials out of public source control where possible:
 
-1. Create a Firebase project at [Firebase Console](https://console.firebase.google.com/).
-2. Register your Android app with your `applicationId` (see `app/build.gradle.kts`) and add your debug & release **SHA-1 / SHA-256** signing fingerprints.
-3. Download **`google-services.json`** and place it at `app/google-services.json` (add `app/google-services.json` to `.gitignore` in private/public Git repositories so keys are not committed).
-4. Enable **Authentication** (Google Sign-In; optionally Email/Password) and **Cloud Firestore**.
-5. Deploy the security rules included in this repository:
+1. Create or open your Firebase project at [Firebase Console](https://console.firebase.google.com/).
+2. Register your Android app with your `applicationId` (see `app/build.gradle.kts`).
+3. **Enable BOTH Sign-In Providers:**
+   - Go to **Firebase Console -> Authentication -> Sign-in method**.
+   - Enable **Google** (select a project support email and save).
+   - Enable **Email/Password** (turn on the first toggle "Email/Password" and save).
+   - Under **Authentication -> Settings -> User account linking**, keep **"Prevent creation of multiple accounts with the same email address"** enabled so Google and Email/Password stay linked to a single account.
+4. **Add ALL THREE SHA-1 & SHA-256 Key Pairs (Required so Google Sign-In works in Debug, Local Release, and Play Store builds):**
+   Open **Firebase Console -> Project Settings -> General -> Your apps -> Android app -> SHA certificate fingerprints -> Add fingerprint** and add **both SHA-1 and SHA-256** from each of the 3 sources below:
+   - **A. Debug Keystore (local development & testing):**
+     ```bash
+     keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android
+     ```
+     *(On Windows: `%USERPROFILE%\.android\debug.keystore`; in AI Studio builds: project `debug.keystore`.)*
+     Copy the **SHA1** and **SHA256** values and add both in Firebase Console.
+   - **B. Release Upload Keystore (local release APK / AAB testing):**
+     If you do not have one yet, generate it once and back it up safely offline (never commit to Git):
+     ```bash
+     keytool -genkey -v -keystore release-upload.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+     ```
+     Print its fingerprints:
+     ```bash
+     keytool -list -v -keystore release-upload.jks -alias upload
+     ```
+     Copy the **SHA1** and **SHA256** values and add both in Firebase Console.
+   - **C. Google Play App Signing Key (REQUIRED for Play Store downloads):**
+     Google Play re-signs every `.aab` you upload with Google's Play App Signing key. Without this key in Firebase, **Continue with Google** will fail for Play Store users!
+     1. Upload your first `.aab` to an internal/closed test track in [Google Play Console](https://play.google.com/console/).
+     2. In Play Console, open your app -> **Test and release -> Setup -> App signing** (or **Release -> Setup -> App integrity -> App signing**).
+     3. Under **App signing key certificate**, copy both the **SHA-1 certificate fingerprint** and **SHA-256 certificate fingerprint**.
+     4. Paste both into **Firebase Console -> Project Settings -> Your Android app -> Add fingerprint**.
+   - **Re-download `google-services.json`:** After adding all SHA-1/SHA-256 keys, download the fresh **`google-services.json`** from Firebase Console and replace `app/google-services.json` before building your Play Store `.aab`. (Add `app/google-services.json` to `.gitignore` in private/public Git repositories so credentials are not committed.)
+5. Enable **Cloud Firestore** and deploy the security rules included in this repository:
    ```bash
    firebase deploy --only firestore:rules
    ```
@@ -103,22 +131,17 @@ Keep private Firebase credentials out of public source control where possible:
 
 Google Play requires a release-signed **Android App Bundle (`.aab`)** rather than a debug APK:
 
-1. **Create a Release Upload Keystore** (store this file and its passwords safely offline; never commit it to Git):
-   ```bash
-   keytool -genkey -v -keystore release-upload.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
-   ```
-2. **Register Release SHA-1 / SHA-256 in Firebase:**
-   - Run `keytool -list -v -keystore release-upload.jks -alias upload` and add the release SHA-1 and SHA-256 to your Firebase Android App settings (and copy the Google Play App Signing SHA-1 from Play Console once enrolled), then re-download `google-services.json`.
-3. **Build the Signed AAB:**
+1. **Ensure all SHA-1 & SHA-256 keys above are registered** (Debug, Release Upload, and Google Play App Signing) and `app/google-services.json` is freshly downloaded from Firebase Console.
+2. **Build the Signed AAB:**
    - **Android Studio:** Go to **Build -> Generate Signed App Bundle / APK -> Android App Bundle**, choose `release-upload.jks`, select the `release` build variant, and generate `app/release/app-release.aab`.
    - **Command Line:** Configure your release signing credentials via environment variables / Gradle properties and run:
      ```bash
      gradle :app:bundleRelease
      ```
-4. **Google Play Console Compliance Checklist (Required Before Publishing):**
+3. **Google Play Console Compliance Checklist (Required Before Publishing):**
    - **Privacy Policy URL:** Host your public Privacy Policy page (matching the in-app Privacy Policy screen) and paste the HTTPS URL into **Play Console -> App content -> Privacy policy**.
    - **Data Safety Form:** Declare collection of user account identifiers (name, email), school & student educational records, and optional photos stored in Google Cloud Firestore, encrypted in transit, and not sold to third parties.
-   - **Account Deletion Support:** Declare that users can delete their account in-app (**Settings -> Delete My Account**, which is blocked if they still own an organisation until ownership is transferred or the organisation is deleted) and provide a matching web deletion-request URL in Play Console.
+   - **Account Deletion Support:** Declare that users can delete their account in-app (**Settings -> Delete My Account** — requires re-authentication via the same sign-in method used, and is blocked if they still own an organisation until ownership is transferred or the organisation is deleted) and provide a matching web deletion-request URL in Play Console.
    - **Target Audience & Content Rating:** Complete the IARC questionnaire and declare the app is designed for school staff/administrators (not directed to children).
 
 ---

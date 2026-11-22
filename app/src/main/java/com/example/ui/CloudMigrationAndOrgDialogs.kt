@@ -47,20 +47,28 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import com.example.data.cloud.CloudMarkEditLog
 import com.example.data.cloud.CloudMembershipEntry
 import com.example.data.cloud.LocalMigrationSummary
 import com.example.data.cloud.MigrationProgress
+import com.example.domain.AuthMethod
 import com.example.domain.MarkComponent
 import com.example.domain.MarkConflictNotice
 import com.example.domain.OfflineSyncEngine
@@ -713,18 +721,25 @@ fun DeleteOrganisationDialog(
 @Composable
 fun DeleteAccountDialog(
     memberships: List<CloudMembershipEntry>,
-    onConfirmDelete: () -> Unit,
+    reauthMethod: AuthMethod,
+    userEmail: String,
+    isDeleting: Boolean,
+    errorMessage: String?,
+    onConfirmDeleteWithPassword: (password: String) -> Unit,
+    onConfirmDeleteWithGoogle: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val guardError = remember(memberships) {
         OrgAccessEvaluator.canDeleteOwnAccount(memberships.map { it.toDomain() })
     }
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!isDeleting) onDismiss() },
         title = { Text("Delete My Account", style = MaterialTheme.typography.titleLarge, color = FailRed) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (guardError != null) {
                     Surface(shape = RoundedCornerShape(10.dp), color = FailRedContainer) {
                         Text(
@@ -741,20 +756,98 @@ fun DeleteAccountDialog(
                     )
                 } else {
                     Text(
-                        text = "This will permanently delete your account, remove your personal profile and memberships, and clear cached data on this phone. This action cannot be undone.",
+                        text = "This permanently deletes your account (${userEmail.ifBlank { "current user" }}), removes your profile and memberships, and clears cached data on this phone. This action cannot be undone.",
                         style = MaterialTheme.typography.bodyMedium
                     )
+
+                    if (reauthMethod == AuthMethod.EMAIL_PASSWORD) {
+                        Text(
+                            text = "For security, enter your password to confirm deletion:",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("Current Password") },
+                            singleLine = true,
+                            enabled = !isDeleting,
+                            trailingIcon = {
+                                IconButton(onClick = { showPassword = !showPassword }) {
+                                    Icon(
+                                        imageVector = if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (showPassword) "Hide password" else "Show password"
+                                    )
+                                }
+                            },
+                            visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("delete_account_password_input")
+                        )
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "For security, you will be asked to re-authenticate with Google before your account is permanently deleted.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    if (!errorMessage.isNullOrBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = FailRedContainer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("delete_account_error")
+                        ) {
+                            Text(
+                                text = errorMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = FailRed,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
                 }
             }
         },
         confirmButton = {
             if (guardError == null) {
                 Button(
-                    onClick = onConfirmDelete,
+                    onClick = {
+                        if (reauthMethod == AuthMethod.EMAIL_PASSWORD) {
+                            onConfirmDeleteWithPassword(password)
+                        } else {
+                            onConfirmDeleteWithGoogle()
+                        }
+                    },
+                    enabled = !isDeleting && (reauthMethod == AuthMethod.GOOGLE || password.isNotBlank()),
                     colors = ButtonDefaults.buttonColors(containerColor = FailRed),
                     modifier = Modifier.testTag("confirm_delete_account_button")
                 ) {
-                    Text("Delete Account")
+                    if (isDeleting) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.onError,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Verifying…")
+                    } else {
+                        Text(
+                            if (reauthMethod == AuthMethod.GOOGLE) "Verify with Google & Delete"
+                            else "Verify & Delete Account"
+                        )
+                    }
                 }
             } else {
                 Button(onClick = onDismiss) {
@@ -763,7 +856,7 @@ fun DeleteAccountDialog(
             }
         },
         dismissButton = {
-            if (guardError == null) {
+            if (guardError == null && !isDeleting) {
                 TextButton(onClick = onDismiss) { Text("Cancel") }
             }
         }

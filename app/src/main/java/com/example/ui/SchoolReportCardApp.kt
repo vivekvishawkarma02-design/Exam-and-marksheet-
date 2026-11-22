@@ -128,18 +128,41 @@ fun SchoolReportCardApp() {
     }
 
     val user = currentUser
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val credentialManager = remember(context) { CredentialManager.create(context) }
+    val rootConnectivity = remember(context.applicationContext) {
+        NetworkConnectivityMonitor(context.applicationContext)
+    }
+    val rootIsOnline by rootConnectivity.isOnline.collectAsStateWithLifecycle(
+        initialValue = rootConnectivity.isCurrentlyOnline()
+    )
+    var verificationRefreshTick by remember(user?.uid) { mutableStateOf(0) }
+
     if (user == null) {
-        val context = LocalContext.current
-        val authConnectivity = remember(context.applicationContext) {
-            NetworkConnectivityMonitor(context.applicationContext)
-        }
-        val isOnline by authConnectivity.isOnline.collectAsStateWithLifecycle(
-            initialValue = authConnectivity.isCurrentlyOnline()
-        )
         Scaffold(contentWindowInsets = WindowInsets.safeDrawing) { pad ->
             AuthScreen(
-                isOnline = isOnline,
+                isOnline = rootIsOnline,
                 onOpenLegalDoc = { viewingLegalDoc = it },
+                modifier = Modifier.padding(pad)
+            )
+        }
+    } else if (remember(user.uid, user.isEmailVerified, verificationRefreshTick) {
+            GoogleAuthHelper.requiresEmailVerification(Firebase.auth.currentUser ?: user)
+        }
+    ) {
+        Scaffold(contentWindowInsets = WindowInsets.safeDrawing) { pad ->
+            EmailVerificationGateScreen(
+                email = user.email.orEmpty(),
+                isOnline = rootIsOnline,
+                onVerified = { verificationRefreshTick++ },
+                onSignOutClick = {
+                    GoogleAuthHelper.signOutAndClearLocalCache(
+                        context = context,
+                        credentialManager = credentialManager,
+                        scope = scope
+                    )
+                },
                 modifier = Modifier.padding(pad)
             )
         }
@@ -189,6 +212,8 @@ private fun AuthenticatedSessionHost(
 
     var subScreen by remember { mutableStateOf(OnboardingSubScreen.PICKER) }
     var showDeleteAccountDialog by remember { mutableStateOf(false) }
+    var isDeletingAccount by remember { mutableStateOf(false) }
+    var deleteAccountError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         sessionViewModel.snackbar.collect { msg ->
@@ -320,15 +345,53 @@ private fun AuthenticatedSessionHost(
     }
 
     if (showDeleteAccountDialog) {
+        val reauthMethod = remember(user.uid, showDeleteAccountDialog) {
+            GoogleAuthHelper.determineReauthMethod(context, Firebase.auth.currentUser ?: user)
+        }
         DeleteAccountDialog(
             memberships = sessionState.userAccount?.memberships.orEmpty(),
-            onConfirmDelete = {
-                showDeleteAccountDialog = false
-                sessionViewModel.deleteOwnAccount {
-                    performSignOut()
-                }
+            reauthMethod = reauthMethod,
+            userEmail = user.email.orEmpty(),
+            isDeleting = isDeletingAccount,
+            errorMessage = deleteAccountError,
+            onConfirmDeleteWithPassword = { password ->
+                deleteAccountError = null
+                isDeletingAccount = true
+                sessionViewModel.deleteOwnAccount(
+                    reauthenticate = { GoogleAuthHelper.reauthenticateWithPassword(password) },
+                    onResult = { ok, err ->
+                        isDeletingAccount = false
+                        if (ok) {
+                            showDeleteAccountDialog = false
+                            performSignOut()
+                        } else {
+                            deleteAccountError = err
+                        }
+                    }
+                )
             },
-            onDismiss = { showDeleteAccountDialog = false }
+            onConfirmDeleteWithGoogle = {
+                deleteAccountError = null
+                isDeletingAccount = true
+                sessionViewModel.deleteOwnAccount(
+                    reauthenticate = { GoogleAuthHelper.reauthenticateWithGoogle(context, credentialManager) },
+                    onResult = { ok, err ->
+                        isDeletingAccount = false
+                        if (ok) {
+                            showDeleteAccountDialog = false
+                            performSignOut()
+                        } else {
+                            deleteAccountError = err
+                        }
+                    }
+                )
+            },
+            onDismiss = {
+                if (!isDeletingAccount) {
+                    deleteAccountError = null
+                    showDeleteAccountDialog = false
+                }
+            }
         )
     }
 }

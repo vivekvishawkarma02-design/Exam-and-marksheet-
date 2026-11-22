@@ -40,11 +40,14 @@ import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -53,6 +56,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -90,6 +95,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -97,11 +104,14 @@ import androidx.credentials.CredentialManager
 import com.example.data.cloud.CloudMember
 import com.example.data.cloud.CloudMembershipEntry
 import com.example.data.cloud.CloudPendingRequestRef
+import com.example.data.cloud.EmailSignUpOutcome
 import com.example.data.cloud.GoogleAuthHelper
 import com.example.domain.DefaultSchoolTemplate
+import com.example.domain.EmailAuthMode
 import com.example.domain.OrgAccessEvaluator
 import com.example.domain.OrgRole
 import com.example.domain.SyncStatus
+import com.google.firebase.auth.AuthCredential
 import com.example.ui.theme.AbsentAmber
 import com.example.ui.theme.AbsentAmberContainer
 import com.example.ui.theme.FailRed
@@ -122,7 +132,7 @@ enum class LegalDocType(val title: String) {
 }
 
 // =============================================================================
-// 1. LOGIN FIRST SCREEN (No data screen is reachable before authentication)
+// 1. LOGIN / SIGN-UP FIRST SCREEN (Google Sign-In + E-mail & Password)
 // =============================================================================
 @Composable
 fun AuthScreen(
@@ -135,8 +145,21 @@ fun AuthScreen(
     val credentialManager = remember(context) { CredentialManager.create(context) }
 
     var isCheckingAutoSignIn by remember { mutableStateOf(true) }
-    var isSigningIn by remember { mutableStateOf(false) }
+    var isBusy by remember { mutableStateOf(false) }
+    var busyLabel by remember { mutableStateOf("Signing in…") }
     var authError by remember { mutableStateOf<String?>(null) }
+    var authInfo by remember { mutableStateOf<String?>(null) }
+
+    var emailMode by remember { mutableStateOf(EmailAuthMode.SIGN_IN) }
+    var fullName by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+
+    // Same-email collision & linking state (never creates a second account)
+    var pendingGoogleCredToLink by remember { mutableStateOf<AuthCredential?>(null) }
+    var signUpCollisionEmail by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         GoogleAuthHelper.attemptAutoSignIn(
@@ -163,11 +186,11 @@ fun AuthScreen(
             verticalArrangement = Arrangement.SpaceBetween,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 // Branded Header Banner
                 Box(
@@ -177,7 +200,7 @@ fun AuthScreen(
                         .background(
                             Brush.linearGradient(listOf(NavyDark, NavyPrimary, SteelSecondary))
                         )
-                        .padding(horizontal = 24.dp, vertical = 28.dp)
+                        .padding(horizontal = 24.dp, vertical = 22.dp)
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -186,36 +209,36 @@ fun AuthScreen(
                         Surface(
                             shape = CircleShape,
                             color = Color.White.copy(alpha = 0.16f),
-                            modifier = Modifier.size(68.dp)
+                            modifier = Modifier.size(60.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Default.School,
                                     contentDescription = "School Report Card",
                                     tint = Color.White,
-                                    modifier = Modifier.size(36.dp)
+                                    modifier = Modifier.size(32.dp)
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = "School Report Card",
-                            style = MaterialTheme.typography.headlineMedium,
+                            style = MaterialTheme.typography.headlineSmall,
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             textAlign = TextAlign.Center
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(3.dp))
                         Text(
                             text = "Multi-School Report Cards, Marks & Staff Collaboration",
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.9f),
                             textAlign = TextAlign.Center
                         )
                     }
                 }
 
-                // Sign-In Card
+                // Sign-In / Sign-Up Card (BOTH Google & E-mail/Password)
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -223,8 +246,8 @@ fun AuthScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
-                        modifier = Modifier.padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -236,16 +259,11 @@ fun AuthScreen(
                                 tint = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                text = "Sign in to continue",
+                                text = "Sign in or create account",
                                 style = MaterialTheme.typography.titleLarge,
                                 color = MaterialTheme.colorScheme.primary
                             )
                         }
-                        Text(
-                            text = "Sign in once with your Google account. Your session stays active across app restarts, and every organisation's schools, students, and marks stay completely isolated.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
 
                         if (!isOnline) {
                             OfflineActionNoticeBanner(
@@ -258,7 +276,9 @@ fun AuthScreen(
                                 shape = RoundedCornerShape(12.dp),
                                 color = FailRedContainer,
                                 border = BorderStroke(1.dp, FailRed.copy(alpha = 0.35f)),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("auth_error_banner")
                             ) {
                                 Row(
                                     modifier = Modifier.padding(12.dp),
@@ -275,43 +295,105 @@ fun AuthScreen(
                             }
                         }
 
-                        if (isCheckingAutoSignIn || isSigningIn) {
+                        if (authInfo != null) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = PassGreenContainer,
+                                border = BorderStroke(1.dp, PassGreen.copy(alpha = 0.35f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("auth_info_banner")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = PassGreen)
+                                    Text(
+                                        text = authInfo.orEmpty(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = PassGreen
+                                    )
+                                }
+                            }
+                        }
+
+                        // Guided linking banner if Google Sign-In collided with an existing password account
+                        if (pendingGoogleCredToLink != null) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = AbsentAmberContainer,
+                                border = BorderStroke(1.dp, AbsentAmber.copy(alpha = 0.45f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Link, contentDescription = null, tint = AbsentAmber)
+                                    Text(
+                                        text = "Link Google Account: Enter your existing password below once to sign in and link Google to the exact same account (single set of memberships).",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+
+                        if (isCheckingAutoSignIn || isBusy) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 12.dp),
+                                    .padding(vertical = 14.dp),
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.5.dp)
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Text(
-                                    text = if (isCheckingAutoSignIn) "Checking active session…" else "Signing in with Google…",
+                                    text = if (isCheckingAutoSignIn) "Checking active session…" else busyLabel,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         } else {
+                            // 1) Continue with Google
                             Button(
                                 onClick = {
                                     authError = null
-                                    isSigningIn = true
+                                    authInfo = null
+                                    signUpCollisionEmail = null
+                                    busyLabel = "Signing in with Google…"
+                                    isBusy = true
                                     GoogleAuthHelper.onGoogleSignInClicked(
                                         context = context,
                                         credentialManager = credentialManager,
                                         scope = scope,
-                                        onAuthSuccess = { isSigningIn = false },
-                                        onAuthError = { msg ->
-                                            isSigningIn = false
+                                        onAuthSuccess = {
+                                            isBusy = false
+                                            pendingGoogleCredToLink = null
+                                        },
+                                        onCollisionNeedsPasswordLink = { cred, emailHint, msg ->
+                                            isBusy = false
+                                            pendingGoogleCredToLink = cred
+                                            if (emailHint.isNotBlank()) email = emailHint
+                                            emailMode = EmailAuthMode.SIGN_IN
                                             authError = msg
                                         },
-                                        onAuthCancelled = { isSigningIn = false }
+                                        onAuthError = { msg ->
+                                            isBusy = false
+                                            authError = msg
+                                        },
+                                        onAuthCancelled = { isBusy = false }
                                     )
                                 },
+                                enabled = isOnline,
                                 shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(54.dp)
+                                    .height(52.dp)
                                     .testTag("google_sign_in_button")
                             ) {
                                 Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -321,6 +403,318 @@ fun AuthScreen(
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
+                            }
+
+                            // Divider between Google and E-mail/Password
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                HorizontalDivider(modifier = Modifier.weight(1f))
+                                Text(
+                                    text = "OR USE E-MAIL",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                HorizontalDivider(modifier = Modifier.weight(1f))
+                            }
+
+                            // 2) E-mail & Password Mode Selector (Sign In / Sign Up)
+                            if (emailMode != EmailAuthMode.FORGOT_PASSWORD) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    listOf(EmailAuthMode.SIGN_IN, EmailAuthMode.SIGN_UP).forEach { tab ->
+                                        val selected = emailMode == tab
+                                        FilterChip(
+                                            selected = selected,
+                                            onClick = {
+                                                emailMode = tab
+                                                authError = null
+                                                authInfo = null
+                                                signUpCollisionEmail = null
+                                            },
+                                            label = {
+                                                Text(
+                                                    text = tab.label,
+                                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    textAlign = TextAlign.Center
+                                                )
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                selectedLabelColor = MaterialTheme.colorScheme.primary
+                                            ),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .minimumInteractiveComponentSize()
+                                                .testTag("auth_tab_${tab.name.lowercase()}")
+                                        )
+                                    }
+                                }
+                            } else {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Reset Password",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    TextButton(
+                                        onClick = {
+                                            emailMode = EmailAuthMode.SIGN_IN
+                                            authError = null
+                                            authInfo = null
+                                        },
+                                        modifier = Modifier.testTag("auth_back_to_sign_in")
+                                    ) {
+                                        Text("Back to Sign In")
+                                    }
+                                }
+                            }
+
+                            // Sign-Up Full Name field
+                            if (emailMode == EmailAuthMode.SIGN_UP) {
+                                OutlinedTextField(
+                                    value = fullName,
+                                    onValueChange = { fullName = it },
+                                    label = { Text("Full Name") },
+                                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("auth_name_input")
+                                )
+                            }
+
+                            // E-mail field (all 3 modes)
+                            OutlinedTextField(
+                                value = email,
+                                onValueChange = {
+                                    email = it
+                                    if (signUpCollisionEmail != null) signUpCollisionEmail = null
+                                },
+                                label = { Text("E-mail Address") },
+                                leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("auth_email_input")
+                            )
+
+                            // Password field (Sign In & Sign Up)
+                            if (emailMode != EmailAuthMode.FORGOT_PASSWORD) {
+                                OutlinedTextField(
+                                    value = password,
+                                    onValueChange = { password = it },
+                                    label = { Text(if (emailMode == EmailAuthMode.SIGN_UP) "Password (min. 6 characters)" else "Password") },
+                                    leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                                    trailingIcon = {
+                                        IconButton(onClick = { showPassword = !showPassword }) {
+                                            Icon(
+                                                imageVector = if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                                contentDescription = if (showPassword) "Hide password" else "Show password"
+                                            )
+                                        }
+                                    },
+                                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("auth_password_input")
+                                )
+                            }
+
+                            // Confirm Password field (Sign Up)
+                            if (emailMode == EmailAuthMode.SIGN_UP) {
+                                OutlinedTextField(
+                                    value = confirmPassword,
+                                    onValueChange = { confirmPassword = it },
+                                    label = { Text("Confirm Password") },
+                                    leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("auth_confirm_password_input")
+                                )
+                            }
+
+                            // Forgot password link (Sign In mode)
+                            if (emailMode == EmailAuthMode.SIGN_IN) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    TextButton(
+                                        onClick = {
+                                            emailMode = EmailAuthMode.FORGOT_PASSWORD
+                                            authError = null
+                                            authInfo = null
+                                        },
+                                        modifier = Modifier.testTag("forgot_password_button")
+                                    ) {
+                                        Text("Forgot password?")
+                                    }
+                                }
+                            }
+
+                            // Primary E-mail Action Button
+                            OutlinedButton(
+                                onClick = {
+                                    authError = null
+                                    authInfo = null
+                                    when (emailMode) {
+                                        EmailAuthMode.SIGN_IN -> {
+                                            busyLabel = if (pendingGoogleCredToLink != null) {
+                                                "Signing in & linking Google…"
+                                            } else {
+                                                "Signing in…"
+                                            }
+                                            isBusy = true
+                                            GoogleAuthHelper.signInWithEmailPassword(
+                                                context = context,
+                                                email = email,
+                                                password = password,
+                                                pendingGoogleCredentialToLink = pendingGoogleCredToLink,
+                                                scope = scope,
+                                                onSuccess = {
+                                                    isBusy = false
+                                                    pendingGoogleCredToLink = null
+                                                },
+                                                onError = { msg ->
+                                                    isBusy = false
+                                                    authError = msg
+                                                }
+                                            )
+                                        }
+
+                                        EmailAuthMode.SIGN_UP -> {
+                                            busyLabel = "Creating account & sending verification…"
+                                            isBusy = true
+                                            GoogleAuthHelper.signUpWithEmailPassword(
+                                                context = context,
+                                                fullName = fullName,
+                                                email = email,
+                                                password = password,
+                                                confirmPassword = confirmPassword,
+                                                scope = scope
+                                            ) { outcome ->
+                                                isBusy = false
+                                                when (outcome) {
+                                                    EmailSignUpOutcome.VerificationSent -> {
+                                                        signUpCollisionEmail = null
+                                                    }
+                                                    is EmailSignUpOutcome.EmailAlreadyExists -> {
+                                                        signUpCollisionEmail = outcome.email
+                                                        authError = outcome.message
+                                                    }
+                                                    is EmailSignUpOutcome.Error -> {
+                                                        authError = outcome.message
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        EmailAuthMode.FORGOT_PASSWORD -> {
+                                            busyLabel = "Sending password reset e-mail…"
+                                            isBusy = true
+                                            GoogleAuthHelper.sendPasswordResetEmail(
+                                                email = email,
+                                                scope = scope,
+                                                onSuccess = { msg ->
+                                                    isBusy = false
+                                                    authInfo = msg
+                                                },
+                                                onError = { msg ->
+                                                    isBusy = false
+                                                    authError = msg
+                                                }
+                                            )
+                                        }
+                                    }
+                                },
+                                enabled = isOnline,
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp)
+                                    .testTag("email_auth_submit_button")
+                            ) {
+                                Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = when (emailMode) {
+                                        EmailAuthMode.SIGN_IN -> if (pendingGoogleCredToLink != null) {
+                                            "Sign In & Link Google Account"
+                                        } else {
+                                            "Sign In with E-mail"
+                                        }
+                                        EmailAuthMode.SIGN_UP -> "Sign Up with E-mail"
+                                        EmailAuthMode.FORGOT_PASSWORD -> "Send Reset Link"
+                                    },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            // 1-tap Link Password to Existing Google Account (prevents duplicate accounts)
+                            if (signUpCollisionEmail != null && emailMode == EmailAuthMode.SIGN_UP) {
+                                Button(
+                                    onClick = {
+                                        authError = null
+                                        authInfo = null
+                                        busyLabel = "Signing in with Google & linking password…"
+                                        isBusy = true
+                                        GoogleAuthHelper.signInWithGoogleAndLinkPassword(
+                                            context = context,
+                                            credentialManager = credentialManager,
+                                            email = signUpCollisionEmail.orEmpty(),
+                                            password = password,
+                                            scope = scope,
+                                            onSuccess = {
+                                                isBusy = false
+                                                signUpCollisionEmail = null
+                                            },
+                                            onError = { msg ->
+                                                isBusy = false
+                                                authError = msg
+                                            },
+                                            onCancelled = { isBusy = false }
+                                        )
+                                    },
+                                    enabled = isOnline,
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(50.dp)
+                                        .testTag("link_google_and_password_button")
+                                ) {
+                                    Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Continue with Google & Link Password",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
 
@@ -341,7 +735,7 @@ fun AuthScreen(
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Text(
-                                    text = "Cloud Sync Notice: Your organisation's school setup, student records, marks, and logos are securely stored in Google Cloud Firestore with offline caching on this device.",
+                                    text = "Cloud Sync Notice: Sign in with Google or E-mail & Password. Same e-mail addresses stay linked to one account and one set of memberships, with 150 MB offline caching on this phone.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -355,7 +749,7 @@ fun AuthScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 16.dp),
+                    .padding(top = 12.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -371,6 +765,195 @@ fun AuthScreen(
                     modifier = Modifier.testTag("auth_terms_link")
                 ) {
                     Text("Terms of Service", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// 1B. E-MAIL VERIFICATION GATE (Blocks data screens until E-mail is verified)
+// =============================================================================
+@Composable
+fun EmailVerificationGateScreen(
+    email: String,
+    isOnline: Boolean,
+    onVerified: () -> Unit,
+    onSignOutClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val scope = rememberCoroutineScope()
+    var isChecking by remember { mutableStateOf(false) }
+    var isResending by remember { mutableStateOf(false) }
+    var infoMessage by remember { mutableStateOf<String?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .widthIn(max = 500.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(22.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.size(64.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.MarkEmailRead,
+                                contentDescription = "Verify e-mail",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(34.dp)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Verify Your E-mail",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Text(
+                        text = "We sent a verification link to ${email.ifBlank { "your e-mail address" }}. Open the link in your inbox, then tap the button below to enter the app.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+
+                    if (!isOnline) {
+                        OfflineActionNoticeBanner(
+                            message = "Connect to the internet to check your e-mail verification status or resend the verification link."
+                        )
+                    }
+
+                    if (errorMessage != null) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = FailRedContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = errorMessage.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = FailRed,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    if (infoMessage != null) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = PassGreenContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = infoMessage.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = PassGreen,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            errorMessage = null
+                            infoMessage = null
+                            isChecking = true
+                            GoogleAuthHelper.reloadAndCheckEmailVerified(scope) { verified, err ->
+                                isChecking = false
+                                when {
+                                    err != null -> errorMessage = err
+                                    verified -> onVerified()
+                                    else -> errorMessage = "E-mail is not verified yet. Please click the verification link in your inbox and try again."
+                                }
+                            }
+                        },
+                        enabled = isOnline && !isChecking && !isResending,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("verify_email_continue_button")
+                    ) {
+                        if (isChecking) {
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Checking…")
+                        } else {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("I've Verified — Continue", fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            errorMessage = null
+                            infoMessage = null
+                            isResending = true
+                            GoogleAuthHelper.resendVerificationEmail(
+                                scope = scope,
+                                onSuccess = { msg ->
+                                    isResending = false
+                                    infoMessage = msg
+                                },
+                                onError = { msg ->
+                                    isResending = false
+                                    errorMessage = msg
+                                }
+                            )
+                        },
+                        enabled = isOnline && !isChecking && !isResending,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("resend_verification_button")
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(if (isResending) "Sending…" else "Resend Verification E-mail")
+                    }
+
+                    TextButton(
+                        onClick = onSignOutClick,
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.testTag("verify_email_sign_out_button")
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Sign Out / Use Another Account")
+                    }
                 }
             }
         }

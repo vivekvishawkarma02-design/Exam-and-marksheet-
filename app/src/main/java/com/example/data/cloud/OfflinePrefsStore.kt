@@ -1,6 +1,7 @@
 package com.example.data.cloud
 
 import android.content.Context
+import com.example.domain.AuthMethod
 import com.example.domain.LocalPendingMarkEdit
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,6 +27,13 @@ class OfflinePrefsStore(context: Context) {
             editor.putString(keyLastOrg(uid), orgId)
         }
         editor.apply()
+    }
+
+    fun getLastSignInMethod(uid: String): AuthMethod? =
+        AuthMethod.fromWire(prefs.getString(keyAuthMethod(uid), null))
+
+    fun setLastSignInMethod(uid: String, method: AuthMethod) {
+        prefs.edit().putString(keyAuthMethod(uid), method.wireValue).apply()
     }
 
     fun loadPendingMarkEdits(uid: String, orgId: String, schoolDocId: String): List<LocalPendingMarkEdit> {
@@ -142,6 +150,7 @@ class OfflinePrefsStore(context: Context) {
     }
 
     private fun keyLastOrg(uid: String) = "last_org_$uid"
+    private fun keyAuthMethod(uid: String) = "auth_method_$uid"
     private fun keyPendingMarks(uid: String) = "pending_marks_$uid"
 
     companion object {

@@ -456,23 +456,38 @@ class OrgSessionViewModel(
         }
     }
 
-    fun deleteOwnAccount(onDeleted: () -> Unit) {
+    fun deleteOwnAccount(
+        reauthenticate: suspend () -> Result<Unit>,
+        onResult: (ok: Boolean, error: String?) -> Unit
+    ) {
         val memberships = _state.value.userAccount?.memberships.orEmpty()
         viewModelScope.launch {
             _state.update { it.copy(isSubmitting = true, errorMessage = null) }
+            // 1. Re-authenticate FIRST so we never delete Firestore docs if verification fails
+            val reauthRes = reauthenticate()
+            if (reauthRes.isFailure) {
+                val msg = reauthRes.exceptionOrNull()?.localizedMessage
+                    ?: "Re-authentication failed. Please try again."
+                _state.update { it.copy(isSubmitting = false) }
+                onResult(false, msg)
+                return@launch
+            }
+            // 2. Delete memberships, private user profile, and Firebase Auth account
             val res = withContext(Dispatchers.IO) {
                 orgRepo.deleteOwnAccount(memberships)
             }
             res.onSuccess {
                 _state.update { it.copy(isSubmitting = false, selectedOrgId = null) }
-                onDeleted()
+                onResult(true, null)
             }.onFailure { err ->
+                val msg = friendlyFirestoreErrorMessage(err, "Could not delete account.")
                 _state.update {
                     it.copy(
                         isSubmitting = false,
-                        errorMessage = friendlyFirestoreErrorMessage(err, "Could not delete account.")
+                        errorMessage = msg
                     )
                 }
+                onResult(false, msg)
             }
         }
     }

@@ -200,7 +200,7 @@ class Phase4Repository(
         if (cleanName.isEmpty()) return Result.failure(IllegalArgumentException("Teacher name is required."))
         val docId = teacher.id.takeIf { it.isNotBlank() }
             ?: if (teacher.linkedMemberUid.isNotBlank()) {
-                "tchr_member_${StableDocId.sanitizeSegment(teacher.linkedMemberUid)}"
+                makeMemberTeacherDocId(teacher.linkedMemberUid)
             } else {
                 "tchr_${UUID.randomUUID().toString().replace("-", "").take(12)}"
             }
@@ -595,7 +595,7 @@ class Phase4Repository(
     )
 
     companion object {
-        fun makeMemberTeacherDocId(uid: String): String = "tchr_member_${StableDocId.sanitizeSegment(uid)}"
+        fun makeMemberTeacherDocId(uid: String): String = "tchr_member_${uid.trim()}"
 
         fun makeAssignmentDocId(schoolId: String, className: String, section: String): String =
             "assign_${StableDocId.sanitizeSegment(schoolId)}_${StableDocId.sanitizeSegment(className)}_${StableDocId.sanitizeSegment(section.uppercase())}"

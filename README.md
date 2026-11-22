@@ -4,6 +4,38 @@ A native Android application (**Kotlin**, **Jetpack Compose**, **Material 3**, *
 
 ---
 
+## Phase 4 Capabilities (Teachers, Period Structure, Class-Subject-Teacher Assignments & Subject Rules)
+
+All Phase 4 data belongs to an organisation (and one or more of its schools), lives in Cloud Firestore under `organisations/{orgId}/`, works 100% offline with Phase 3 sync (including pending-write counting on the live Status Chip), and is strictly controlled by the **"Teachers and assignments"** module (`No access` / `View only` / `View & edit`) in both UI and `firestore.rules`.
+
+1. **Teachers Directory (`organisations/{orgId}/teachers/{teacherId}`)**
+   - Approved members who completed their Phase 2 teacher profile automatically sync into the Teachers directory (and any existing completed Phase 2 teacher members can be imported in 1 tap from the top banner).
+   - Admins/editors can also add a **no-login teacher record** (for timetable planning only) and link it to a member account later.
+   - Fields: name, mobile, e-mail, optional `< 150 KB` photo, teachable subjects, schools worked in (one or multiple schools within the organisation), max periods per day (default `7`), max consecutive periods (default `3`), weekly off day(s), and active flag.
+   - Search by name/mobile/e-mail, filter by school, subject, or active-only, edit details, activate/deactivate, and safely delete (**teachers with any subject assignment or Class Teacher role can never be deleted**).
+
+2. **Per-School Period Structure (`organisations/{orgId}/periodStructures/{schoolId}`)**
+   - Editable working days per school (default Monday–Saturday).
+   - Ordered daily slot list with slot types (**Period**, **Assembly / Prayer**, **Short Break**, **Lunch Break**), start time, and end time.
+   - Built-in editable default template: Morning Assembly, 8 periods of 40 minutes, Short Break after Period 3, Lunch after Period 5 (and 5 periods on Saturday). Different schools can configure completely different schedules.
+   - **"Copy This Day"** copies one day's ordered slots to any selected target days.
+   - Strict live validation prevents saving overlapping intervals, invalid bounds, or out-of-order slot times.
+
+3. **Class-Subject-Teacher Assignments & Teacher Workload (`organisations/{orgId}/classAssignments/{assignmentId}`)**
+   - Assign a **Class Teacher** per class & section, and assign a **Teacher** + **Periods/Week** for every subject in that class's class group.
+   - Non-blocking **Warnings** (never block saving):
+     - Class total assigned periods/week does not match available teaching period slots in that school's week.
+     - Teacher's total periods/week across all schools exceed their weekly limit (`maxPeriodsPerDay × effectiveWorkingDaysCount`, where effective working days = union of working days across the teacher's schools minus their weekly off days).
+     - Teacher assigned a subject not listed in their teachable subjects.
+     - Teacher assigned in two schools whose teaching period timings overlap on any common non-off day.
+     - Inactive teacher still assigned to a subject or as a Class Teacher.
+   - **Workload Tab:** Per-teacher summary showing weekly load vs. weekly limit, Class Teacher duties, warnings, and full itemized cross-school class-subject assignments.
+
+4. **Optional Subject Rules (`organisations/{orgId}/subjectRules/{ruleId}`)**
+   - Per-subject scheduling preferences stored per school (ready for Phases 5 & 6): Preferred time of day (`No preference` / `Morning` / `Afternoon`), `Can be a double period`, and `Maximum once per day`.
+
+---
+
 ## Phase 3 Capabilities (Offline-First with Sync)
 
 1. **Offline Storage & Single Source of Truth (150 MB Cache)**

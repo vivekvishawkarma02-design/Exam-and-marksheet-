@@ -240,6 +240,73 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["actorUid", "actorName", "action", "targetType", "targetId", "summary", "createdAt"]
+    },
+    "Teacher": {
+      "title": "Teacher",
+      "description": "Organisation-level teacher profile (either synced from an approved teacher member or created without a login for timetable setup) supporting multiple schools.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "mobile": { "type": "string" },
+        "email": { "type": "string" },
+        "photoBase64": { "type": "string" },
+        "subjects": { "type": "array" },
+        "schoolIds": { "type": "array" },
+        "maxPeriodsPerDay": { "type": "integer" },
+        "maxConsecutivePeriods": { "type": "integer" },
+        "weeklyOffDays": { "type": "array" },
+        "active": { "type": "boolean" },
+        "linkedMemberUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "mobile", "email", "photoBase64", "subjects", "schoolIds", "maxPeriodsPerDay", "maxConsecutivePeriods", "weeklyOffDays", "active", "linkedMemberUid", "createdAt", "updatedAt"]
+    },
+    "PeriodStructure": {
+      "title": "PeriodStructure",
+      "description": "Per-school editable working days and ordered daily time slots (periods, assembly, short break, lunch).",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "workingDays": { "type": "array" },
+        "slotsByDay": { "type": "object" },
+        "updatedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "workingDays", "slotsByDay", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "ClassAssignment": {
+      "title": "ClassAssignment",
+      "description": "Class-section class teacher and per-subject teacher + periods-per-week assignment.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "classTeacherId": { "type": "string" },
+        "subjectAssignments": { "type": "array" },
+        "updatedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "className", "section", "classTeacherId", "subjectAssignments", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "SubjectRule": {
+      "title": "SubjectRule",
+      "description": "Optional timetable scheduling preferences per subject in a school (preferred time of day, double period, max once per day).",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "subjectName": { "type": "string" },
+        "preferredTimeOfDay": { "type": "string", "enum": ["NO_PREFERENCE", "MORNING", "AFTERNOON"] },
+        "allowDoublePeriod": { "type": "boolean" },
+        "maxOncePerDay": { "type": "boolean" },
+        "updatedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "subjectName", "preferredTimeOfDay", "allowDoublePeriod", "maxOncePerDay", "updatedByUid", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -294,6 +361,22 @@
     "/organisations/{orgId}/auditLog/{entryId}": {
       "schema": { "$ref": "#/entities/AuditLogEntry" },
       "description": "Append-only organisation audit log viewable by admins."
+    },
+    "/organisations/{orgId}/teachers/{teacherId}": {
+      "schema": { "$ref": "#/entities/Teacher" },
+      "description": "Organisation teacher profiles controlled by the Teachers and assignments module."
+    },
+    "/organisations/{orgId}/periodStructures/{schoolId}": {
+      "schema": { "$ref": "#/entities/PeriodStructure" },
+      "description": "Per-school editable period structures controlled by the Teachers and assignments module."
+    },
+    "/organisations/{orgId}/classAssignments/{assignmentId}": {
+      "schema": { "$ref": "#/entities/ClassAssignment" },
+      "description": "Class-subject-teacher assignments and class teachers controlled by the Teachers and assignments module."
+    },
+    "/organisations/{orgId}/subjectRules/{ruleId}": {
+      "schema": { "$ref": "#/entities/SubjectRule" },
+      "description": "Optional per-school subject rules stored for timetable scheduling in Phases 5 and 6."
     }
   }
 }

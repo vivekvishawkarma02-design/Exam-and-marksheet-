@@ -815,4 +815,189 @@ test("Phase 3: Mark edit logs are append-only, respect teacher scope, and enforc
   );
 });
 
+test("Phase 4: Teachers and assignments module enforces edit, view-only, no-access, and cross-org isolation across all 4 collections", async () => {
+  await seedOrgWithOwnerAndSchools();
+  const VIEWER_UID = "viewer_teachers_u1";
+  const NO_ACCESS_UID = "no_access_u2";
+  const EDITOR_UID = "editor_teachers_u3";
+
+  const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+  const editorDb = testEnv.authenticatedContext(EDITOR_UID).firestore();
+  const viewerDb = testEnv.authenticatedContext(VIEWER_UID).firestore();
+  const noAccessDb = testEnv.authenticatedContext(NO_ACCESS_UID).firestore();
+  const outsiderDb = testEnv.authenticatedContext(OTHER_ORG_UID).firestore();
+  const ts = pastDate(2000);
+
+  // Seed 3 non-admin members with different 'teachers' module levels: edit, view, none
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("members").doc(EDITOR_UID).set(
+      makeMemberPayload(EDITOR_UID, {
+        role: "OFFICE_OPERATOR",
+        allSchools: true,
+        schools: [],
+        permissions: { ...teacherPermissions("view"), teachers: "edit" },
+      })
+    )
+  );
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("members").doc(VIEWER_UID).set(
+      makeMemberPayload(VIEWER_UID, {
+        role: "OFFICE_OPERATOR",
+        allSchools: true,
+        schools: [],
+        permissions: { ...teacherPermissions("view"), teachers: "view" },
+      })
+    )
+  );
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("members").doc(NO_ACCESS_UID).set(
+      makeMemberPayload(NO_ACCESS_UID, {
+        role: "OFFICE_OPERATOR",
+        allSchools: true,
+        schools: [],
+        permissions: { ...teacherPermissions("view"), teachers: "none" },
+      })
+    )
+  );
+
+  const teacherPayload = {
+    name: "Mr. Verma",
+    mobile: "9800000011",
+    email: "verma@sts.edu",
+    photoBase64: "",
+    subjects: ["MATHEMATICS", "SCIENCE"],
+    schoolIds: [SCHOOL_1, SCHOOL_2],
+    maxPeriodsPerDay: 7,
+    maxConsecutivePeriods: 3,
+    weeklyOffDays: [],
+    active: true,
+    linkedMemberUid: "",
+    createdAt: ts,
+    updatedAt: ts,
+  };
+
+  const periodStructurePayload = {
+    schoolId: SCHOOL_1,
+    workingDays: ["MON", "TUE", "WED", "THU", "FRI", "SAT"],
+    slotsByDay: {
+      MON: [
+        { id: "MON_1", type: "ASSEMBLY", label: "Morning Assembly", startMinutes: 480, endMinutes: 495 },
+        { id: "MON_2", type: "PERIOD", label: "Period 1", startMinutes: 495, endMinutes: 535 },
+      ],
+    },
+    updatedByUid: EDITOR_UID,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+
+  const classAssignmentPayload = {
+    schoolId: SCHOOL_1,
+    className: "5th",
+    section: "A",
+    classTeacherId: "tchr_verma",
+    subjectAssignments: [
+      { subjectName: "MATHEMATICS", teacherId: "tchr_verma", periodsPerWeek: 6 },
+    ],
+    updatedByUid: EDITOR_UID,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+
+  const subjectRulePayload = {
+    schoolId: SCHOOL_1,
+    subjectName: "MATHEMATICS",
+    preferredTimeOfDay: "MORNING",
+    allowDoublePeriod: true,
+    maxOncePerDay: false,
+    updatedByUid: EDITOR_UID,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+
+  // 1. Editor (teachers: "edit") CAN create & update all 4 collections
+  const orgRefEditor = editorDb.collection("organisations").doc(ORG_ID);
+  await assertSucceeds(orgRefEditor.collection("teachers").doc("tchr_verma").set(teacherPayload));
+  await assertSucceeds(orgRefEditor.collection("periodStructures").doc(SCHOOL_1).set(periodStructurePayload));
+  await assertSucceeds(orgRefEditor.collection("classAssignments").doc("assign_sch1_5th_A").set(classAssignmentPayload));
+  await assertSucceeds(orgRefEditor.collection("subjectRules").doc("srule_sch1_math").set(subjectRulePayload));
+
+  // 2. View-only member (teachers: "view") CAN read/list all 4 collections, CANNOT edit or delete ANY
+  const orgRefViewer = viewerDb.collection("organisations").doc(ORG_ID);
+  await assertSucceeds(orgRefViewer.collection("teachers").get());
+  await assertSucceeds(orgRefViewer.collection("periodStructures").get());
+  await assertSucceeds(orgRefViewer.collection("classAssignments").get());
+  await assertSucceeds(orgRefViewer.collection("subjectRules").get());
+
+  await assertFails(
+    orgRefViewer.collection("teachers").doc("tchr_verma").update({ maxPeriodsPerDay: 5, updatedAt: pastDate(500) })
+  );
+  await assertFails(
+    orgRefViewer.collection("teachers").doc("tchr_new").set({ ...teacherPayload, name: "Blocked" })
+  );
+  await assertFails(
+    orgRefViewer.collection("periodStructures").doc(SCHOOL_2).set({
+      ...periodStructurePayload,
+      schoolId: SCHOOL_2,
+      updatedByUid: VIEWER_UID,
+    })
+  );
+  await assertFails(
+    orgRefViewer.collection("classAssignments").doc("assign_sch1_5th_A").update({
+      classTeacherId: "",
+      updatedByUid: VIEWER_UID,
+      updatedAt: pastDate(500),
+    })
+  );
+  await assertFails(
+    orgRefViewer.collection("subjectRules").doc("srule_sch1_math").update({
+      preferredTimeOfDay: "AFTERNOON",
+      updatedByUid: VIEWER_UID,
+      updatedAt: pastDate(500),
+    })
+  );
+  await assertFails(orgRefViewer.collection("teachers").doc("tchr_verma").delete());
+
+  // 3. No-access member (teachers: "none") CANNOT read, list, create, update, or delete ANY of the 4 collections
+  const orgRefNone = noAccessDb.collection("organisations").doc(ORG_ID);
+  await assertFails(orgRefNone.collection("teachers").get());
+  await assertFails(orgRefNone.collection("teachers").doc("tchr_verma").get());
+  await assertFails(orgRefNone.collection("periodStructures").get());
+  await assertFails(orgRefNone.collection("periodStructures").doc(SCHOOL_1).get());
+  await assertFails(orgRefNone.collection("classAssignments").get());
+  await assertFails(orgRefNone.collection("subjectRules").get());
+  await assertFails(orgRefNone.collection("teachers").doc("tchr_none").set(teacherPayload));
+  await assertFails(
+    orgRefNone.collection("subjectRules").doc("srule_none").set({ ...subjectRulePayload, updatedByUid: NO_ACCESS_UID })
+  );
+
+  // 4. Cross-organisation outsider CANNOT read or write ANY Phase 4 collection
+  const orgRefOutsider = outsiderDb.collection("organisations").doc(ORG_ID);
+  await assertFails(orgRefOutsider.collection("teachers").get());
+  await assertFails(orgRefOutsider.collection("periodStructures").get());
+  await assertFails(orgRefOutsider.collection("classAssignments").get());
+  await assertFails(orgRefOutsider.collection("subjectRules").get());
+  await assertFails(orgRefOutsider.collection("teachers").doc("tchr_verma").delete());
+
+  // 5. Approved TEACHER with teachers:"none" can self-sync their own tchr_member_{uid} doc on onboarding,
+  //    but STILL cannot read/list teachers or touch any other teacher doc
+  const teacherDb = testEnv.authenticatedContext(TEACHER_UID).firestore();
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("members").doc(TEACHER_UID).set(
+      makeMemberPayload(TEACHER_UID, { role: "TEACHER", schools: [SCHOOL_1], permissions: teacherPermissions("edit") })
+    )
+  );
+  await assertSucceeds(
+    teacherDb.collection("organisations").doc(ORG_ID).collection("teachers").doc(`tchr_member_${TEACHER_UID}`).set({
+      ...teacherPayload,
+      name: "Mrs. Sharma",
+      linkedMemberUid: TEACHER_UID,
+      schoolIds: [SCHOOL_1],
+    })
+  );
+  await assertFails(teacherDb.collection("organisations").doc(ORG_ID).collection("teachers").get());
+  await assertFails(teacherDb.collection("organisations").doc(ORG_ID).collection("teachers").doc("tchr_verma").get());
+  await assertFails(teacherDb.collection("organisations").doc(ORG_ID).collection("periodStructures").get());
+});
+
+
 

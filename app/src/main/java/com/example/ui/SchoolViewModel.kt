@@ -31,6 +31,7 @@ import com.example.data.cloud.CloudJoinRequest
 import com.example.data.cloud.CloudMarkEditLog
 import com.example.data.cloud.CloudMember
 import com.example.data.cloud.CloudOrganisation
+import com.example.data.cloud.CloudPhase4Snapshot
 import com.example.data.cloud.CloudSchoolAcademicSnapshot
 import com.example.data.cloud.CloudSchoolClassItem
 import com.example.data.cloud.CloudSchoolRecord
@@ -41,9 +42,12 @@ import com.example.data.cloud.NetworkConnectivityMonitor
 import com.example.data.cloud.OfflinePrefsStore
 import com.example.data.cloud.OrgAcademicRepository
 import com.example.data.cloud.OrgCloudRepository
+import com.example.data.cloud.Phase4Repository
 import com.example.data.cloud.StableDocId
 import com.example.domain.AppModule
+import com.example.domain.AssignmentWarning
 import com.example.domain.AttendanceSummary
+import com.example.domain.ClassSectionAssignment
 import com.example.domain.DefaultSchoolTemplate
 import com.example.domain.DefaultSubjects
 import com.example.domain.LocalPendingMarkEdit
@@ -56,14 +60,19 @@ import com.example.domain.MemberStatus
 import com.example.domain.OfflineSyncEngine
 import com.example.domain.OrgAccessEvaluator
 import com.example.domain.OrgRole
+import com.example.domain.Phase4Validator
 import com.example.domain.ReportCalculations
 import com.example.domain.ReportType
 import com.example.domain.ResultStatus
+import com.example.domain.SchoolPeriodStructure
 import com.example.domain.ServerMarkObservation
 import com.example.domain.SlipLayoutMode
 import com.example.domain.StudentPerformanceReport
+import com.example.domain.SubjectRule
 import com.example.domain.SyncStatus
 import com.example.domain.SyncUiState
+import com.example.domain.TeacherProfile
+import com.example.domain.TeacherWorkloadSummary
 import com.example.util.BackupAndCsvManager
 import com.example.util.MarksCsvIssue
 import com.example.util.OperationType
@@ -171,8 +180,47 @@ data class SchoolUiState(
     val markEditLogs: List<CloudMarkEditLog> = emptyList(),
     val markConflicts: List<MarkConflictNotice> = emptyList(),
     val membershipRevoked: Boolean = false,
-    val schoolDocIdByLongId: Map<Long, String> = emptyMap()
+    val schoolDocIdByLongId: Map<Long, String> = emptyMap(),
+    // Phase 4: Teachers, Period Structure, Class-Subject-Teacher Assignments, Subject Rules
+    val teachers: List<TeacherProfile> = emptyList(),
+    val periodStructuresBySchool: Map<String, SchoolPeriodStructure> = emptyMap(),
+    val classAssignments: List<ClassSectionAssignment> = emptyList(),
+    val subjectRules: List<SubjectRule> = emptyList()
 ) {
+    val activeSchoolDocId: String
+        get() = schoolDocIdByLongId[activeSchool.id].orEmpty()
+
+    val schoolNamesByDocId: Map<String, String>
+        get() = schools.mapNotNull { sch -> schoolDocIdByLongId[sch.id]?.let { it to sch.name } }.toMap()
+
+    fun schoolNameByDocId(schoolDocId: String): String =
+        schoolNamesByDocId[schoolDocId] ?: schoolDocId
+
+    fun periodStructureForSchool(schoolDocId: String): SchoolPeriodStructure =
+        periodStructuresBySchool[schoolDocId] ?: Phase4Validator.buildDefaultPeriodStructure(schoolDocId)
+
+    val allConfiguredSubjectsAcrossOrg: List<String>
+        get() = subjects.map { it.name }.distinct().sortedBy { it.lowercase() }
+
+    fun configuredSubjectsForSchool(schoolId: Long = activeSchool.id): List<String> =
+        subjects.filter { it.schoolId == schoolId }.map { it.name }.distinct().sortedBy { it.lowercase() }
+
+    fun phase4Warnings(): List<AssignmentWarning> = Phase4Validator.evaluateAllWarnings(
+        teachers = teachers,
+        periodStructuresBySchool = periodStructuresBySchool,
+        assignments = classAssignments,
+        schoolNamesById = schoolNamesByDocId
+    )
+
+    fun teacherWorkloads(warnings: List<AssignmentWarning>? = null): List<TeacherWorkloadSummary> =
+        Phase4Validator.buildTeacherWorkloads(
+            teachers = teachers,
+            periodStructuresBySchool = periodStructuresBySchool,
+            assignments = classAssignments,
+            schoolNamesById = schoolNamesByDocId,
+            allWarnings = warnings
+        )
+
     fun markEditLogsForStudent(studentId: Long): List<CloudMarkEditLog> =
         markEditLogs.filter { StableDocId.toLong(it.studentId) == studentId }
     val accessProfile: MemberAccessProfile?
@@ -444,6 +492,7 @@ class SchoolViewModel(
     private val currentUserId: String,
     private val orgRepo: OrgCloudRepository,
     private val academicRepo: OrgAcademicRepository,
+    private val phase4Repo: Phase4Repository,
     private val localRepo: ReportCardRepository,
     private val connectivityMonitor: NetworkConnectivityMonitor,
     private val offlinePrefs: OfflinePrefsStore
@@ -481,6 +530,7 @@ class SchoolViewModel(
     private val _ownMember = MutableStateFlow<CloudMember?>(null)
     private val _schoolsSnapshot = MutableStateFlow(CloudSchoolsSnapshot())
     private val _academicSnapshot = MutableStateFlow(CloudSchoolAcademicSnapshot())
+    private val _phase4Snapshot = MutableStateFlow(CloudPhase4Snapshot())
     private val _orgMembers = MutableStateFlow<List<CloudMember>>(emptyList())
     private val _joinRequests = MutableStateFlow<List<CloudJoinRequest>>(emptyList())
     private val _inviteCodes = MutableStateFlow<List<CloudInviteCode>>(emptyList())
@@ -509,8 +559,13 @@ class SchoolViewModel(
         CloudCoreBundle(org, member, schoolsSnap, academicSnap, online)
     }
 
-    private val syncExtrasFlow = combine(
+    private val combinedSyncErrorFlow = combine(
         academicRepo.syncError,
+        phase4Repo.syncError
+    ) { acadErr, p4Err -> acadErr ?: p4Err }
+
+    private val syncExtrasFlow = combine(
+        combinedSyncErrorFlow,
         academicRepo.lastSyncedAtMs,
         _markConflicts,
         _isInitialized,
@@ -523,9 +578,10 @@ class SchoolViewModel(
         _orgMembers,
         _joinRequests,
         _inviteCodes,
-        _auditLogs
-    ) { members, reqs, invites, logs ->
-        Quad4(members, reqs, invites, logs)
+        _auditLogs,
+        _phase4Snapshot
+    ) { members, reqs, invites, logs, p4 ->
+        AdminAndPhase4Bundle(members, reqs, invites, logs, p4)
     }
 
     val uiState: StateFlow<SchoolUiState> = combine(
@@ -559,7 +615,9 @@ class SchoolViewModel(
         val marks = core.academicSnap.marks.map { it.entity }
         val coScholastic = core.academicSnap.coScholastic.map { it.entity }
         val termInfos = core.academicSnap.termInfos.map { it.entity }
-        val totalPendingCount = core.schoolsSnap.pendingWriteCount + core.academicSnap.pendingWriteCount
+        val totalPendingCount = core.schoolsSnap.pendingWriteCount +
+            core.academicSnap.pendingWriteCount +
+            admin.phase4.pendingWriteCount
 
         val syncUi = OfflineSyncEngine.computeSyncUiState(
             isOnline = core.isOnline,
@@ -588,17 +646,21 @@ class SchoolViewModel(
             lastMarkUndo = undo,
             activeOrg = core.org,
             currentMember = core.member,
-            orgMembers = admin.first,
-            joinRequests = admin.second,
-            inviteCodes = admin.third,
-            auditLogs = admin.fourth,
+            orgMembers = admin.members,
+            joinRequests = admin.joinRequests,
+            inviteCodes = admin.inviteCodes,
+            auditLogs = admin.auditLogs,
             syncStatus = syncUi.status,
             syncUiState = syncUi,
             isOnline = core.isOnline,
             markEditLogs = core.academicSnap.markEditLogs,
             markConflicts = extras.conflicts,
             membershipRevoked = extras.membershipRevoked,
-            schoolDocIdByLongId = schoolsRecords.associate { it.stableId to it.docId }
+            schoolDocIdByLongId = schoolsRecords.associate { it.stableId to it.docId },
+            teachers = admin.phase4.teachers,
+            periodStructuresBySchool = admin.phase4.periodStructuresBySchool,
+            classAssignments = admin.phase4.classAssignments,
+            subjectRules = admin.phase4.subjectRules
         )
     }.stateIn(
         scope = viewModelScope,
@@ -812,6 +874,34 @@ class SchoolViewModel(
                 }
                 .collect { _auditLogs.value = it }
         }
+
+        // 8. Phase 4: Teachers, Period Structures, Class Assignments & Subject Rules
+        // Strictly gated by AppModule.TEACHERS ("Teachers and assignments")
+        viewModelScope.launch {
+            combine(_observerRestartTick, _ownMember.map { it?.toAccessProfile() }) { tick, profile ->
+                tick to profile
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { (_, profile) ->
+                    if (profile == null || !OrgAccessEvaluator.canViewModule(profile, AppModule.TEACHERS)) {
+                        flowOf(CloudPhase4Snapshot())
+                    } else {
+                        phase4Repo.observePhase4Data(orgId, profile)
+                            .catch { e ->
+                                val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
+                                if (cause != null) {
+                                    handleFirestoreError(cause, OperationType.LIST, "organisations/$orgId/teachers")
+                                    emit(CloudPhase4Snapshot())
+                                    return@catch
+                                }
+                                if (e is CancellationException) throw e
+                            }
+                    }
+                }
+                .collect { snap ->
+                    _phase4Snapshot.value = snap
+                }
+        }
     }
 
     private fun evaluateMarkConflicts(
@@ -867,6 +957,7 @@ class SchoolViewModel(
             }
             _schoolsSnapshot.value = CloudSchoolsSnapshot()
             _academicSnapshot.value = CloudSchoolAcademicSnapshot()
+            _phase4Snapshot.value = CloudPhase4Snapshot()
             _observerRestartTick.value += 1
             isResettingCache = false
             emitMessage("Your access was updated by an admin. Cached data for removed access has been cleared.")
@@ -882,11 +973,15 @@ class SchoolViewModel(
             emitMessage("Still offline — changes are safely saved on this phone and will sync once online.")
             return
         }
-        academicRepo.retrySync { msg -> emitMessage(msg) }
+        val retriedPhase4 = phase4Repo.retrySync()
+        academicRepo.retrySync { msg ->
+            emitMessage(if (retriedPhase4) "Retrying pending sync…" else msg)
+        }
     }
 
     fun clearSyncError() {
         academicRepo.clearSyncError()
+        phase4Repo.clearSyncError()
     }
 
     private fun handleListenerError(e: Throwable, sub: String) {
@@ -1969,6 +2064,13 @@ class SchoolViewModel(
         requestedClasses: List<String>,
         onCompleted: () -> Unit = {}
     ) {
+        val currentMember = uiState.value.currentMember
+        val assignedSchoolIds = when {
+            currentMember == null -> emptyList()
+            currentMember.allSchools -> uiState.value.schoolDocIdByLongId.values.toList()
+            else -> currentMember.schools
+        }
+        val wasAlreadyCompleted = currentMember?.teacherProfileCompleted == true
         viewModelScope.launch {
             orgRepo.completeTeacherProfile(
                 orgId = orgId,
@@ -1976,7 +2078,9 @@ class SchoolViewModel(
                 mobile = mobile,
                 photoBase64 = photoBase64,
                 requestedSubjects = requestedSubjects,
-                requestedClasses = requestedClasses
+                requestedClasses = requestedClasses,
+                assignedSchoolIds = assignedSchoolIds,
+                wasAlreadyCompleted = wasAlreadyCompleted
             ).onSuccess {
                 emitMessage("Teacher profile saved")
                 onCompleted()
@@ -1984,6 +2088,167 @@ class SchoolViewModel(
                 emitMessage(friendlyFirestoreErrorMessage(err, "Could not save teacher profile."))
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // PHASE 4: TEACHERS, PERIOD STRUCTURE, ASSIGNMENTS & SUBJECT RULES
+    // -------------------------------------------------------------------------
+    fun saveTeacher(
+        teacher: TeacherProfile,
+        isUpdate: Boolean,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        if (!uiState.value.canEdit(AppModule.TEACHERS)) {
+            onResult(false, "You do not have edit access to Teachers and assignments.")
+            return
+        }
+        val res = phase4Repo.saveTeacher(orgId, teacher, isUpdate)
+        res.onSuccess {
+            emitMessage(if (isUpdate) "Updated teacher '${teacher.name.trim()}'" else "Added teacher '${teacher.name.trim()}'")
+            onResult(true, null)
+        }.onFailure { err ->
+            val msg = friendlyFirestoreErrorMessage(err, "Could not save teacher.")
+            emitMessage(msg)
+            onResult(false, msg)
+        }
+    }
+
+    fun syncTeacherMemberToDirectory(member: CloudMember) {
+        if (!uiState.value.canEdit(AppModule.TEACHERS)) {
+            emitMessage("You do not have edit access to Teachers and assignments.")
+            return
+        }
+        val state = uiState.value
+        val docId = Phase4Repository.makeMemberTeacherDocId(member.uid)
+        val exists = state.teachers.any { it.id == docId }
+        val schoolIds = if (member.allSchools) {
+            state.schoolDocIdByLongId.values.toList()
+        } else {
+            member.schools
+        }
+        val profile = TeacherProfile(
+            id = docId,
+            name = member.name.ifBlank { member.email.substringBefore("@") },
+            mobile = member.mobile,
+            email = member.email,
+            photoBase64 = member.teacherPhotoBase64,
+            subjects = member.requestedSubjects,
+            schoolIds = schoolIds,
+            maxPeriodsPerDay = Phase4Validator.DEFAULT_MAX_PERIODS_PER_DAY,
+            maxConsecutivePeriods = Phase4Validator.DEFAULT_MAX_CONSECUTIVE_PERIODS,
+            weeklyOffDays = emptyList(),
+            active = true,
+            linkedMemberUid = member.uid
+        )
+        saveTeacher(profile, isUpdate = exists)
+    }
+
+    fun setTeacherActive(teacher: TeacherProfile, active: Boolean) {
+        if (!uiState.value.canEdit(AppModule.TEACHERS)) {
+            emitMessage("You do not have edit access to Teachers and assignments.")
+            return
+        }
+        phase4Repo.setTeacherActive(orgId, teacher.id, teacher.name, active)
+            .onSuccess {
+                emitMessage(if (active) "Activated ${teacher.name}" else "Deactivated ${teacher.name}")
+            }
+            .onFailure { err ->
+                emitMessage(friendlyFirestoreErrorMessage(err, "Could not update teacher status."))
+            }
+    }
+
+    fun deleteTeacher(
+        teacher: TeacherProfile,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TEACHERS)) {
+            onResult(false, "You do not have edit access to Teachers and assignments.")
+            return
+        }
+        phase4Repo.deleteTeacher(orgId, teacher, state.classAssignments)
+            .onSuccess {
+                emitMessage("Deleted teacher '${teacher.name}'")
+                onResult(true, null)
+            }
+            .onFailure { err ->
+                val msg = err.message ?: friendlyFirestoreErrorMessage(err, "Could not delete teacher.")
+                emitMessage(msg)
+                onResult(false, msg)
+            }
+    }
+
+    fun savePeriodStructure(
+        structure: SchoolPeriodStructure,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TEACHERS)) {
+            onResult(false, "You do not have edit access to Teachers and assignments.")
+            return
+        }
+        val existsInCloud = structure.schoolId in state.periodStructuresBySchool
+        phase4Repo.savePeriodStructure(orgId, structure, existsInCloud)
+            .onSuccess {
+                val schoolName = state.schoolNameByDocId(structure.schoolId)
+                emitMessage("Saved period structure for $schoolName (${structure.totalTeachingPeriodsPerWeek()} periods/week)")
+                onResult(true, null)
+            }
+            .onFailure { err ->
+                val msg = err.message ?: friendlyFirestoreErrorMessage(err, "Could not save period structure.")
+                emitMessage(msg)
+                onResult(false, msg)
+            }
+    }
+
+    fun saveClassAssignment(
+        assignment: ClassSectionAssignment,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TEACHERS)) {
+            onResult(false, "You do not have edit access to Teachers and assignments.")
+            return
+        }
+        val docId = assignment.id.ifBlank {
+            Phase4Repository.makeAssignmentDocId(assignment.schoolId, assignment.className, assignment.section)
+        }
+        val existsInCloud = state.classAssignments.any { it.id == docId }
+        phase4Repo.saveClassAssignment(orgId, assignment.copy(id = docId), existsInCloud)
+            .onSuccess {
+                emitMessage("Saved assignments for ${assignment.classSectionLabel}")
+                onResult(true, null)
+            }
+            .onFailure { err ->
+                val msg = friendlyFirestoreErrorMessage(err, "Could not save class assignments.")
+                emitMessage(msg)
+                onResult(false, msg)
+            }
+    }
+
+    fun saveSubjectRule(
+        rule: SubjectRule,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TEACHERS)) {
+            onResult(false, "You do not have edit access to Teachers and assignments.")
+            return
+        }
+        val docId = rule.id.ifBlank {
+            Phase4Repository.makeSubjectRuleDocId(rule.schoolId, rule.subjectName)
+        }
+        val existsInCloud = state.subjectRules.any { it.id == docId }
+        phase4Repo.saveSubjectRule(orgId, rule.copy(id = docId), existsInCloud)
+            .onSuccess {
+                emitMessage("Saved rule for ${rule.subjectName}")
+                onResult(true, null)
+            }
+            .onFailure { err ->
+                val msg = friendlyFirestoreErrorMessage(err, "Could not save subject rule.")
+                emitMessage(msg)
+                onResult(false, msg)
+            }
     }
 
     fun leaveOrganisation(onLeft: () -> Unit) {
@@ -2449,6 +2714,7 @@ class SchoolViewModel(
             currentUserId: String,
             orgRepo: OrgCloudRepository,
             academicRepo: OrgAcademicRepository,
+            phase4Repo: Phase4Repository,
             localRepo: ReportCardRepository,
             connectivityMonitor: NetworkConnectivityMonitor,
             offlinePrefs: OfflinePrefsStore
@@ -2460,6 +2726,7 @@ class SchoolViewModel(
                     currentUserId = currentUserId,
                     orgRepo = orgRepo,
                     academicRepo = academicRepo,
+                    phase4Repo = phase4Repo,
                     localRepo = localRepo,
                     connectivityMonitor = connectivityMonitor,
                     offlinePrefs = offlinePrefs
@@ -2469,7 +2736,13 @@ class SchoolViewModel(
     }
 }
 
-private data class Quad4<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+private data class AdminAndPhase4Bundle(
+    val members: List<CloudMember>,
+    val joinRequests: List<CloudJoinRequest>,
+    val inviteCodes: List<CloudInviteCode>,
+    val auditLogs: List<CloudAuditLog>,
+    val phase4: CloudPhase4Snapshot
+)
 
 private data class CloudCoreBundle(
     val org: CloudOrganisation?,

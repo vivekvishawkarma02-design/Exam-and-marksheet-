@@ -400,11 +400,76 @@ service cloud.firestore {
         data.actorUid == request.auth.uid &&
         data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
         data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
-        data.targetType in ['mark', 'student', 'member', 'access', 'school', 'organisation', 'migration', 'invite'] &&
+        data.targetType in ['mark', 'student', 'member', 'access', 'school', 'organisation', 'migration', 'invite', 'teacher', 'periodStructure', 'assignment', 'subjectRule'] &&
         data.targetId is string && data.targetId.size() <= 128 &&
         data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 300 &&
         (!('schoolId' in data) || (data.schoolId is string && data.schoolId.size() <= 128)) &&
         isValidTimestamp(data.createdAt);
+    }
+
+    function isValidTeacher(data) {
+      return data.keys().hasAll([
+          'name', 'mobile', 'email', 'photoBase64', 'subjects', 'schoolIds',
+          'maxPeriodsPerDay', 'maxConsecutivePeriods', 'weeklyOffDays',
+          'active', 'linkedMemberUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'name', 'mobile', 'email', 'photoBase64', 'subjects', 'schoolIds',
+          'maxPeriodsPerDay', 'maxConsecutivePeriods', 'weeklyOffDays',
+          'active', 'linkedMemberUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.mobile is string && data.mobile.size() <= 40 &&
+        data.email is string && data.email.size() <= 160 &&
+        data.photoBase64 is string && data.photoBase64.size() <= 220000 &&
+        isValidStringList(data.subjects, 40) &&
+        isValidStringList(data.schoolIds, 50) &&
+        data.maxPeriodsPerDay is int && data.maxPeriodsPerDay >= 1 && data.maxPeriodsPerDay <= 20 &&
+        data.maxConsecutivePeriods is int && data.maxConsecutivePeriods >= 1 && data.maxConsecutivePeriods <= 20 &&
+        isValidStringList(data.weeklyOffDays, 7) &&
+        data.active is bool &&
+        data.linkedMemberUid is string && data.linkedMemberUid.size() <= 128 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidPeriodStructure(data, schoolId) {
+      return data.keys().hasAll(['schoolId', 'workingDays', 'slotsByDay', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['schoolId', 'workingDays', 'slotsByDay', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.schoolId == schoolId &&
+        isValidStringList(data.workingDays, 7) &&
+        data.workingDays.size() >= 1 &&
+        data.slotsByDay is map &&
+        data.slotsByDay.size() <= 7 &&
+        data.updatedByUid == request.auth.uid &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidClassAssignment(data) {
+      return data.keys().hasAll(['schoolId', 'className', 'section', 'classTeacherId', 'subjectAssignments', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['schoolId', 'className', 'section', 'classTeacherId', 'subjectAssignments', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.schoolId) &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+        data.classTeacherId is string && data.classTeacherId.size() <= 128 &&
+        data.subjectAssignments is list && data.subjectAssignments.size() <= 40 &&
+        data.updatedByUid == request.auth.uid &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSubjectRule(data) {
+      return data.keys().hasAll(['schoolId', 'subjectName', 'preferredTimeOfDay', 'allowDoublePeriod', 'maxOncePerDay', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['schoolId', 'subjectName', 'preferredTimeOfDay', 'allowDoublePeriod', 'maxOncePerDay', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.schoolId) &&
+        data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 80 &&
+        data.preferredTimeOfDay in ['NO_PREFERENCE', 'MORNING', 'AFTERNOON'] &&
+        data.allowDoublePeriod is bool &&
+        data.maxOncePerDay is bool &&
+        data.updatedByUid == request.auth.uid &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
     }
 
     // =========================================================================
@@ -842,6 +907,118 @@ service cloud.firestore {
             canAccessSchool(orgId, schoolId) &&
             hasModuleEdit(orgId, 'coScholastic');
         }
+      }
+
+      // -----------------------------------------------------------------------
+      // 3f. PHASE 4: TEACHERS, PERIOD STRUCTURE, ASSIGNMENTS & SUBJECT RULES
+      // Controlled strictly by the 'teachers' ("Teachers and assignments") module
+      // -----------------------------------------------------------------------
+      match /teachers/{teacherId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'teachers');
+
+        allow create: if isSignedIn() &&
+          isValidId(teacherId) &&
+          isValidTeacher(incoming()) && (
+            hasModuleEdit(orgId, 'teachers') ||
+            // Approved teacher self-syncing their own Phase 2 onboarding profile (no read granted)
+            (
+              isActiveMember(orgId) &&
+              memberData(orgId).role == 'TEACHER' &&
+              teacherId == ('tchr_member_' + request.auth.uid) &&
+              incoming().linkedMemberUid == request.auth.uid
+            )
+          );
+
+        allow update: if isSignedIn() &&
+          isValidId(teacherId) &&
+          isValidTeacher(incoming()) &&
+          incoming().createdAt == existing().createdAt && (
+            hasModuleEdit(orgId, 'teachers') ||
+            (
+              isActiveMember(orgId) &&
+              memberData(orgId).role == 'TEACHER' &&
+              teacherId == ('tchr_member_' + request.auth.uid) &&
+              existing().linkedMemberUid == request.auth.uid &&
+              incoming().linkedMemberUid == request.auth.uid &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'name', 'mobile', 'photoBase64', 'subjects', 'updatedAt'
+              ])
+            )
+          );
+
+        allow delete: if isSignedIn() &&
+          isValidId(teacherId) &&
+          hasModuleEdit(orgId, 'teachers');
+      }
+
+      match /periodStructures/{schoolId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'teachers');
+
+        allow create: if isSignedIn() &&
+          isValidId(schoolId) &&
+          isValidPeriodStructure(incoming(), schoolId) &&
+          hasModuleEdit(orgId, 'teachers') &&
+          canAccessSchool(orgId, schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(schoolId) &&
+          isValidPeriodStructure(incoming(), schoolId) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'teachers') &&
+          canAccessSchool(orgId, schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(schoolId) &&
+          hasModuleEdit(orgId, 'teachers') &&
+          canAccessSchool(orgId, schoolId);
+      }
+
+      match /classAssignments/{assignmentId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'teachers');
+
+        allow create: if isSignedIn() &&
+          isValidId(assignmentId) &&
+          isValidClassAssignment(incoming()) &&
+          hasModuleEdit(orgId, 'teachers') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(assignmentId) &&
+          isValidClassAssignment(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'teachers') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(assignmentId) &&
+          hasModuleEdit(orgId, 'teachers') &&
+          canAccessSchool(orgId, existing().schoolId);
+      }
+
+      match /subjectRules/{ruleId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'teachers');
+
+        allow create: if isSignedIn() &&
+          isValidId(ruleId) &&
+          isValidSubjectRule(incoming()) &&
+          hasModuleEdit(orgId, 'teachers') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(ruleId) &&
+          isValidSubjectRule(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().subjectName == existing().subjectName &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'teachers') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(ruleId) &&
+          hasModuleEdit(orgId, 'teachers') &&
+          canAccessSchool(orgId, existing().schoolId);
       }
     }
   }

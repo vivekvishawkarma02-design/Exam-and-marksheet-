@@ -1130,6 +1130,10 @@ class OrgCloudRepository(
             }
             deleteCollectionInChunks(orgRef.collection("joinRequests"))
             deleteCollectionInChunks(orgRef.collection("inviteCodes"))
+            deleteCollectionInChunks(orgRef.collection("teachers"))
+            deleteCollectionInChunks(orgRef.collection("periodStructures"))
+            deleteCollectionInChunks(orgRef.collection("classAssignments"))
+            deleteCollectionInChunks(orgRef.collection("subjectRules"))
 
             // Delete non-owner members first
             val membersSnap = orgRef.collection("members").get().await()
@@ -1184,32 +1188,82 @@ class OrgCloudRepository(
         mobile: String,
         photoBase64: String,
         requestedSubjects: List<String>,
-        requestedClasses: List<String>
+        requestedClasses: List<String>,
+        assignedSchoolIds: List<String> = emptyList(),
+        wasAlreadyCompleted: Boolean = false
     ): Result<Unit> {
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         val path = "organisations/$orgId/members/$uid"
+        val cleanName = name.trim().ifBlank { currentUserName() }.take(120)
+        val cleanMobile = mobile.trim().take(40)
+        val cleanPhoto = photoBase64.take(215_000)
+        val cleanSubjects = requestedSubjects.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(30)
+        val cleanClasses = requestedClasses.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(30)
         return try {
             db.collection("organisations").document(orgId)
                 .collection("members").document(uid)
                 .update(
                     mapOf(
-                        "name" to name.trim().ifBlank { currentUserName() }.take(120),
-                        "mobile" to mobile.trim().take(40),
-                        "teacherPhotoBase64" to photoBase64.take(215_000),
-                        "requestedSubjects" to requestedSubjects.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(30),
-                        "requestedClasses" to requestedClasses.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(30),
+                        "name" to cleanName,
+                        "mobile" to cleanMobile,
+                        "teacherPhotoBase64" to cleanPhoto,
+                        "requestedSubjects" to cleanSubjects,
+                        "requestedClasses" to cleanClasses,
                         "teacherProfileCompleted" to true,
                         "lastActiveAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
                 .addOnFailureListener { e -> handleFirestoreError(e, OperationType.UPDATE, path) }
+
+            // Also sync to Phase 4 teachers/{tchr_member_uid} so approved teachers appear automatically
+            val teacherDocId = Phase4Repository.makeMemberTeacherDocId(uid)
+            val teacherRef = db.collection("organisations").document(orgId)
+                .collection("teachers").document(teacherDocId)
+            val fullTeacherPayload = mapOf(
+                "name" to cleanName,
+                "mobile" to cleanMobile,
+                "email" to currentUserEmail().take(160),
+                "photoBase64" to cleanPhoto,
+                "subjects" to cleanSubjects,
+                "schoolIds" to assignedSchoolIds.distinct().take(50),
+                "maxPeriodsPerDay" to 7L,
+                "maxConsecutivePeriods" to 3L,
+                "weeklyOffDays" to emptyList<String>(),
+                "active" to true,
+                "linkedMemberUid" to uid,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (wasAlreadyCompleted) {
+                teacherRef.update(
+                    mapOf(
+                        "name" to cleanName,
+                        "mobile" to cleanMobile,
+                        "photoBase64" to cleanPhoto,
+                        "subjects" to cleanSubjects,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).addOnFailureListener {
+                    // If Phase 2 teacher completed profile before Phase 4 existed, create the doc now
+                    teacherRef.set(fullTeacherPayload)
+                        .addOnFailureListener { e2 ->
+                            handleFirestoreError(e2, OperationType.CREATE, "organisations/$orgId/teachers/$teacherDocId")
+                        }
+                }
+            } else {
+                teacherRef.set(fullTeacherPayload)
+                    .addOnFailureListener { e ->
+                        handleFirestoreError(e, OperationType.CREATE, "organisations/$orgId/teachers/$teacherDocId")
+                    }
+            }
+
             logAuditNonBlocking(
                 orgId = orgId,
                 action = "TEACHER_PROFILE_UPDATED",
                 targetType = "member",
                 targetId = uid,
-                summary = "Completed teacher profile for ${name.trim()} (${requestedSubjects.size} subject(s), ${requestedClasses.size} class(es))"
+                summary = "Completed teacher profile for $cleanName (${cleanSubjects.size} subject(s), ${cleanClasses.size} class(es))"
             )
             Result.success(Unit)
         } catch (e: CancellationException) {

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
@@ -99,6 +100,7 @@ fun DashboardScreen(
     onOpenStudentCoScholastic: (StudentEntity) -> Unit,
     onOpenStudentReport: (StudentEntity) -> Unit,
     onNavigateToMembers: () -> Unit = {},
+    onNavigateToTeachers: () -> Unit = {},
     onEditOwnTeacherProfile: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -115,6 +117,7 @@ fun DashboardScreen(
     val canViewMarks = uiState.canView(AppModule.MARKS)
     val canViewCoScholastic = uiState.canView(AppModule.CO_SCHOLASTIC)
     val canViewReports = uiState.canView(AppModule.REPORTS)
+    val canViewTeachers = uiState.canView(AppModule.TEACHERS)
     val canViewSettings = uiState.canView(AppModule.SETTINGS)
     val canEditSettings = uiState.canEdit(AppModule.SETTINGS)
     val canViewMembers = uiState.canView(AppModule.MEMBERS) || uiState.isAdmin
@@ -226,6 +229,19 @@ fun DashboardScreen(
                     accent = primaryColor,
                     testTag = "tile_reports",
                     onClick = onNavigateToReports
+                )
+            )
+        }
+        if (canViewTeachers) {
+            val activeTeachers = uiState.teachers.count { it.active }
+            add(
+                QuickActionSpec(
+                    title = "Teachers & Setup",
+                    subtitle = "$activeTeachers active • periods & load",
+                    icon = Icons.Default.School,
+                    accent = secondaryColor,
+                    testTag = "tile_teachers_assignments",
+                    onClick = onNavigateToTeachers
                 )
             )
         }

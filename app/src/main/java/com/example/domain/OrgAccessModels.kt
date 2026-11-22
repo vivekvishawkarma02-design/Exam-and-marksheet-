@@ -36,7 +36,7 @@ enum class AppModule(val key: String, val label: String, val description: String
     CO_SCHOLASTIC("coScholastic", "Co-scholastic & Attendance", "Co-scholastic grades, attendance, and remarks"),
     REPORTS("reports", "Reports", "UT slips, Half-Yearly slips, Annual report cards, and batch PDFs"),
     TIMETABLE("timetable", "Timetable", "Class and teacher timetables (full scheduling in later phases)"),
-    TEACHERS("teachers", "Teachers & Assignments", "Teacher profiles and class-subject assignments"),
+    TEACHERS("teachers", "Teachers and assignments", "Teachers, period structure, class-subject assignments, and subject rules"),
     SETTINGS("settings", "Settings", "Organisation settings, sessions, schools, and backups"),
     MEMBERS("members", "Members", "Member directory, join requests, roles, and access control");
 

@@ -69,6 +69,7 @@ import com.example.data.cloud.NetworkConnectivityMonitor
 import com.example.data.cloud.OfflinePrefsStore
 import com.example.data.cloud.OrgAcademicRepository
 import com.example.data.cloud.OrgCloudRepository
+import com.example.data.cloud.Phase4Repository
 import com.example.data.cloud.authStateFlow
 import com.example.domain.AppModule
 import com.google.firebase.Firebase
@@ -85,6 +86,7 @@ object AppRoutes {
     const val ROUTE_COSCHOLASTIC = "coscholastic"
     const val ROUTE_SCHOOLS = "schools"
     const val ROUTE_TEACHER_PROFILE = "teacher_profile"
+    const val ROUTE_TEACHERS = "teachers_and_assignments"
 }
 
 private enum class OnboardingSubScreen {
@@ -195,6 +197,7 @@ private fun AuthenticatedSessionHost(
         )
     }
     val academicRepo = remember(orgRepo) { OrgAcademicRepository(orgRepo) }
+    val phase4Repo = remember(orgRepo) { Phase4Repository(orgRepo) }
     val localRepo = remember(appContext) { ReportCardRepository(AppDatabase.getInstance(appContext).reportCardDao()) }
 
     val sessionViewModel: OrgSessionViewModel = viewModel(
@@ -326,6 +329,7 @@ private fun AuthenticatedSessionHost(
                     currentUserId = user.uid,
                     orgRepo = orgRepo,
                     academicRepo = academicRepo,
+                    phase4Repo = phase4Repo,
                     localRepo = localRepo,
                     connectivityMonitor = connectivityMonitor,
                     offlinePrefs = offlinePrefs
@@ -511,7 +515,8 @@ private fun OrganisationWorkspace(
     val currentRoute = navBackStackEntry?.destination?.route ?: AppRoutes.ROUTE_DASHBOARD
     val isSubScreen = currentRoute == AppRoutes.ROUTE_COSCHOLASTIC ||
         currentRoute == AppRoutes.ROUTE_SCHOOLS ||
-        currentRoute == AppRoutes.ROUTE_TEACHER_PROFILE
+        currentRoute == AppRoutes.ROUTE_TEACHER_PROFILE ||
+        currentRoute == AppRoutes.ROUTE_TEACHERS
 
     fun navigateTopLevel(route: String) {
         navController.navigate(route) {
@@ -650,6 +655,11 @@ private fun OrganisationWorkspace(
                                     onNavigateToMembers = {
                                         if (uiState.canView(AppModule.MEMBERS) || uiState.isAdmin) navigateTopLevel(AppRoutes.ROUTE_MEMBERS)
                                     },
+                                    onNavigateToTeachers = {
+                                        if (uiState.canView(AppModule.TEACHERS)) {
+                                            navController.navigate(AppRoutes.ROUTE_TEACHERS) { launchSingleTop = true }
+                                        }
+                                    },
                                     onEditOwnTeacherProfile = {
                                         navController.navigate(AppRoutes.ROUTE_TEACHER_PROFILE) { launchSingleTop = true }
                                     },
@@ -774,6 +784,20 @@ private fun OrganisationWorkspace(
                                         },
                                         onSwitchOrg = { navController.popBackStack() }
                                     )
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_TEACHERS) {
+                                if (uiState.canView(AppModule.TEACHERS)) {
+                                    TeachersAndAssignmentsScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
                                 }
                             }
                         }

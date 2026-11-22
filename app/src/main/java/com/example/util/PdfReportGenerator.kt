@@ -9,6 +9,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
+import com.example.data.SchoolEntity
 import com.example.data.SchoolSettingsEntity
 import com.example.data.StudentEntity
 import com.example.data.TermInfoEntity
@@ -18,7 +19,6 @@ import com.example.domain.ExamType
 import com.example.domain.MarkComponent
 import com.example.domain.ReportCalculations
 import com.example.domain.ReportType
-import com.example.domain.ResolvedSchoolIdentity
 import com.example.domain.SlipLayoutMode
 import com.example.domain.StudentPerformanceReport
 import java.io.File
@@ -29,7 +29,7 @@ import java.util.zip.ZipOutputStream
 
 data class StudentReportBundle(
     val student: StudentEntity,
-    val schoolIdentity: ResolvedSchoolIdentity,
+    val school: SchoolEntity,
     val subjects: List<String>,
     val marksBySubjectAndKey: Map<Pair<String, String>, String>,
     val performance: StudentPerformanceReport,
@@ -41,7 +41,7 @@ data class StudentReportBundle(
 )
 
 /**
- * Native Android A4 Vector PDF generator for C.P.S. School & C.P.I. School.
+ * Native Android A4 Vector PDF generator supporting any configured school.
  *
  * Typography & zero-overlap guarantees:
  * - Uses standard system sans-serif font family (native Regular + native Bold weights, no faux bold,
@@ -101,11 +101,13 @@ object PdfReportGenerator {
         onProgress: (Int, Int) -> Unit = { _, _ -> }
     ): File {
         val reportsDir = File(context.cacheDir, "reports").apply { mkdirs() }
-        val first = bundles.firstOrNull()?.student
+        val firstBundle = bundles.firstOrNull()
+        val first = firstBundle?.student
+        val schoolSlug = safeSlug(firstBundle?.school?.name.orEmpty(), fallback = "School")
         val zipName = if (first != null) {
-            "CPI_CPS_${reportType.name}_Class_${first.className}_${first.section}_${first.session}.zip"
+            "${schoolSlug}_${reportType.name}_Class_${safeSlug(first.className, "Class")}_${first.section}_${first.session}.zip"
         } else {
-            "CPI_CPS_${reportType.name}_Batch.zip"
+            "${schoolSlug}_${reportType.name}_Batch.zip"
         }
         val zipFile = File(reportsDir, zipName)
         val tempDir = File(reportsDir, "zip_tmp_${System.currentTimeMillis()}").apply { mkdirs() }
@@ -168,9 +170,9 @@ object PdfReportGenerator {
     ): List<Bitmap> {
         val (baseTypeface, boldTypeface) = loadReportTypefaces()
         val logoCache = mutableMapOf<String, Bitmap?>()
-        fun logoFor(identity: ResolvedSchoolIdentity): Bitmap? {
-            val key = "${identity.code.code}_${identity.logoCleared}_${identity.logoBase64.hashCode()}"
-            return logoCache.getOrPut(key) { ImageUtils.resolveSchoolLogoBitmap(context, identity) }
+        fun logoFor(school: SchoolEntity): Bitmap? {
+            val key = "${school.id}_${school.logoBase64.hashCode()}"
+            return logoCache.getOrPut(key) { ImageUtils.resolveSchoolLogoBitmap(school.logoBase64) }
         }
 
         val pages = mutableListOf<Bitmap>()
@@ -178,7 +180,7 @@ object PdfReportGenerator {
             bundles.forEach { bundle ->
                 val bmp = Bitmap.createBitmap(PORTRAIT_W, PORTRAIT_H, Bitmap.Config.ARGB_8888)
                 bmp.eraseColor(Color.WHITE)
-                drawAnnualPortraitCard(Canvas(bmp), settings, bundle, logoFor(bundle.schoolIdentity), baseTypeface, boldTypeface)
+                drawAnnualPortraitCard(Canvas(bmp), settings, bundle, logoFor(bundle.school), baseTypeface, boldTypeface)
                 pages.add(bmp)
             }
         } else {
@@ -198,7 +200,7 @@ object PdfReportGenerator {
                     val bmp = Bitmap.createBitmap(LANDSCAPE_W, LANDSCAPE_H, Bitmap.Config.ARGB_8888)
                     bmp.eraseColor(Color.WHITE)
                     val c = Canvas(bmp)
-                    val logo = logoFor(bundle.schoolIdentity)
+                    val logo = logoFor(bundle.school)
                     drawA5LandscapeHalfSlip(c, leftSlipX, slipTop, slipW, slipH, settings, bundle, ReportType.UT1, logo, baseTypeface, boldTypeface)
                     drawVerticalCutLine(c, LANDSCAPE_W / 2f)
                     drawA5LandscapeHalfSlip(c, rightSlipX, slipTop, slipW, slipH, settings, bundle, ReportType.HALF_YEARLY, logo, baseTypeface, boldTypeface)
@@ -208,7 +210,7 @@ object PdfReportGenerator {
                     val bmp = Bitmap.createBitmap(LANDSCAPE_W, LANDSCAPE_H, Bitmap.Config.ARGB_8888)
                     bmp.eraseColor(Color.WHITE)
                     val c = Canvas(bmp)
-                    drawA5LandscapeHalfSlip(c, leftSlipX, slipTop, slipW, slipH, settings, bundle, reportType, logoFor(bundle.schoolIdentity), baseTypeface, boldTypeface)
+                    drawA5LandscapeHalfSlip(c, leftSlipX, slipTop, slipW, slipH, settings, bundle, reportType, logoFor(bundle.school), baseTypeface, boldTypeface)
                     drawVerticalCutLine(c, LANDSCAPE_W / 2f)
                     pages.add(bmp)
                 }
@@ -216,10 +218,10 @@ object PdfReportGenerator {
                     val bmp = Bitmap.createBitmap(LANDSCAPE_W, LANDSCAPE_H, Bitmap.Config.ARGB_8888)
                     bmp.eraseColor(Color.WHITE)
                     val c = Canvas(bmp)
-                    drawA5LandscapeHalfSlip(c, leftSlipX, slipTop, slipW, slipH, settings, pair[0], reportType, logoFor(pair[0].schoolIdentity), baseTypeface, boldTypeface)
+                    drawA5LandscapeHalfSlip(c, leftSlipX, slipTop, slipW, slipH, settings, pair[0], reportType, logoFor(pair[0].school), baseTypeface, boldTypeface)
                     drawVerticalCutLine(c, LANDSCAPE_W / 2f)
                     if (pair.size > 1) {
-                        drawA5LandscapeHalfSlip(c, rightSlipX, slipTop, slipW, slipH, settings, pair[1], reportType, logoFor(pair[1].schoolIdentity), baseTypeface, boldTypeface)
+                        drawA5LandscapeHalfSlip(c, rightSlipX, slipTop, slipW, slipH, settings, pair[1], reportType, logoFor(pair[1].school), baseTypeface, boldTypeface)
                     }
                     pages.add(bmp)
                 }
@@ -228,19 +230,22 @@ object PdfReportGenerator {
         return pages
     }
 
-    private fun buildPdfFileName(reportType: ReportType, bundles: List<StudentReportBundle>): String = when {
+    internal fun safeSlug(raw: String, fallback: String): String =
+        raw.replace(Regex("[^A-Za-z0-9]+"), "_").trim('_').take(20).ifEmpty { fallback }
+
+    internal fun buildPdfFileName(reportType: ReportType, bundles: List<StudentReportBundle>): String = when {
         bundles.size == 1 -> {
             val st = bundles.first().student
-            val schoolTag = bundles.first().schoolIdentity.code.code
+            val schoolTag = safeSlug(bundles.first().school.name, "School")
             val safeName = st.name.replace(Regex("[^A-Za-z0-9]+"), "_").trim('_').take(24).ifEmpty { "Student" }
-            "${schoolTag}_${reportType.name}_${st.className}_${st.section}_R${st.rollNo}_$safeName.pdf"
+            "${schoolTag}_${reportType.name}_${safeSlug(st.className, "Class")}_${st.section}_R${st.rollNo}_$safeName.pdf"
         }
         bundles.isNotEmpty() -> {
             val st = bundles.first().student
-            val schoolTag = bundles.first().schoolIdentity.code.code
-            "${schoolTag}_${reportType.name}_Class_${st.className}_${st.section}_${st.session}.pdf"
+            val schoolTag = safeSlug(bundles.first().school.name, "School")
+            "${schoolTag}_${reportType.name}_Class_${safeSlug(st.className, "Class")}_${st.section}_${st.session}.pdf"
         }
-        else -> "CPI_CPS_${reportType.name}.pdf"
+        else -> "School_${reportType.name}.pdf"
     }
 
     private fun writePdfToFile(
@@ -255,10 +260,10 @@ object PdfReportGenerator {
         val (baseTypeface, boldTypeface) = loadReportTypefaces()
         val logoCache = mutableMapOf<String, Bitmap?>()
 
-        fun logoFor(identity: ResolvedSchoolIdentity): Bitmap? {
-            val key = "${identity.code.code}_${identity.logoCleared}_${identity.logoBase64.hashCode()}"
+        fun logoFor(school: SchoolEntity): Bitmap? {
+            val key = "${school.id}_${school.logoBase64.hashCode()}"
             return logoCache.getOrPut(key) {
-                ImageUtils.resolveSchoolLogoBitmap(context, identity)
+                ImageUtils.resolveSchoolLogoBitmap(school.logoBase64)
             }
         }
 
@@ -273,7 +278,7 @@ object PdfReportGenerator {
                         canvas = page.canvas,
                         settings = settings,
                         bundle = bundle,
-                        logo = logoFor(bundle.schoolIdentity),
+                        logo = logoFor(bundle.school),
                         regular = baseTypeface,
                         bold = boldTypeface
                     )
@@ -299,7 +304,7 @@ object PdfReportGenerator {
                         bundles.forEachIndexed { idx, bundle ->
                             val pageInfo = PdfDocument.PageInfo.Builder(LANDSCAPE_W, LANDSCAPE_H, pageNo++).create()
                             val page = pdf.startPage(pageInfo)
-                            val logo = logoFor(bundle.schoolIdentity)
+                            val logo = logoFor(bundle.school)
                             drawA5LandscapeHalfSlip(
                                 canvas = page.canvas,
                                 left = leftSlipX,
@@ -345,7 +350,7 @@ object PdfReportGenerator {
                                 settings = settings,
                                 bundle = bundle,
                                 slipReportType = reportType,
-                                logo = logoFor(bundle.schoolIdentity),
+                                logo = logoFor(bundle.school),
                                 regular = baseTypeface,
                                 bold = boldTypeface
                             )
@@ -371,7 +376,7 @@ object PdfReportGenerator {
                                 settings = settings,
                                 bundle = leftBundle,
                                 slipReportType = reportType,
-                                logo = logoFor(leftBundle.schoolIdentity),
+                                logo = logoFor(leftBundle.school),
                                 regular = baseTypeface,
                                 bold = boldTypeface
                             )
@@ -389,7 +394,7 @@ object PdfReportGenerator {
                                     settings = settings,
                                     bundle = rightBundle,
                                     slipReportType = reportType,
-                                    logo = logoFor(rightBundle.schoolIdentity),
+                                    logo = logoFor(rightBundle.school),
                                     regular = baseTypeface,
                                     bold = boldTypeface
                                 )
@@ -452,7 +457,7 @@ object PdfReportGenerator {
         val inR = right - pad
         val inW = inR - inL // 380 pt
         val st = bundle.student
-        val id = bundle.schoolIdentity
+        val school = bundle.school
         val isHalfYearly = slipReportType == ReportType.HALF_YEARLY
         val isUt2 = slipReportType == ReportType.UT2
 
@@ -476,11 +481,15 @@ object PdfReportGenerator {
         val addrPaint = makePaint(regular, 7.0f, COLOR_TEXT, Paint.Align.CENTER)
         val sessPaint = makePaint(bold, 7.4f, COLOR_SUB_BAND, Paint.Align.CENTER)
 
-        if (id.mobile.isNotBlank()) {
-            drawTextPt(canvas, ellipsize("Mob. ${id.mobile}", mobPaint, textAreaW), inR, y + 8f, mobPaint)
+        val slipContact = buildList {
+            if (school.mobile.isNotBlank()) add("Mob. ${school.mobile}")
+            if (school.email.isNotBlank()) add(school.email)
         }
-        drawTextPt(canvas, ellipsize(id.schoolName.uppercase(), titlePaint, textAreaW), textAreaCenter, y + 25.5f, titlePaint)
-        drawTextPt(canvas, ellipsize(id.address, addrPaint, textAreaW), textAreaCenter, y + 39f, addrPaint)
+        if (slipContact.isNotEmpty()) {
+            drawTextPt(canvas, ellipsize(slipContact.joinToString(" | "), mobPaint, textAreaW), inR, y + 8f, mobPaint)
+        }
+        drawTextPt(canvas, ellipsize(school.name.uppercase(), titlePaint, textAreaW), textAreaCenter, y + 25.5f, titlePaint)
+        drawTextPt(canvas, ellipsize(school.address, addrPaint, textAreaW), textAreaCenter, y + 39f, addrPaint)
         val formattedSession = st.session.replace("-", " - ")
         drawTextPt(canvas, "SESSION : $formattedSession", textAreaCenter, y + 52f, sessPaint)
         y += headerH + 6f
@@ -733,7 +742,7 @@ object PdfReportGenerator {
         val inW = inR - inL // ~531.6 pt
         val centerX = PORTRAIT_W / 2f
         val st = bundle.student
-        val id = bundle.schoolIdentity
+        val school = bundle.school
         val perf = bundle.performance
 
         // Outer crisp double border frame
@@ -760,8 +769,8 @@ object PdfReportGenerator {
         val annualSubPaint = makePaint(bold, 8.2f, Color.parseColor("#D5E4F5"), Paint.Align.CENTER)
 
         val contactParts = buildList {
-            if (id.mobile.isNotBlank()) add("MOB : ${id.mobile}")
-            if (id.email.isNotBlank()) add("E-Mail : ${id.email}")
+            if (school.mobile.isNotBlank()) add("MOB : ${school.mobile}")
+            if (school.email.isNotBlank()) add("E-Mail : ${school.email}")
         }
         if (contactParts.isNotEmpty()) {
             drawTextPt(
@@ -773,8 +782,8 @@ object PdfReportGenerator {
             )
         }
 
-        drawTextPt(canvas, ellipsize(id.schoolName.uppercase(), schoolTitlePaint, bannerTextW), bannerTextCenterX, y + 37.5f, schoolTitlePaint)
-        drawTextPt(canvas, ellipsize(id.address, schoolAddrPaint, bannerTextW), bannerTextCenterX, y + 54.5f, schoolAddrPaint)
+        drawTextPt(canvas, ellipsize(school.name.uppercase(), schoolTitlePaint, bannerTextW), bannerTextCenterX, y + 37.5f, schoolTitlePaint)
+        drawTextPt(canvas, ellipsize(school.address, schoolAddrPaint, bannerTextW), bannerTextCenterX, y + 54.5f, schoolAddrPaint)
         drawTextPt(canvas, "ANNUAL REPORT CARD   •   SESSION : ${st.session}", bannerTextCenterX, y + 69.5f, annualSubPaint)
         y += bannerH + 8f
 

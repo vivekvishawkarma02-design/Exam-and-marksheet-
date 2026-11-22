@@ -1,92 +1,189 @@
 package com.example.domain
 
-enum class SchoolIdentityCode(val code: String, val defaultName: String) {
-    CPS("CPS", "C.P.S. SCHOOL"),
-    CPI("CPI", "C.P.I. SCHOOL");
-
-    companion object {
-        fun fromCode(code: String?): SchoolIdentityCode =
-            if (code.equals("CPI", ignoreCase = true)) CPI else CPS
-    }
-}
-
-data class ResolvedSchoolIdentity(
-    val code: SchoolIdentityCode,
-    val schoolName: String,
-    val address: String,
-    val mobile: String,
-    val email: String,
-    val logoBase64: String,
-    val logoCleared: Boolean
+/**
+ * Built-in default school class-group template preserving the exact subject lists & order
+ * (Nursery–UKG 7 subjects, 1st–5th 6 subjects, 6th–8th 8 subjects).
+ */
+data class DefaultGroupTemplate(
+    val key: String,
+    val name: String,
+    val shortLabel: String,
+    val defaultClasses: List<String>,
+    val defaultSubjects: List<String>
 )
 
-enum class ClassGroup(val id: Int, val label: String, val shortLabel: String) {
-    PRE_PRIMARY(1, "Nursery – UKG (7 Subjects)", "Nur–UKG"),
-    PRIMARY(2, "1st – 5th (6 Subjects)", "1st – 5th"),
-    MIDDLE(3, "6th – 8th (8 Subjects)", "6th – 8th");
+object DefaultSubjects {
+    // Exact names & order preserved from the original app specification
+    val group1PrePrimary: List<String> = listOf(
+        "HINDI",
+        "HINDI (ORAL)",
+        "ENGLISH",
+        "ENGLISH (ORAL)",
+        "MATHS",
+        "MATHS( ORAL)",
+        "RHYNES"
+    )
 
-    companion object {
-        fun fromId(id: Int): ClassGroup = entries.firstOrNull { it.id == id } ?: PRIMARY
+    val group2Primary: List<String> = listOf(
+        "ENGLISH",
+        "HINDI",
+        "MATH",
+        "SCIENCE",
+        "COMPUTER",
+        "G.K."
+    )
+
+    val group3Middle: List<String> = listOf(
+        "ENGLISH",
+        "HINDI",
+        "MATHS",
+        "SCIENCE / EVS",
+        "COMPUTER",
+        "S.ST.",
+        "G.K.",
+        "SANSKRIT"
+    )
+
+    fun forTemplateKey(key: String): List<String> = when (key) {
+        DefaultSchoolTemplate.KEY_PRE_PRIMARY -> group1PrePrimary
+        DefaultSchoolTemplate.KEY_PRIMARY -> group2Primary
+        DefaultSchoolTemplate.KEY_MIDDLE -> group3Middle
+        else -> emptyList()
+    }
+
+    fun forLegacyGroupId(legacyGroupId: Int): List<String> = when (legacyGroupId) {
+        1 -> group1PrePrimary
+        2 -> group2Primary
+        3 -> group3Middle
+        else -> group2Primary
     }
 }
 
-enum class SchoolClass(
-    val displayName: String,
-    val group: ClassGroup,
-    val defaultIdentity: SchoolIdentityCode,
-    val order: Int,
-    private val aliases: List<String> = emptyList()
-) {
-    NURSERY("Nursery", ClassGroup.PRE_PRIMARY, SchoolIdentityCode.CPS, 1, listOf("nur")),
-    LKG("LKG", ClassGroup.PRE_PRIMARY, SchoolIdentityCode.CPS, 2, listOf("l.k.g", "l.k.g.")),
-    UKG("UKG", ClassGroup.PRE_PRIMARY, SchoolIdentityCode.CPS, 3, listOf("u.k.g", "u.k.g.")),
-    FIRST("1st", ClassGroup.PRIMARY, SchoolIdentityCode.CPS, 4, listOf("I", "1")),
-    SECOND("2nd", ClassGroup.PRIMARY, SchoolIdentityCode.CPS, 5, listOf("II", "2")),
-    THIRD("3rd", ClassGroup.PRIMARY, SchoolIdentityCode.CPS, 6, listOf("III", "3")),
-    FOURTH("4th", ClassGroup.PRIMARY, SchoolIdentityCode.CPS, 7, listOf("IV", "4")),
-    FIFTH("5th", ClassGroup.PRIMARY, SchoolIdentityCode.CPS, 8, listOf("V", "5")),
-    SIXTH("6th", ClassGroup.MIDDLE, SchoolIdentityCode.CPI, 9, listOf("VI", "6")),
-    SEVENTH("7th", ClassGroup.MIDDLE, SchoolIdentityCode.CPI, 10, listOf("VII", "7")),
-    EIGHTH("8th", ClassGroup.MIDDLE, SchoolIdentityCode.CPI, 11, listOf("VIII", "8"));
+object DefaultSchoolTemplate {
+    const val KEY_PRE_PRIMARY = "PRE_PRIMARY"
+    const val KEY_PRIMARY = "PRIMARY"
+    const val KEY_MIDDLE = "MIDDLE"
 
-    fun nextClassName(): String {
-        val next = entries.firstOrNull { it.order == order + 1 }
-        return next?.displayName ?: "9th"
+    val defaultSections: List<String> = listOf("A", "B", "C")
+
+    val groups: List<DefaultGroupTemplate> = listOf(
+        DefaultGroupTemplate(
+            key = KEY_PRE_PRIMARY,
+            name = "Nursery – UKG",
+            shortLabel = "Nur–UKG",
+            defaultClasses = listOf("Nursery", "LKG", "UKG"),
+            defaultSubjects = DefaultSubjects.group1PrePrimary
+        ),
+        DefaultGroupTemplate(
+            key = KEY_PRIMARY,
+            name = "1st – 5th",
+            shortLabel = "1st – 5th",
+            defaultClasses = listOf("1st", "2nd", "3rd", "4th", "5th"),
+            defaultSubjects = DefaultSubjects.group2Primary
+        ),
+        DefaultGroupTemplate(
+            key = KEY_MIDDLE,
+            name = "6th – 8th",
+            shortLabel = "6th – 8th",
+            defaultClasses = listOf("6th", "7th", "8th"),
+            defaultSubjects = DefaultSubjects.group3Middle
+        )
+    )
+
+    val allDefaultClasses: List<String> = groups.flatMap { it.defaultClasses }
+
+    private val commonAliases: Map<String, String> = mapOf(
+        "nur" to "Nursery",
+        "nursery" to "Nursery",
+        "l.k.g" to "LKG",
+        "l.k.g." to "LKG",
+        "lkg" to "LKG",
+        "u.k.g" to "UKG",
+        "u.k.g." to "UKG",
+        "ukg" to "UKG",
+        "i" to "1st",
+        "1" to "1st",
+        "1st" to "1st",
+        "ii" to "2nd",
+        "2" to "2nd",
+        "2nd" to "2nd",
+        "iii" to "3rd",
+        "3" to "3rd",
+        "3rd" to "3rd",
+        "iv" to "4th",
+        "4" to "4th",
+        "4th" to "4th",
+        "v" to "5th",
+        "5" to "5th",
+        "5th" to "5th",
+        "vi" to "6th",
+        "6" to "6th",
+        "6th" to "6th",
+        "vii" to "7th",
+        "7" to "7th",
+        "7th" to "7th",
+        "viii" to "8th",
+        "8" to "8th",
+        "8th" to "8th",
+        "ix" to "9th",
+        "9" to "9th",
+        "9th" to "9th",
+        "x" to "10th",
+        "10" to "10th",
+        "10th" to "10th",
+        "xi" to "11th",
+        "11" to "11th",
+        "11th" to "11th",
+        "xii" to "12th",
+        "12" to "12th",
+        "12th" to "12th"
+    )
+
+    /**
+     * Resolves a raw class name (e.g., from CSV or legacy backup) against a school's configured
+     * class list first, falling back to common Roman/numeric aliases, while preserving arbitrary
+     * custom class names like "9th", "Grade 10", "Prep", etc.
+     */
+    fun normalizeClassName(raw: String, availableClasses: List<String> = emptyList()): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return availableClasses.firstOrNull() ?: "1st"
+        availableClasses.firstOrNull { it.equals(trimmed, ignoreCase = true) }?.let { return it }
+        val alias = commonAliases[trimmed.lowercase()]
+        if (alias != null) {
+            availableClasses.firstOrNull { it.equals(alias, ignoreCase = true) }?.let { return it }
+            return alias
+        }
+        return trimmed
     }
 
-    companion object {
-        fun fromName(name: String): SchoolClass {
-            val trimmed = name.trim()
-            return entries.firstOrNull { sc ->
-                sc.displayName.equals(trimmed, ignoreCase = true) ||
-                    sc.name.equals(trimmed, ignoreCase = true) ||
-                    sc.aliases.any { it.equals(trimmed, ignoreCase = true) }
-            } ?: FIRST
+    /**
+     * Suggests the next class in the school's ordered class list, or increments numeric ordinals.
+     */
+    fun suggestNextClassName(currentClassName: String, orderedSchoolClasses: List<String>): String {
+        val idx = orderedSchoolClasses.indexOfFirst { it.equals(currentClassName.trim(), ignoreCase = true) }
+        if (idx >= 0 && idx + 1 < orderedSchoolClasses.size) {
+            return orderedSchoolClasses[idx + 1]
         }
-
-        fun defaultClassIdentityMap(): Map<String, SchoolIdentityCode> =
-            entries.associate { it.displayName to it.defaultIdentity }
-
-        fun serializeIdentityMap(map: Map<String, SchoolIdentityCode>): String =
-            entries.joinToString(",") { sc ->
-                val chosen = map[sc.displayName] ?: sc.defaultIdentity
-                "${sc.displayName}=${chosen.code}"
+        val match = Regex("^(\\d+)(st|nd|rd|th)?$", RegexOption.IGNORE_CASE).matchEntire(currentClassName.trim())
+        if (match != null) {
+            val nextNum = (match.groupValues[1].toIntOrNull() ?: 0) + 1
+            val suffix = when {
+                nextNum % 100 in 11..13 -> "th"
+                nextNum % 10 == 1 -> "st"
+                nextNum % 10 == 2 -> "nd"
+                nextNum % 10 == 3 -> "rd"
+                else -> "th"
             }
-
-        fun parseIdentityMap(csv: String?): Map<String, SchoolIdentityCode> {
-            val result = defaultClassIdentityMap().toMutableMap()
-            if (csv.isNullOrBlank()) return result
-            csv.split(",").forEach { token ->
-                val parts = token.split("=")
-                if (parts.size == 2) {
-                    val cls = fromName(parts[0]).displayName
-                    result[cls] = SchoolIdentityCode.fromCode(parts[1].trim())
-                }
-            }
-            return result
+            return "$nextNum$suffix"
         }
+        return ""
+    }
 
-        val defaultSections: List<String> = listOf("A", "B", "C")
+    fun inferDefaultGroupKeyForClass(className: String): String {
+        val normalized = normalizeClassName(className)
+        return groups.firstOrNull { grp ->
+            grp.defaultClasses.any { it.equals(normalized, ignoreCase = true) }
+        }?.key ?: KEY_MIDDLE
     }
 }
 
@@ -99,7 +196,6 @@ enum class ExamType(val label: String, val shortLabel: String) {
 
 /**
  * Unified 10 / 30 / 60 exam structure for BOTH Term-I and Term-II (100 marks per term per subject).
- * No Note Book, no Subject Enrich, no Scheme A/B toggle.
  */
 enum class MarkComponent(
     val key: String,
@@ -149,7 +245,6 @@ enum class CoScholasticArea(val code: String, val label: String, val shortLabel:
     DISCIPLINE("DISCIPLINE", "Discipline", "Discipline");
 
     companion object {
-        // Accepts 8-point & 3-point grades (real printed cards often use A1 and A2 here)
         val validGrades = listOf("A1", "A2", "B1", "B2", "C1", "C2", "D", "E", "A", "B", "C")
     }
 }
@@ -165,43 +260,4 @@ enum class SlipLayoutMode(val label: String, val description: String) {
     TWO_PER_PAGE("2 per page", "Left then right in roll-number order (default)"),
     ONE_PER_PAGE("1 per page", "Left half only on A4 Landscape"),
     PAIR_UT_HY("Pair (UT + H.Y.)", "UT1 slip on left, Half-Yearly slip on right for same student")
-}
-
-object DefaultSubjects {
-    // Exact names & order required by specification
-    val group1PrePrimary: List<String> = listOf(
-        "HINDI",
-        "HINDI (ORAL)",
-        "ENGLISH",
-        "ENGLISH (ORAL)",
-        "MATHS",
-        "MATHS( ORAL)",
-        "RHYNES"
-    )
-
-    val group2Primary: List<String> = listOf(
-        "ENGLISH",
-        "HINDI",
-        "MATH",
-        "SCIENCE",
-        "COMPUTER",
-        "G.K."
-    )
-
-    val group3Middle: List<String> = listOf(
-        "ENGLISH",
-        "HINDI",
-        "MATHS",
-        "SCIENCE / EVS",
-        "COMPUTER",
-        "S.ST.",
-        "G.K.",
-        "SANSKRIT"
-    )
-
-    fun forGroup(group: ClassGroup): List<String> = when (group) {
-        ClassGroup.PRE_PRIMARY -> group1PrePrimary
-        ClassGroup.PRIMARY -> group2Primary
-        ClassGroup.MIDDLE -> group3Middle
-    }
 }

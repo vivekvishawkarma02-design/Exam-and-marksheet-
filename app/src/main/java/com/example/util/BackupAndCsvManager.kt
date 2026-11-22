@@ -1,18 +1,30 @@
 package com.example.util
 
+import com.example.data.ClassGroupEntity
 import com.example.data.CoScholasticEntity
 import com.example.data.FullBackupData
+import com.example.data.LegacyBackupPayload
+import com.example.data.LegacyBackupStudent
+import com.example.data.LegacyBackupSubject
+import com.example.data.LegacySuggestedSchool
 import com.example.data.MarkEntity
+import com.example.data.SchoolClassEntity
+import com.example.data.SchoolEntity
 import com.example.data.SchoolSettingsEntity
 import com.example.data.StudentEntity
 import com.example.data.SubjectEntity
 import com.example.data.TermInfoEntity
+import com.example.domain.DefaultSchoolTemplate
 import com.example.domain.MarkComponent
 import com.example.domain.MarkValidationResult
 import com.example.domain.ReportCalculations
-import com.example.domain.SchoolClass
 import org.json.JSONArray
 import org.json.JSONObject
+
+sealed class ParsedBackupResult {
+    data class ModernBackup(val data: FullBackupData) : ParsedBackupResult()
+    data class LegacyBackup(val payload: LegacyBackupPayload) : ParsedBackupResult()
+}
 
 data class CsvImportResult(
     val parsedStudents: List<StudentEntity>,
@@ -34,11 +46,11 @@ data class MarksCsvParseResult(
 
 object BackupAndCsvManager {
 
-    private const val BACKUP_FORMAT_VERSION = 2
+    private const val BACKUP_FORMAT_VERSION = 3
 
     fun serializeBackupToJson(data: FullBackupData): String {
         val root = JSONObject()
-        root.put("app", "CPI-CPS Report Card")
+        root.put("app", "School Report Card")
         root.put("version", BACKUP_FORMAT_VERSION)
         root.put("exportedAtMs", System.currentTimeMillis())
 
@@ -46,20 +58,6 @@ object BackupAndCsvManager {
         root.put(
             "settings",
             JSONObject().apply {
-                put("cpsName", s.cpsName)
-                put("cpsAddress", s.cpsAddress)
-                put("cpsMobile", s.cpsMobile)
-                put("cpsEmail", s.cpsEmail)
-                put("cpsLogoBase64", s.cpsLogoBase64)
-                put("cpsLogoCleared", s.cpsLogoCleared)
-                put("cpiName", s.cpiName)
-                put("cpiAddress", s.cpiAddress)
-                put("cpiMobile", s.cpiMobile)
-                put("cpiEmail", s.cpiEmail)
-                put("cpiLogoBase64", s.cpiLogoBase64)
-                put("cpiLogoCleared", s.cpiLogoCleared)
-                put("useSameLogoForBoth", s.useSameLogoForBoth)
-                put("classIdentityMapCsv", s.classIdentityMapCsv)
                 put("currentSession", s.currentSession)
                 put("sessionsCsv", s.sessionsCsv)
                 put("passPercent", s.passPercent)
@@ -70,12 +68,68 @@ object BackupAndCsvManager {
         )
 
         root.put(
+            "schools",
+            JSONArray().apply {
+                data.schools.forEach { school ->
+                    put(
+                        JSONObject().apply {
+                            put("id", school.id)
+                            put("name", school.name)
+                            put("address", school.address)
+                            put("mobile", school.mobile)
+                            put("email", school.email)
+                            put("logoBase64", school.logoBase64)
+                            put("active", school.active)
+                        }
+                    )
+                }
+            }
+        )
+
+        root.put(
+            "classGroups",
+            JSONArray().apply {
+                data.classGroups.forEach { grp ->
+                    put(
+                        JSONObject().apply {
+                            put("id", grp.id)
+                            put("schoolId", grp.schoolId)
+                            put("name", grp.name)
+                            put("shortLabel", grp.shortLabel)
+                            put("sortOrder", grp.sortOrder)
+                            put("templateKey", grp.templateKey)
+                        }
+                    )
+                }
+            }
+        )
+
+        root.put(
+            "schoolClasses",
+            JSONArray().apply {
+                data.schoolClasses.forEach { cls ->
+                    put(
+                        JSONObject().apply {
+                            put("id", cls.id)
+                            put("schoolId", cls.schoolId)
+                            put("classGroupId", cls.classGroupId)
+                            put("name", cls.name)
+                            put("sortOrder", cls.sortOrder)
+                        }
+                    )
+                }
+            }
+        )
+
+        root.put(
             "subjects",
             JSONArray().apply {
                 data.subjects.forEach { sub ->
                     put(
                         JSONObject().apply {
-                            put("classGroup", sub.classGroup)
+                            put("id", sub.id)
+                            put("schoolId", sub.schoolId)
+                            put("classGroupId", sub.classGroupId)
                             put("name", sub.name)
                             put("sortOrder", sub.sortOrder)
                         }
@@ -91,6 +145,8 @@ object BackupAndCsvManager {
                     put(
                         JSONObject().apply {
                             put("id", st.id)
+                            put("schoolId", st.schoolId)
+                            put("classId", st.classId)
                             put("session", st.session)
                             put("admNo", st.admNo)
                             put("name", st.name)
@@ -164,32 +220,26 @@ object BackupAndCsvManager {
         return root.toString(2)
     }
 
-    fun deserializeBackupJson(jsonText: String): Result<FullBackupData> {
+    /**
+     * Parses both modern v3 multi-school backups and legacy pre-Phase-1 (v1/v2) backups.
+     * Legacy backups return [ParsedBackupResult.LegacyBackup] so the UI can ask the user
+     * which school the old students belong to before attaching them.
+     */
+    fun deserializeBackupJson(jsonText: String): Result<ParsedBackupResult> {
         return try {
             val root = JSONObject(jsonText)
+            val version = root.optInt("version", 1)
+            val schoolsArr = root.optJSONArray("schools")
+            val isModern = version >= 3 && schoolsArr != null
+
+            if (!isModern) {
+                return Result.success(ParsedBackupResult.LegacyBackup(parseLegacyBackup(root)))
+            }
+
             val sObj = root.optJSONObject("settings")
-            val defaultMap = SchoolClass.serializeIdentityMap(SchoolClass.defaultClassIdentityMap())
             val settings = if (sObj != null) {
-                val legacyName = sObj.optString("schoolName", "C.P.I. SCHOOL")
-                val legacyAddress = sObj.optString("address", "Harikaranpur Bijaura Ghazipur (U.P.)")
-                val legacyMobile = sObj.optString("mobile", "")
-                val legacyLogo = sObj.optString("logoBase64", "")
                 SchoolSettingsEntity(
                     id = 1,
-                    cpsName = sObj.optString("cpsName", "C.P.S. SCHOOL"),
-                    cpsAddress = sObj.optString("cpsAddress", legacyAddress),
-                    cpsMobile = sObj.optString("cpsMobile", legacyMobile),
-                    cpsEmail = sObj.optString("cpsEmail", ""),
-                    cpsLogoBase64 = sObj.optString("cpsLogoBase64", ""),
-                    cpsLogoCleared = sObj.optBoolean("cpsLogoCleared", false),
-                    cpiName = sObj.optString("cpiName", legacyName),
-                    cpiAddress = sObj.optString("cpiAddress", legacyAddress),
-                    cpiMobile = sObj.optString("cpiMobile", legacyMobile),
-                    cpiEmail = sObj.optString("cpiEmail", ""),
-                    cpiLogoBase64 = sObj.optString("cpiLogoBase64", legacyLogo),
-                    cpiLogoCleared = sObj.optBoolean("cpiLogoCleared", false),
-                    useSameLogoForBoth = sObj.optBoolean("useSameLogoForBoth", false),
-                    classIdentityMapCsv = sObj.optString("classIdentityMapCsv", defaultMap),
                     currentSession = sObj.optString("currentSession", "2026-2027"),
                     sessionsCsv = sObj.optString("sessionsCsv", "2026-2027"),
                     passPercent = sObj.optInt("passPercent", 33).coerceIn(1, 100),
@@ -201,6 +251,56 @@ object BackupAndCsvManager {
                 SchoolSettingsEntity()
             }
 
+            val schools = mutableListOf<SchoolEntity>()
+            for (i in 0 until schoolsArr.length()) {
+                val o = schoolsArr.getJSONObject(i)
+                val name = o.optString("name", "").trim()
+                if (name.isNotEmpty()) {
+                    schools += SchoolEntity(
+                        id = o.optLong("id", (i + 1).toLong()),
+                        name = name,
+                        address = o.optString("address", ""),
+                        mobile = o.optString("mobile", ""),
+                        email = o.optString("email", ""),
+                        logoBase64 = o.optString("logoBase64", ""),
+                        active = o.optBoolean("active", true)
+                    )
+                }
+            }
+
+            val classGroups = mutableListOf<ClassGroupEntity>()
+            val cgArr = root.optJSONArray("classGroups") ?: JSONArray()
+            for (i in 0 until cgArr.length()) {
+                val o = cgArr.getJSONObject(i)
+                val name = o.optString("name", "").trim()
+                if (name.isNotEmpty()) {
+                    classGroups += ClassGroupEntity(
+                        id = o.optLong("id", (i + 1).toLong()),
+                        schoolId = o.optLong("schoolId", schools.firstOrNull()?.id ?: 1L),
+                        name = name,
+                        shortLabel = o.optString("shortLabel", name.take(12)),
+                        sortOrder = o.optInt("sortOrder", i),
+                        templateKey = o.optString("templateKey", "")
+                    )
+                }
+            }
+
+            val schoolClasses = mutableListOf<SchoolClassEntity>()
+            val scArr = root.optJSONArray("schoolClasses") ?: JSONArray()
+            for (i in 0 until scArr.length()) {
+                val o = scArr.getJSONObject(i)
+                val name = o.optString("name", "").trim()
+                if (name.isNotEmpty()) {
+                    schoolClasses += SchoolClassEntity(
+                        id = o.optLong("id", (i + 1).toLong()),
+                        schoolId = o.optLong("schoolId", schools.firstOrNull()?.id ?: 1L),
+                        classGroupId = o.optLong("classGroupId", classGroups.firstOrNull()?.id ?: 1L),
+                        name = name,
+                        sortOrder = o.optInt("sortOrder", i)
+                    )
+                }
+            }
+
             val subjects = mutableListOf<SubjectEntity>()
             val subArr = root.optJSONArray("subjects") ?: JSONArray()
             for (i in 0 until subArr.length()) {
@@ -208,7 +308,9 @@ object BackupAndCsvManager {
                 val name = o.optString("name", "").trim()
                 if (name.isNotEmpty()) {
                     subjects += SubjectEntity(
-                        classGroup = o.optInt("classGroup", 1),
+                        id = o.optLong("id", (i + 1).toLong()),
+                        schoolId = o.optLong("schoolId", schools.firstOrNull()?.id ?: 1L),
+                        classGroupId = o.optLong("classGroupId", classGroups.firstOrNull()?.id ?: 1L),
                         name = name,
                         sortOrder = o.optInt("sortOrder", i)
                     )
@@ -222,9 +324,10 @@ object BackupAndCsvManager {
                 val admNo = o.optString("admNo", "").trim()
                 val name = o.optString("name", "").trim()
                 if (admNo.isNotEmpty() && name.isNotEmpty()) {
-                    val normalizedClass = SchoolClass.fromName(o.optString("className", "1st")).displayName
                     students += StudentEntity(
                         id = o.optLong("id", (i + 1).toLong()),
+                        schoolId = o.optLong("schoolId", schools.firstOrNull()?.id ?: 1L),
+                        classId = o.optLong("classId", 0L),
                         session = o.optString("session", settings.currentSession),
                         admNo = admNo,
                         name = name,
@@ -234,7 +337,7 @@ object BackupAndCsvManager {
                         mobile = o.optString("mobile", ""),
                         address = o.optString("address", ""),
                         photoBase64 = o.optString("photoBase64", ""),
-                        className = normalizedClass,
+                        className = o.optString("className", "1st").trim(),
                         section = o.optString("section", "A"),
                         rollNo = o.optInt("rollNo", i + 1),
                         isSample = o.optBoolean("isSample", false)
@@ -242,60 +345,23 @@ object BackupAndCsvManager {
                 }
             }
 
-            val marks = mutableListOf<MarkEntity>()
-            val mArr = root.optJSONArray("marks") ?: JSONArray()
-            for (i in 0 until mArr.length()) {
-                val o = mArr.getJSONObject(i)
-                val rawKey = o.optString("componentKey", "")
-                val normalizedKey = when (rawKey) {
-                    "T1_A_IA" -> "T1_IA"
-                    "T1_A_UT1" -> "T1_UT"
-                    "T1_A_HY" -> "T1_EXAM"
-                    else -> rawKey
-                }
-                marks += MarkEntity(
-                    studentId = o.optLong("studentId", -1L),
-                    subjectName = o.optString("subjectName", ""),
-                    componentKey = normalizedKey,
-                    rawValue = o.optString("rawValue", "")
-                )
-            }
-
-            val coList = mutableListOf<CoScholasticEntity>()
-            val coArr = root.optJSONArray("coScholastic") ?: JSONArray()
-            for (i in 0 until coArr.length()) {
-                val o = coArr.getJSONObject(i)
-                coList += CoScholasticEntity(
-                    studentId = o.optLong("studentId", -1L),
-                    termNo = o.optInt("termNo", 1),
-                    areaCode = o.optString("areaCode", ""),
-                    grade = o.optString("grade", "")
-                )
-            }
-
-            val termInfos = mutableListOf<TermInfoEntity>()
-            val tiArr = root.optJSONArray("termInfos") ?: JSONArray()
-            for (i in 0 until tiArr.length()) {
-                val o = tiArr.getJSONObject(i)
-                termInfos += TermInfoEntity(
-                    studentId = o.optLong("studentId", -1L),
-                    termNo = o.optInt("termNo", 1),
-                    daysPresent = o.optInt("daysPresent", 0),
-                    workingDays = o.optInt("workingDays", 0),
-                    remarks = o.optString("remarks", ""),
-                    promotedTo = o.optString("promotedTo", ""),
-                    reportDate = o.optString("reportDate", "")
-                )
-            }
+            val marks = parseMarksArray(root.optJSONArray("marks"))
+            val coList = parseCoScholasticArray(root.optJSONArray("coScholastic"))
+            val termInfos = parseTermInfosArray(root.optJSONArray("termInfos"))
 
             Result.success(
-                FullBackupData(
-                    settings = settings,
-                    subjects = subjects,
-                    students = students,
-                    marks = marks,
-                    coScholastic = coList,
-                    termInfos = termInfos
+                ParsedBackupResult.ModernBackup(
+                    FullBackupData(
+                        settings = settings,
+                        schools = schools,
+                        classGroups = classGroups,
+                        schoolClasses = schoolClasses,
+                        subjects = subjects,
+                        students = students,
+                        marks = marks,
+                        coScholastic = coList,
+                        termInfos = termInfos
+                    )
                 )
             )
         } catch (e: Exception) {
@@ -303,14 +369,196 @@ object BackupAndCsvManager {
         }
     }
 
+    /**
+     * Old-backup migration parser (pre-Phase-1 v1/v2 JSON backups).
+     * Extracts suggested school info from legacy settings keys and preserves all students,
+     * subjects, marks, co-scholastic grades, and term info without data loss.
+     */
+    private fun parseLegacyBackup(root: JSONObject): LegacyBackupPayload {
+        val sObj = root.optJSONObject("settings")
+        val settings = if (sObj != null) {
+            SchoolSettingsEntity(
+                id = 1,
+                currentSession = sObj.optString("currentSession", "2026-2027"),
+                sessionsCsv = sObj.optString("sessionsCsv", "2026-2027"),
+                passPercent = sObj.optInt("passPercent", 33).coerceIn(1, 100),
+                showPhotoAndAdmOnAnnual = sObj.optBoolean("showPhotoAndAdmOnAnnual", false),
+                showClassRank = sObj.optBoolean("showClassRank", true),
+                lastBackupEpochMs = sObj.optLong("lastBackupEpochMs", 0L)
+            )
+        } else {
+            SchoolSettingsEntity()
+        }
+
+        val suggestedSchools = mutableListOf<LegacySuggestedSchool>()
+        if (sObj != null) {
+            val useSameLogo = sObj.optBoolean("useSameLogoForBoth", false)
+            val legacyPrimaryName = sObj.optString("cpsName", "").trim()
+            val legacySecondaryName = sObj.optString("cpiName", "").trim()
+            val legacySingleName = sObj.optString("schoolName", "").trim()
+
+            if (legacyPrimaryName.isNotEmpty()) {
+                suggestedSchools += LegacySuggestedSchool(
+                    suggestedName = legacyPrimaryName,
+                    address = sObj.optString("cpsAddress", sObj.optString("address", "")),
+                    mobile = sObj.optString("cpsMobile", sObj.optString("mobile", "")),
+                    email = sObj.optString("cpsEmail", ""),
+                    logoBase64 = sObj.optString("cpsLogoBase64", "")
+                )
+            }
+            if (legacySecondaryName.isNotEmpty()) {
+                val secondaryLogo = if (useSameLogo) {
+                    sObj.optString("cpsLogoBase64", "")
+                } else {
+                    sObj.optString("cpiLogoBase64", sObj.optString("logoBase64", ""))
+                }
+                suggestedSchools += LegacySuggestedSchool(
+                    suggestedName = legacySecondaryName,
+                    address = sObj.optString("cpiAddress", sObj.optString("address", "")),
+                    mobile = sObj.optString("cpiMobile", sObj.optString("mobile", "")),
+                    email = sObj.optString("cpiEmail", ""),
+                    logoBase64 = secondaryLogo
+                )
+            }
+            if (suggestedSchools.isEmpty() && legacySingleName.isNotEmpty()) {
+                suggestedSchools += LegacySuggestedSchool(
+                    suggestedName = legacySingleName,
+                    address = sObj.optString("address", ""),
+                    mobile = sObj.optString("mobile", ""),
+                    email = sObj.optString("email", ""),
+                    logoBase64 = sObj.optString("logoBase64", "")
+                )
+            }
+        }
+        if (suggestedSchools.isEmpty()) {
+            suggestedSchools += LegacySuggestedSchool(
+                suggestedName = "Imported School",
+                address = "",
+                mobile = "",
+                email = "",
+                logoBase64 = ""
+            )
+        }
+
+        val subjects = mutableListOf<LegacyBackupSubject>()
+        val subArr = root.optJSONArray("subjects") ?: JSONArray()
+        for (i in 0 until subArr.length()) {
+            val o = subArr.getJSONObject(i)
+            val name = o.optString("name", "").trim()
+            if (name.isNotEmpty()) {
+                subjects += LegacyBackupSubject(
+                    legacyGroupId = o.optInt("classGroup", 2),
+                    name = name,
+                    sortOrder = o.optInt("sortOrder", i)
+                )
+            }
+        }
+
+        val students = mutableListOf<LegacyBackupStudent>()
+        val stArr = root.optJSONArray("students") ?: JSONArray()
+        for (i in 0 until stArr.length()) {
+            val o = stArr.getJSONObject(i)
+            val admNo = o.optString("admNo", "").trim()
+            val name = o.optString("name", "").trim()
+            if (admNo.isNotEmpty() && name.isNotEmpty()) {
+                students += LegacyBackupStudent(
+                    oldId = o.optLong("id", (i + 1).toLong()),
+                    session = o.optString("session", settings.currentSession),
+                    admNo = admNo,
+                    name = name,
+                    fatherName = o.optString("fatherName", ""),
+                    motherName = o.optString("motherName", ""),
+                    dob = o.optString("dob", ""),
+                    mobile = o.optString("mobile", ""),
+                    address = o.optString("address", ""),
+                    photoBase64 = o.optString("photoBase64", ""),
+                    className = DefaultSchoolTemplate.normalizeClassName(o.optString("className", "1st")),
+                    section = o.optString("section", "A"),
+                    rollNo = o.optInt("rollNo", i + 1),
+                    isSample = o.optBoolean("isSample", false)
+                )
+            }
+        }
+
+        return LegacyBackupPayload(
+            settings = settings,
+            suggestedSchools = suggestedSchools,
+            subjects = subjects,
+            students = students,
+            marks = parseMarksArray(root.optJSONArray("marks")),
+            coScholastic = parseCoScholasticArray(root.optJSONArray("coScholastic")),
+            termInfos = parseTermInfosArray(root.optJSONArray("termInfos"))
+        )
+    }
+
+    private fun parseMarksArray(mArr: JSONArray?): List<MarkEntity> {
+        val marks = mutableListOf<MarkEntity>()
+        if (mArr == null) return marks
+        for (i in 0 until mArr.length()) {
+            val o = mArr.getJSONObject(i)
+            val rawKey = o.optString("componentKey", "")
+            val normalizedKey = when (rawKey) {
+                "T1_A_IA" -> "T1_IA"
+                "T1_A_UT1" -> "T1_UT"
+                "T1_A_HY" -> "T1_EXAM"
+                else -> rawKey
+            }
+            marks += MarkEntity(
+                studentId = o.optLong("studentId", -1L),
+                subjectName = o.optString("subjectName", ""),
+                componentKey = normalizedKey,
+                rawValue = o.optString("rawValue", "")
+            )
+        }
+        return marks
+    }
+
+    private fun parseCoScholasticArray(coArr: JSONArray?): List<CoScholasticEntity> {
+        val list = mutableListOf<CoScholasticEntity>()
+        if (coArr == null) return list
+        for (i in 0 until coArr.length()) {
+            val o = coArr.getJSONObject(i)
+            list += CoScholasticEntity(
+                studentId = o.optLong("studentId", -1L),
+                termNo = o.optInt("termNo", 1),
+                areaCode = o.optString("areaCode", ""),
+                grade = o.optString("grade", "")
+            )
+        }
+        return list
+    }
+
+    private fun parseTermInfosArray(tiArr: JSONArray?): List<TermInfoEntity> {
+        val list = mutableListOf<TermInfoEntity>()
+        if (tiArr == null) return list
+        for (i in 0 until tiArr.length()) {
+            val o = tiArr.getJSONObject(i)
+            list += TermInfoEntity(
+                studentId = o.optLong("studentId", -1L),
+                termNo = o.optInt("termNo", 1),
+                daysPresent = o.optInt("daysPresent", 0),
+                workingDays = o.optInt("workingDays", 0),
+                remarks = o.optString("remarks", ""),
+                promotedTo = o.optString("promotedTo", ""),
+                reportDate = o.optString("reportDate", "")
+            )
+        }
+        return list
+    }
+
+    // -------------------------------------------------------------------------
+    // Students CSV Import (scoped to active school)
+    // -------------------------------------------------------------------------
     fun parseStudentsCsv(
         csvText: String,
+        schoolId: Long,
+        schoolClasses: List<SchoolClassEntity>,
         defaultSession: String,
         defaultClass: String,
         defaultSection: String,
         startingRollNo: Int
     ): CsvImportResult {
-        val lines = csvText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val lines = csvText.removePrefix("\uFEFF").lines().map { it.trim() }.filter { it.isNotEmpty() }
         if (lines.isEmpty()) return CsvImportResult(emptyList(), 0)
 
         val firstCols = splitCsvLine(lines.first()).map { it.lowercase().replace(" ", "").replace("_", "") }
@@ -344,6 +592,9 @@ object BackupAndCsvManager {
         val idxRoll = colIndex("roll", fallback = 9)
         val idxSession = colIndex("session", fallback = 10)
 
+        val availableNames = schoolClasses.map { it.name }
+        val classIdByLower = schoolClasses.associate { it.name.lowercase() to it.id }
+
         val parsed = mutableListOf<StudentEntity>()
         var skipped = 0
         var nextRoll = startingRollNo
@@ -359,12 +610,15 @@ object BackupAndCsvManager {
                 return@forEach
             }
             val rawClass = getCol(idxClass).ifEmpty { defaultClass }
-            val normalizedClass = SchoolClass.fromName(rawClass).displayName
+            val normalizedClass = DefaultSchoolTemplate.normalizeClassName(rawClass, availableNames)
+            val matchedClassId = classIdByLower[normalizedClass.lowercase()] ?: 0L
             val section = getCol(idxSection).uppercase().ifEmpty { defaultSection }
             val roll = getCol(idxRoll).toIntOrNull() ?: nextRoll++
             val session = getCol(idxSession).ifEmpty { defaultSession }
 
             parsed += StudentEntity(
+                schoolId = schoolId,
+                classId = matchedClassId,
                 session = session,
                 admNo = admNo,
                 name = name,
@@ -382,14 +636,12 @@ object BackupAndCsvManager {
         return CsvImportResult(parsed, skipped)
     }
 
+    // -------------------------------------------------------------------------
+    // Standardized Marks CSV Template & Parser (scoped to active school)
+    // -------------------------------------------------------------------------
     const val MARKS_CSV_HEADER =
         "session,class,section,rollNo,admNo,studentName,subject,T1_IA,T1_UT,T1_EXAM,T2_IA,T2_UT,T2_EXAM"
 
-    /**
-     * Generates a standardized marks CSV template pre-populated with students & subjects for the
-     * selected class/section (including any already-saved marks) so teachers can quickly fill
-     * marks in Excel or Google Sheets for a new academic session.
-     */
     fun generateMarksCsvTemplate(
         session: String,
         className: String,
@@ -445,15 +697,11 @@ object BackupAndCsvManager {
         return sb.toString()
     }
 
-    /**
-     * Parses and validates a standardized marks CSV against existing students and class subjects.
-     * Supports matching by (session, admNo) first and (session, class, section, rollNo) as fallback.
-     * Blank mark cells are safely skipped; invalid marks (e.g., > 10/30/60) are reported as row issues.
-     */
     fun parseMarksCsv(
         csvText: String,
         students: List<StudentEntity>,
-        subjectsByGroup: Map<Int, List<String>>,
+        schoolClasses: List<SchoolClassEntity>,
+        subjectsByGroupId: Map<Long, List<String>>,
         defaultSession: String,
         defaultClass: String,
         defaultSection: String
@@ -538,14 +786,17 @@ object BackupAndCsvManager {
             )
         }
 
-        // Fast lookup indices for matching students
+        val availableClassNames = schoolClasses.map { it.name }
+        val classById = schoolClasses.associateBy { it.id }
+        val classByLower = schoolClasses.associateBy { it.name.lowercase() }
+
         val bySessionAndAdm = students.associateBy {
             it.session.trim().lowercase() to it.admNo.trim().lowercase()
         }
         val bySessionClassSecRoll = students.associateBy {
             listOf(
                 it.session.trim().lowercase(),
-                SchoolClass.fromName(it.className).displayName.lowercase(),
+                DefaultSchoolTemplate.normalizeClassName(it.className, availableClassNames).lowercase(),
                 it.section.trim().uppercase(),
                 it.rollNo.toString()
             )
@@ -562,7 +813,7 @@ object BackupAndCsvManager {
 
             val session = getCol(idxSession).ifEmpty { defaultSession }.trim()
             val rawClass = getCol(idxClass).ifEmpty { defaultClass }.trim()
-            val normalizedClass = SchoolClass.fromName(rawClass).displayName
+            val normalizedClass = DefaultSchoolTemplate.normalizeClassName(rawClass, availableClassNames)
             val section = getCol(idxSection).uppercase().ifEmpty { defaultSection.uppercase() }
             val admNo = getCol(idxAdm)
             val rollNo = getCol(idxRoll).toIntOrNull()
@@ -594,9 +845,8 @@ object BackupAndCsvManager {
                 return@forEach
             }
 
-            // Resolve subject name case-insensitively against configured subjects for the student's class group
-            val group = SchoolClass.fromName(student.className).group.id
-            val configuredSubjects = subjectsByGroup[group].orEmpty()
+            val matchedSchoolClass = classById[student.classId] ?: classByLower[student.className.lowercase()]
+            val configuredSubjects = matchedSchoolClass?.let { subjectsByGroupId[it.classGroupId] }.orEmpty()
             val resolvedSubject = configuredSubjects.firstOrNull { it.equals(rawSubject, ignoreCase = true) }
                 ?: rawSubject.uppercase()
 

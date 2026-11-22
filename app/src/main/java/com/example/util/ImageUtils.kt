@@ -8,18 +8,22 @@ import android.net.Uri
 import android.util.Base64
 import androidx.annotation.DrawableRes
 import androidx.core.content.ContextCompat
-import com.example.R
-import com.example.domain.ResolvedSchoolIdentity
-import com.example.domain.SchoolIdentityCode
 import java.io.ByteArrayOutputStream
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 object ImageUtils {
-    private const val MAX_BYTES = 145 * 1024 // Strictly under 150 KB
-    private const val MAX_DIMENSION_PX = 480
+    const val MAX_LOGO_BYTES = 195 * 1024 // Phase 1 local under 200 KB
+    const val MAX_CLOUD_IMAGE_BYTES = 145 * 1024 // Phase 2 Firestore under 150 KB
+    private const val MAX_DIMENSION_PX = 512
 
-    fun encodeUriToBase64Under150Kb(context: Context, uri: Uri): String? {
+    fun encodeUriToBase64Under200Kb(context: Context, uri: Uri): String? =
+        encodeUriToBase64UnderLimit(context, uri, MAX_LOGO_BYTES)
+
+    fun encodeUriToBase64Under150Kb(context: Context, uri: Uri): String? =
+        encodeUriToBase64UnderLimit(context, uri, MAX_CLOUD_IMAGE_BYTES)
+
+    fun encodeUriToBase64UnderLimit(context: Context, uri: Uri, maxBytes: Int): String? {
         return try {
             val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             context.contentResolver.openInputStream(uri)?.use { stream ->
@@ -38,26 +42,52 @@ object ImageUtils {
                 BitmapFactory.decodeStream(stream, null, decodeOpts)
             } ?: return null
 
-            val scaled = scaleDownIfNeeded(rawBitmap, MAX_DIMENSION_PX)
-            if (scaled !== rawBitmap) rawBitmap.recycle()
+            val encoded = encodeBitmapToBase64UnderLimit(rawBitmap, maxBytes)
+            rawBitmap.recycle()
+            encoded
+        } catch (_: Exception) {
+            null
+        }
+    }
 
-            var quality = 85
+    fun encodeBitmapToBase64Under200Kb(source: Bitmap): String? =
+        encodeBitmapToBase64UnderLimit(source, MAX_LOGO_BYTES)
+
+    fun encodeBitmapToBase64Under150Kb(source: Bitmap): String? =
+        encodeBitmapToBase64UnderLimit(source, MAX_CLOUD_IMAGE_BYTES)
+
+    fun encodeBitmapToBase64UnderLimit(source: Bitmap, maxBytes: Int = MAX_LOGO_BYTES): String? {
+        return try {
+            val scaled = scaleDownIfNeeded(source, MAX_DIMENSION_PX)
+            val usePng = source.hasAlpha() && scaled.width <= 300 && scaled.height <= 300
             var bytes: ByteArray
+
+            if (usePng) {
+                val pngOut = ByteArrayOutputStream()
+                scaled.compress(Bitmap.CompressFormat.PNG, 100, pngOut)
+                bytes = pngOut.toByteArray()
+                if (bytes.size <= maxBytes) {
+                    if (scaled !== source) scaled.recycle()
+                    return Base64.encodeToString(bytes, Base64.NO_WRAP)
+                }
+            }
+
+            var quality = 86
             do {
                 val out = ByteArrayOutputStream()
                 scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
                 bytes = out.toByteArray()
-                quality -= 12
-            } while (bytes.size > MAX_BYTES && quality >= 25)
+                quality -= 10
+            } while (bytes.size > maxBytes && quality >= 25)
 
-            if (bytes.size > MAX_BYTES) {
+            if (bytes.size > maxBytes) {
                 val smaller = scaleDownIfNeeded(scaled, 280)
                 val out = ByteArrayOutputStream()
                 smaller.compress(Bitmap.CompressFormat.JPEG, 60, out)
                 bytes = out.toByteArray()
                 if (smaller !== scaled) smaller.recycle()
             }
-            scaled.recycle()
+            if (scaled !== source) scaled.recycle()
             Base64.encodeToString(bytes, Base64.NO_WRAP)
         } catch (_: Exception) {
             null
@@ -86,27 +116,23 @@ object ImageUtils {
         }
     }
 
-    @DrawableRes
-    fun defaultLogoResForIdentity(code: SchoolIdentityCode): Int =
-        if (code == SchoolIdentityCode.CPS) R.drawable.logo_cps else R.drawable.logo_cpi
+    fun estimateDecodedBytes(base64: String?): Int {
+        if (base64.isNullOrBlank()) return 0
+        val cleaned = if (base64.contains(",")) base64.substringAfter(",") else base64
+        return try {
+            Base64.decode(cleaned, Base64.DEFAULT).size
+        } catch (_: Exception) {
+            0
+        }
+    }
 
     /**
-     * Resolves the logo Bitmap for a school identity:
-     * 1. Uploaded custom Base64 logo (if present)
-     * 2. Null if explicitly cleared (triggers neat "LOGO" placeholder box)
-     * 3. Bundled official CPS or CPI PNG logo otherwise.
+     * Resolves the logo Bitmap for a school from its stored Base64 image.
+     * Returns null when no custom logo is uploaded so reports draw the clean "LOGO" placeholder box.
      */
-    fun resolveSchoolLogoBitmap(context: Context, identity: ResolvedSchoolIdentity): Bitmap? {
-        if (identity.logoBase64.isNotBlank()) {
-            decodeBase64ToBitmap(identity.logoBase64)?.let { return it }
-        }
-        if (identity.logoCleared) return null
-        val resId = defaultLogoResForIdentity(identity.code)
-        return try {
-            BitmapFactory.decodeResource(context.resources, resId)
-        } catch (_: Exception) {
-            vectorDrawableToBitmap(context, R.drawable.ic_school_crest, 144)
-        }
+    fun resolveSchoolLogoBitmap(logoBase64: String?): Bitmap? {
+        if (logoBase64.isNullOrBlank()) return null
+        return decodeBase64ToBitmap(logoBase64)
     }
 
     fun vectorDrawableToBitmap(

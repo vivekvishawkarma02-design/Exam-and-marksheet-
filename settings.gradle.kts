@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "CPI-CPS Report Card"
+rootProject.name = "School Report Card"
 
 include(":app")

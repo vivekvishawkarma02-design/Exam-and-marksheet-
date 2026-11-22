@@ -1,16 +1,13 @@
 package com.example
 
-import com.example.data.SchoolSettingsEntity
 import com.example.domain.AttendanceSummary
-import com.example.domain.ClassGroup
+import com.example.domain.DefaultSchoolTemplate
 import com.example.domain.DefaultSubjects
 import com.example.domain.ExamType
 import com.example.domain.MarkComponent
 import com.example.domain.MarkValidationResult
 import com.example.domain.ReportCalculations
 import com.example.domain.ResultStatus
-import com.example.domain.SchoolClass
-import com.example.domain.SchoolIdentityCode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -21,7 +18,6 @@ class ReportCalculationsTest {
 
     @Test
     fun `acceptance_a unified 10-30-60 term and annual totals match example`() {
-        // (a) IA 8, U.T. 25, Exam 50 = 83 (A2); Term-II total = 88 -> Annual 171/200 (85.5%, A2)
         val marks = mapOf(
             ("MATH" to MarkComponent.T1_IA.key) to "8",
             ("MATH" to MarkComponent.T1_UT.key) to "25",
@@ -53,20 +49,17 @@ class ReportCalculationsTest {
 
     @Test
     fun `acceptance_b validation rejects over-max and accepts 0 and AB case-insensitively`() {
-        // Reject IA 11, UT 31, Exam 61, negative, and garbage text
         assertTrue(ReportCalculations.validateMarkInput("11", MarkComponent.T1_IA.maxMarks) is MarkValidationResult.Invalid)
         assertTrue(ReportCalculations.validateMarkInput("31", MarkComponent.T1_UT.maxMarks) is MarkValidationResult.Invalid)
         assertTrue(ReportCalculations.validateMarkInput("61", MarkComponent.T1_EXAM.maxMarks) is MarkValidationResult.Invalid)
         assertTrue(ReportCalculations.validateMarkInput("-1", 10) is MarkValidationResult.Invalid)
         assertTrue(ReportCalculations.validateMarkInput("xyz", 30) is MarkValidationResult.Invalid)
 
-        // Accept 0 and max
         assertEquals(MarkValidationResult.Valid("0"), ReportCalculations.validateMarkInput("0", 10))
         assertEquals(MarkValidationResult.Valid("10"), ReportCalculations.validateMarkInput("10", 10))
         assertEquals(MarkValidationResult.Valid("30"), ReportCalculations.validateMarkInput("30", 30))
         assertEquals(MarkValidationResult.Valid("60"), ReportCalculations.validateMarkInput("60", 60))
 
-        // Accept "ab" normalized to "AB", counts as 0, displays as "AB"
         assertEquals(MarkValidationResult.Valid("AB"), ReportCalculations.validateMarkInput("ab", 60))
         assertEquals(MarkValidationResult.Valid("AB"), ReportCalculations.validateMarkInput(" Ab ", 30))
         assertEquals(0.0, ReportCalculations.numericMarkValue("AB"), 0.0001)
@@ -74,8 +67,7 @@ class ReportCalculationsTest {
     }
 
     @Test
-    fun `acceptance_c nursery has exact 7 subjects and resolves to CPS school`() {
-        val nurserySubjects = DefaultSubjects.forGroup(SchoolClass.fromName("Nursery").group)
+    fun `acceptance_c default template preserves exact 7-6-8 subject lists and order`() {
         assertEquals(
             listOf(
                 "HINDI",
@@ -86,85 +78,62 @@ class ReportCalculationsTest {
                 "MATHS( ORAL)",
                 "RHYNES"
             ),
-            nurserySubjects
+            DefaultSubjects.forTemplateKey(DefaultSchoolTemplate.KEY_PRE_PRIMARY)
         )
-
-        val settings = SchoolSettingsEntity()
-        val identity = ReportCalculations.resolveSchoolIdentity(settings, "Nursery")
-        assertEquals(SchoolIdentityCode.CPS, identity.code)
-        assertEquals("C.P.S. SCHOOL", identity.schoolName)
+        assertEquals(
+            listOf("ENGLISH", "HINDI", "MATH", "SCIENCE", "COMPUTER", "G.K."),
+            DefaultSubjects.forTemplateKey(DefaultSchoolTemplate.KEY_PRIMARY)
+        )
+        assertEquals(
+            listOf("ENGLISH", "HINDI", "MATHS", "SCIENCE / EVS", "COMPUTER", "S.ST.", "G.K.", "SANSKRIT"),
+            DefaultSubjects.forTemplateKey(DefaultSchoolTemplate.KEY_MIDDLE)
+        )
     }
 
     @Test
-    fun `acceptance_d 5th resolves to CPS with 6 subjects and 6th resolves to CPI with 8 subjects`() {
-        val settings = SchoolSettingsEntity()
-
-        val id5th = ReportCalculations.resolveSchoolIdentity(settings, "5th")
-        assertEquals(SchoolIdentityCode.CPS, id5th.code)
-        assertEquals("C.P.S. SCHOOL", id5th.schoolName)
-        assertEquals(
-            listOf("ENGLISH", "HINDI", "MATH", "SCIENCE", "COMPUTER", "G.K."),
-            DefaultSubjects.forGroup(SchoolClass.fromName("5th").group)
-        )
-
-        val id6th = ReportCalculations.resolveSchoolIdentity(settings, "6th")
-        assertEquals(SchoolIdentityCode.CPI, id6th.code)
-        assertEquals("C.P.I. SCHOOL", id6th.schoolName)
-        assertEquals(
-            listOf("ENGLISH", "HINDI", "MATHS", "SCIENCE / EVS", "COMPUTER", "S.ST.", "G.K.", "SANSKRIT"),
-            DefaultSubjects.forGroup(SchoolClass.fromName("6th").group)
-        )
-
-        // Editable class-to-school mapping overrides default cleanly
-        val customMap = SchoolClass.defaultClassIdentityMap().toMutableMap().apply {
-            this["5th"] = SchoolIdentityCode.CPI
-        }
-        val customSettings = settings.copy(classIdentityMapCsv = SchoolClass.serializeIdentityMap(customMap))
-        assertEquals(SchoolIdentityCode.CPI, ReportCalculations.resolveSchoolIdentity(customSettings, "5th").code)
+    fun `acceptance_d custom class names normalize and suggest next class dynamically`() {
+        val customSchoolClasses = listOf("Nursery", "LKG", "UKG", "1st", "2nd", "8th", "9th", "10th")
+        assertEquals("9th", DefaultSchoolTemplate.normalizeClassName("IX", customSchoolClasses))
+        assertEquals("10th", DefaultSchoolTemplate.normalizeClassName("10", customSchoolClasses))
+        assertEquals("10th", DefaultSchoolTemplate.suggestNextClassName("9th", customSchoolClasses))
+        assertEquals("11th", DefaultSchoolTemplate.suggestNextClassName("10th", customSchoolClasses))
+        assertEquals("Playgroup", DefaultSchoolTemplate.normalizeClassName("Playgroup", listOf("Playgroup", "Nursery")))
     }
 
     @Test
     fun `acceptance_e real class 2nd student example matches exact totals percentage grade and attendance`() {
-        val subjects = DefaultSubjects.forGroup(ClassGroup.PRIMARY)
-        // Term-I totals: 39, 36, 40, 36, 35, 38 -> 224 / 600
-        // Term-II totals: 42, 56, 56, 42, 42, 44 -> 282 / 600
+        val subjects = DefaultSubjects.forTemplateKey(DefaultSchoolTemplate.KEY_PRIMARY)
         val marks = mapOf(
-            // ENGLISH: 7+10+22=39 | 8+14+20=42 -> 81
             ("ENGLISH" to MarkComponent.T1_IA.key) to "7",
             ("ENGLISH" to MarkComponent.T1_UT.key) to "10",
             ("ENGLISH" to MarkComponent.T1_EXAM.key) to "22",
             ("ENGLISH" to MarkComponent.T2_IA.key) to "8",
             ("ENGLISH" to MarkComponent.T2_UT.key) to "14",
             ("ENGLISH" to MarkComponent.T2_EXAM.key) to "20",
-            // HINDI: 6+10+20=36 | 9+17+30=56 -> 92
             ("HINDI" to MarkComponent.T1_IA.key) to "6",
             ("HINDI" to MarkComponent.T1_UT.key) to "10",
             ("HINDI" to MarkComponent.T1_EXAM.key) to "20",
             ("HINDI" to MarkComponent.T2_IA.key) to "9",
             ("HINDI" to MarkComponent.T2_UT.key) to "17",
             ("HINDI" to MarkComponent.T2_EXAM.key) to "30",
-            // MATH: 7+12+21=40 | 8+18+30=56 -> 96
             ("MATH" to MarkComponent.T1_IA.key) to "7",
             ("MATH" to MarkComponent.T1_UT.key) to "12",
             ("MATH" to MarkComponent.T1_EXAM.key) to "21",
             ("MATH" to MarkComponent.T2_IA.key) to "8",
             ("MATH" to MarkComponent.T2_UT.key) to "18",
             ("MATH" to MarkComponent.T2_EXAM.key) to "30",
-            // SCIENCE: 6+10+20=36 | 7+15+20=42 -> 78
             ("SCIENCE" to MarkComponent.T1_IA.key) to "6",
             ("SCIENCE" to MarkComponent.T1_UT.key) to "10",
             ("SCIENCE" to MarkComponent.T1_EXAM.key) to "20",
             ("SCIENCE" to MarkComponent.T2_IA.key) to "7",
             ("SCIENCE" to MarkComponent.T2_UT.key) to "15",
             ("SCIENCE" to MarkComponent.T2_EXAM.key) to "20",
-            // COMPUTER: 6+9+20=35 | 7+15+20=42 -> 77
             ("COMPUTER" to MarkComponent.T1_IA.key) to "6",
             ("COMPUTER" to MarkComponent.T1_UT.key) to "9",
             ("COMPUTER" to MarkComponent.T1_EXAM.key) to "20",
             ("COMPUTER" to MarkComponent.T2_IA.key) to "7",
             ("COMPUTER" to MarkComponent.T2_UT.key) to "15",
             ("COMPUTER" to MarkComponent.T2_EXAM.key) to "20",
-            // G.K.: 7+11+20=38 | 8+16+20=44 -> 82
             ("G.K." to MarkComponent.T1_IA.key) to "7",
             ("G.K." to MarkComponent.T1_UT.key) to "11",
             ("G.K." to MarkComponent.T1_EXAM.key) to "20",
@@ -202,15 +171,13 @@ class ReportCalculationsTest {
 
     @Test
     fun `acceptance_f single subject below 33 percent gives FAIL even with high overall percentage`() {
-        val subjects = DefaultSubjects.forGroup(ClassGroup.PRIMARY)
+        val subjects = DefaultSubjects.forTemplateKey(DefaultSchoolTemplate.KEY_PRIMARY)
         val marks = mutableMapOf<Pair<String, String>, String>()
         subjects.forEachIndexed { idx, sub ->
             if (idx == 0) {
-                // Fail ENGLISH: 20 + 20 = 40/200 (20%)
                 marks[sub to MarkComponent.T1_EXAM.key] = "20"
                 marks[sub to MarkComponent.T2_EXAM.key] = "20"
             } else {
-                // Ace all other 5 subjects: 100 + 100 = 200/200 (100%)
                 marks[sub to MarkComponent.T1_IA.key] = "10"
                 marks[sub to MarkComponent.T1_UT.key] = "30"
                 marks[sub to MarkComponent.T1_EXAM.key] = "60"
@@ -285,7 +252,6 @@ class ReportCalculationsTest {
         assertEquals(ResultStatus.FAIL, ReportCalculations.evaluatePassStatus(listOf(65.0 to 200.0), hasAnyMarks = true, passPercent = 33))
         assertEquals(ResultStatus.PENDING, ReportCalculations.evaluatePassStatus(listOf(0.0 to 100.0), hasAnyMarks = false, passPercent = 33))
 
-        // AB in UT1 counts as 0 while IA=8 and Exam=42 sum to 50 (C2)
         val marks = mapOf(
             ("HINDI" to MarkComponent.T1_IA.key) to "8",
             ("HINDI" to MarkComponent.T1_UT.key) to "AB",

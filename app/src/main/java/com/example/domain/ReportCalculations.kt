@@ -1,6 +1,5 @@
 package com.example.domain
 
-import com.example.data.SchoolSettingsEntity
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -111,39 +110,6 @@ object ReportCalculations {
         "33 - 40" to "D",
         "32 & Below" to "E (Need improvement)"
     )
-
-    fun resolveSchoolIdentity(
-        settings: SchoolSettingsEntity,
-        className: String
-    ): ResolvedSchoolIdentity {
-        val normalizedClass = SchoolClass.fromName(className).displayName
-        val map = SchoolClass.parseIdentityMap(settings.classIdentityMapCsv)
-        val code = map[normalizedClass] ?: SchoolClass.fromName(className).defaultIdentity
-
-        return if (code == SchoolIdentityCode.CPS) {
-            ResolvedSchoolIdentity(
-                code = SchoolIdentityCode.CPS,
-                schoolName = settings.cpsName.ifBlank { SchoolIdentityCode.CPS.defaultName },
-                address = settings.cpsAddress,
-                mobile = settings.cpsMobile,
-                email = settings.cpsEmail,
-                logoBase64 = settings.cpsLogoBase64,
-                logoCleared = settings.cpsLogoCleared
-            )
-        } else {
-            val logo = if (settings.useSameLogoForBoth) settings.cpsLogoBase64 else settings.cpiLogoBase64
-            val cleared = if (settings.useSameLogoForBoth) settings.cpsLogoCleared else settings.cpiLogoCleared
-            ResolvedSchoolIdentity(
-                code = SchoolIdentityCode.CPI,
-                schoolName = settings.cpiName.ifBlank { SchoolIdentityCode.CPI.defaultName },
-                address = settings.cpiAddress,
-                mobile = settings.cpiMobile,
-                email = settings.cpiEmail,
-                logoBase64 = logo,
-                logoCleared = cleared
-            )
-        }
-    }
 
     fun validateMarkInput(raw: String, maxMarks: Int): MarkValidationResult {
         val trimmed = raw.trim()

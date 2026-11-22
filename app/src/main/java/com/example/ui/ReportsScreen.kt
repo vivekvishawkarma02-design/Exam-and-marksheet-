@@ -66,8 +66,8 @@ import com.example.util.PdfExportHelper
 
 @Composable
 fun ReportsScreen(
-    uiState: CpiUiState,
-    viewModel: CpiViewModel,
+    uiState: SchoolUiState,
+    viewModel: SchoolViewModel,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -106,7 +106,8 @@ fun ReportsScreen(
 
     val students = uiState.filteredStudents
     val selectedStudent = uiState.selectedStudent
-    val activeIdentity = uiState.activeSchoolIdentity
+    val activeSchool = uiState.activeSchool
+    val activeClassName = uiState.effectiveClassName
     val availableSlipModes = remember(selectedReportType) {
         if (selectedReportType == ReportType.HALF_YEARLY) {
             listOf(SlipLayoutMode.TWO_PER_PAGE, SlipLayoutMode.ONE_PER_PAGE, SlipLayoutMode.PAIR_UT_HY)
@@ -128,7 +129,7 @@ fun ReportsScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                SchoolLogoAvatar(identity = activeIdentity, size = 46.dp)
+                SchoolLogoAvatar(school = activeSchool, size = 46.dp)
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "A4 Report Cards & Export",
@@ -136,7 +137,7 @@ fun ReportsScreen(
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "Class ${uiState.filter.className} → ${activeIdentity.schoolName}",
+                        text = "${activeSchool.name}  •  Class ${activeClassName.ifBlank { "—" }}-${uiState.filter.section}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.secondary,
                         fontWeight = FontWeight.SemiBold,

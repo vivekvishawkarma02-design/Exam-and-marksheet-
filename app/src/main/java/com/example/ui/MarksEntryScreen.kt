@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -61,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.StudentEntity
+import com.example.domain.AppModule
 import com.example.domain.ExamType
 import com.example.domain.MarkComponent
 import com.example.domain.MarkValidationResult
@@ -77,16 +79,19 @@ private enum class MarksEntryMode(val label: String) {
 
 @Composable
 fun MarksEntryScreen(
-    uiState: CpiUiState,
-    viewModel: CpiViewModel,
+    uiState: SchoolUiState,
+    viewModel: SchoolViewModel,
     onNavigateToStudents: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedExam by remember { mutableStateOf(ExamType.HALF_YEARLY) }
     var entryMode by remember { mutableStateOf(MarksEntryMode.CLASS_GRID) }
     var showMarksCsvDialog by remember { mutableStateOf(false) }
-    val subjects = remember(uiState.filter.className, uiState.subjects) {
-        uiState.subjectsForClass(uiState.filter.className)
+    var showMarksHistoryDialog by remember { mutableStateOf(false) }
+    val canEditMarksModule = uiState.canEdit(AppModule.MARKS)
+    val activeClassName = uiState.effectiveClassName
+    val subjects = remember(uiState.activeSchool.id, activeClassName, uiState.subjects, uiState.schoolClasses) {
+        uiState.subjectsForClass(activeClassName)
     }
     var selectedSubject by remember { mutableStateOf(subjects.firstOrNull().orEmpty()) }
 
@@ -132,12 +137,12 @@ fun MarksEntryScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Enter Marks",
+                            text = if (canEditMarksModule) "Enter Marks" else "Marks (View Only)",
                             style = MaterialTheme.typography.headlineSmall,
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            text = "${uiState.activeSchoolIdentity.schoolName}  •  IA (10) + UT (30) + Exam (60)",
+                            text = "${uiState.activeSchool.name}  •  IA (10) + UT (30) + Exam (60)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -146,9 +151,23 @@ fun MarksEntryScreen(
                     }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        if (uiState.lastMarkUndo != null) {
+                        if (uiState.isAdmin) {
+                            TextButton(
+                                onClick = { showMarksHistoryDialog = true },
+                                modifier = Modifier.testTag("marks_history_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.History,
+                                    contentDescription = "Marks edit history",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("History", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        if (canEditMarksModule && uiState.lastMarkUndo != null) {
                             TextButton(
                                 onClick = viewModel::undoLastMarkEdit,
                                 modifier = Modifier.testTag("undo_mark_button")
@@ -162,18 +181,20 @@ fun MarksEntryScreen(
                                 Text("Undo", fontWeight = FontWeight.Bold)
                             }
                         }
-                        OutlinedButton(
-                            onClick = { showMarksCsvDialog = true },
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                            modifier = Modifier.testTag("import_marks_csv_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.UploadFile,
-                                contentDescription = "Import Marks CSV",
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("CSV", style = MaterialTheme.typography.labelLarge)
+                        if (canEditMarksModule) {
+                            OutlinedButton(
+                                onClick = { showMarksCsvDialog = true },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                modifier = Modifier.testTag("import_marks_csv_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.UploadFile,
+                                    contentDescription = "Import Marks CSV",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("CSV", style = MaterialTheme.typography.labelLarge)
+                            }
                         }
                     }
                 }
@@ -276,7 +297,7 @@ fun MarksEntryScreen(
                 EmptyStatePanel(
                     icon = Icons.Default.EditNote,
                     title = "No students to enter marks for",
-                    message = "Add students in Class ${uiState.filter.className}-${uiState.filter.section} first.",
+                    message = "Add students in Class $activeClassName-${uiState.filter.section} first.",
                     actionLabel = "Go to Students",
                     onAction = onNavigateToStudents
                 )
@@ -336,6 +357,23 @@ fun MarksEntryScreen(
         showSetupDialog = showMarksCsvDialog,
         onDismissSetupDialog = { showMarksCsvDialog = false }
     )
+
+    if (showMarksHistoryDialog) {
+        val (dialogTitle, logsToShow) = if (entryMode == MarksEntryMode.SINGLE_STUDENT && selectedStudent != null) {
+            "${selectedStudent.name} — Marks History" to uiState.markEditLogsForStudent(selectedStudent.id)
+        } else {
+            val classLogs = uiState.markEditLogs.filter {
+                it.className.equals(activeClassName, ignoreCase = true) || activeClassName.isBlank()
+            }
+            "Class $activeClassName — Marks History" to classLogs.ifEmpty { uiState.markEditLogs }
+        }
+        StudentMarksHistoryDialog(
+            title = dialogTitle,
+            logs = logsToShow,
+            conflicts = uiState.markConflicts,
+            onDismiss = { showMarksHistoryDialog = false }
+        )
+    }
 }
 
 @Composable
@@ -343,7 +381,7 @@ private fun ClassMarksGrid(
     students: List<StudentEntity>,
     subjectName: String,
     components: List<MarkComponent>,
-    uiState: CpiUiState,
+    uiState: SchoolUiState,
     cellErrors: Map<String, String>,
     invalidDrafts: Map<String, String>,
     onSaveCell: (StudentEntity, MarkComponent, String) -> Unit
@@ -450,6 +488,7 @@ private fun ClassMarksGrid(
                         }
                     }
 
+                    val canEditThisRow = uiState.canEditMarkFor(student, subjectName)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -462,6 +501,7 @@ private fun ClassMarksGrid(
                                 storedValue = stored,
                                 invalidDraft = invalidDrafts[cellKey],
                                 errorText = cellErrors[cellKey],
+                                readOnly = !canEditThisRow,
                                 onCommit = { text -> onSaveCell(student, comp, text) },
                                 modifier = Modifier.weight(1f),
                                 testTag = "mark_cell_${student.id}_${comp.key}"
@@ -492,7 +532,7 @@ private fun SingleStudentMarksList(
     student: StudentEntity,
     subjects: List<String>,
     components: List<MarkComponent>,
-    uiState: CpiUiState,
+    uiState: SchoolUiState,
     cellErrors: Map<String, String>,
     invalidDrafts: Map<String, String>,
     onSaveCell: (String, MarkComponent, String) -> Unit
@@ -578,6 +618,7 @@ private fun SingleStudentMarksList(
                         )
                     }
 
+                    val canEditThisSubject = uiState.canEditMarkFor(student, subject)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -590,6 +631,7 @@ private fun SingleStudentMarksList(
                                 storedValue = stored,
                                 invalidDraft = invalidDrafts[cellKey],
                                 errorText = cellErrors[cellKey],
+                                readOnly = !canEditThisSubject,
                                 onCommit = { text -> onSaveCell(subject, comp, text) },
                                 modifier = Modifier.weight(1f),
                                 testTag = "solo_cell_${subject}_${comp.key}"
@@ -621,6 +663,7 @@ private fun MarkInputCell(
     storedValue: String,
     invalidDraft: String?,
     errorText: String?,
+    readOnly: Boolean = false,
     onCommit: (String) -> Unit,
     modifier: Modifier = Modifier,
     testTag: String
@@ -635,12 +678,13 @@ private fun MarkInputCell(
     val borderColor = when {
         hasError -> FailRed
         isAbsent -> AbsentAmber
-        isFocused -> MaterialTheme.colorScheme.primary
+        isFocused && !readOnly -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.outlineVariant
     }
     val bgColor = when {
         hasError -> FailRedContainer
         isAbsent -> AbsentAmberContainer
+        readOnly -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
         else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
     }
 
@@ -661,7 +705,7 @@ private fun MarkInputCell(
         Surface(
             shape = RoundedCornerShape(10.dp),
             color = bgColor,
-            border = BorderStroke(if (isFocused || hasError) 1.5.dp else 1.dp, borderColor),
+            border = BorderStroke(if ((isFocused && !readOnly) || hasError) 1.5.dp else 1.dp, borderColor),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(44.dp)
@@ -675,9 +719,13 @@ private fun MarkInputCell(
                 BasicTextField(
                     value = text,
                     onValueChange = { updated ->
-                        text = updated.take(6)
-                        onCommit(text)
+                        if (!readOnly) {
+                            text = updated.take(6)
+                            onCommit(text)
+                        }
                     },
+                    readOnly = readOnly,
+                    enabled = !readOnly,
                     singleLine = true,
                     textStyle = TextStyle(
                         fontSize = 15.sp,
@@ -696,7 +744,7 @@ private fun MarkInputCell(
                     ),
                     keyboardActions = KeyboardActions(
                         onNext = {
-                            onCommit(text)
+                            if (!readOnly) onCommit(text)
                             focusManager.moveFocus(FocusDirection.Next)
                         }
                     ),
@@ -704,7 +752,7 @@ private fun MarkInputCell(
                         .fillMaxWidth()
                         .testTag(testTag)
                         .onFocusChanged { state ->
-                            if (isFocused && !state.isFocused) {
+                            if (isFocused && !state.isFocused && !readOnly) {
                                 onCommit(text)
                             }
                             isFocused = state.isFocused
@@ -720,26 +768,28 @@ private fun MarkInputCell(
             }
         }
 
-        Surface(
-            shape = RoundedCornerShape(6.dp),
-            color = if (isAbsent) AbsentAmber else MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable {
-                    val nextVal = if (isAbsent) "" else "AB"
-                    text = nextVal
-                    onCommit(nextVal)
-                }
-                .testTag("${testTag}_ab")
-        ) {
-            Text(
-                text = "AB",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                color = if (isAbsent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 4.dp)
-            )
+        if (!readOnly) {
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = if (isAbsent) AbsentAmber else MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        val nextVal = if (isAbsent) "" else "AB"
+                        text = nextVal
+                        onCommit(nextVal)
+                    }
+                    .testTag("${testTag}_ab")
+            ) {
+                Text(
+                    text = "AB",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    color = if (isAbsent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            }
         }
     }
 }

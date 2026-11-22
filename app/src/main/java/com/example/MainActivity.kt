@@ -4,16 +4,16 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import com.example.ui.CpiReportCardApp
-import com.example.ui.theme.CpiReportCardTheme
+import com.example.ui.SchoolReportCardApp
+import com.example.ui.theme.SchoolAppTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            CpiReportCardTheme {
-                CpiReportCardApp()
+            SchoolAppTheme {
+                SchoolReportCardApp()
             }
         }
     }

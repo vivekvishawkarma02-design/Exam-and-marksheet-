@@ -14,7 +14,6 @@ import {
   calculateUnitTestReport,
   validateAttendance,
   calculateAttendance,
-  resolveSchoolIdentityForClass,
   calculateClassRanks,
 } from './calc';
 
@@ -134,7 +133,7 @@ describe('lib/calc.ts — unified 10/30/60 structure', () => {
     expect(evaluatePassStatus([{ obtained: 0, max: 100 }], false, 33)).toBe('Pending');
   });
 
-  it('evaluates UT1/UT2 slips, school identity mapping, and tie-aware class ranking', () => {
+  it('evaluates UT1/UT2 slips and tie-aware class ranking', () => {
     const ut1 = calculateUnitTestReport([
       { subject: 'ENGLISH', raw: '24' },
       { subject: 'HINDI', raw: 'ab' },
@@ -143,11 +142,6 @@ describe('lib/calc.ts — unified 10/30/60 structure', () => {
     expect(ut1.totalMax).toBe(60);
     expect(ut1.rows[1].displayValue).toBe('AB');
     expect(ut1.resultStatus).toBe('FAIL');
-
-    expect(resolveSchoolIdentityForClass('Nursery')).toBe('CPS');
-    expect(resolveSchoolIdentityForClass('5th')).toBe('CPS');
-    expect(resolveSchoolIdentityForClass('6th')).toBe('CPI');
-    expect(resolveSchoolIdentityForClass('5th', { '5th': 'CPI' })).toBe('CPI');
 
     const r1 = calculateStudentPerformance(1, [{ subject: 'ENGLISH', term1: { exam: 55 } }]);
     const r2 = calculateStudentPerformance(2, [{ subject: 'ENGLISH', term1: { exam: 55 } }]);

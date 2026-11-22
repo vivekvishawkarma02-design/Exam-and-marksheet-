@@ -53,16 +53,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.TermInfoEntity
+import com.example.domain.AppModule
 import com.example.domain.AttendanceSummary
 import com.example.domain.CoScholasticArea
+import com.example.domain.DefaultSchoolTemplate
 import com.example.domain.ReportCalculations
-import com.example.domain.SchoolClass
 import com.example.ui.theme.FailRed
 
 @Composable
 fun CoScholasticScreen(
-    uiState: CpiUiState,
-    viewModel: CpiViewModel,
+    uiState: SchoolUiState,
+    viewModel: SchoolViewModel,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -71,6 +72,7 @@ fun CoScholasticScreen(
     var selectedTerm by remember { mutableIntStateOf(1) }
     val students = uiState.filteredStudents
     val student = uiState.selectedStudent
+    val canEditCoScholastic = uiState.canEdit(AppModule.CO_SCHOLASTIC)
 
     var daysPresentText by remember { mutableStateOf("") }
     var workingDaysText by remember { mutableStateOf("") }
@@ -85,10 +87,10 @@ fun CoScholasticScreen(
         daysPresentText = existingInfo?.daysPresent?.takeIf { it > 0 }?.toString() ?: ""
         workingDaysText = existingInfo?.workingDays?.takeIf { it > 0 }?.toString() ?: ""
         remarks = existingInfo?.remarks ?: ""
-        // Auto-suggest next class on Term-II if blank
-        promotedTo = existingInfo?.promotedTo?.ifBlank {
-            if (selectedTerm == 2 && student != null) SchoolClass.fromName(student.className).nextClassName() else ""
-        } ?: if (selectedTerm == 2 && student != null) SchoolClass.fromName(student.className).nextClassName() else ""
+        val suggestedNext = if (selectedTerm == 2 && student != null) {
+            DefaultSchoolTemplate.suggestNextClassName(student.className, uiState.activeSchoolClassNames)
+        } else ""
+        promotedTo = existingInfo?.promotedTo?.ifBlank { suggestedNext } ?: suggestedNext
         reportDate = existingInfo?.reportDate ?: ""
         attendanceError = null
     }
@@ -251,7 +253,7 @@ fun CoScholasticScreen(
                                                 color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
                                                 modifier = Modifier
                                                     .minimumInteractiveComponentSize()
-                                                    .clickable {
+                                                    .clickable(enabled = canEditCoScholastic) {
                                                         viewModel.saveCoScholasticGrade(
                                                             studentId = student.id,
                                                             termNo = selectedTerm,
@@ -327,6 +329,7 @@ fun CoScholasticScreen(
                                             workingDaysText.toIntOrNull() ?: 0
                                         )
                                     },
+                                    readOnly = !canEditCoScholastic,
                                     label = { Text("Days Present") },
                                     singleLine = true,
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -344,6 +347,7 @@ fun CoScholasticScreen(
                                             workingDaysText.toIntOrNull() ?: 0
                                         )
                                     },
+                                    readOnly = !canEditCoScholastic,
                                     label = { Text("Working Days") },
                                     singleLine = true,
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -366,6 +370,7 @@ fun CoScholasticScreen(
                             OutlinedTextField(
                                 value = remarks,
                                 onValueChange = { remarks = it },
+                                readOnly = !canEditCoScholastic,
                                 label = { Text("Class Teacher's Remarks") },
                                 maxLines = 3,
                                 modifier = Modifier.fillMaxWidth()
@@ -378,56 +383,65 @@ fun CoScholasticScreen(
                                 OutlinedTextField(
                                     value = promotedTo,
                                     onValueChange = { promotedTo = it },
+                                    readOnly = !canEditCoScholastic,
                                     label = { Text("Promoted to Class") },
                                     singleLine = true,
                                     modifier = Modifier.weight(1f)
                                 )
-                                TextButton(
-                                    onClick = {
-                                        promotedTo = SchoolClass.fromName(student.className).nextClassName()
+                                if (canEditCoScholastic) {
+                                    TextButton(
+                                        onClick = {
+                                            promotedTo = DefaultSchoolTemplate.suggestNextClassName(
+                                                student.className,
+                                                uiState.activeSchoolClassNames
+                                            )
+                                        }
+                                    ) {
+                                        Text("Suggest")
                                     }
-                                ) {
-                                    Text("Suggest")
                                 }
                             }
 
                             OutlinedTextField(
                                 value = reportDate,
                                 onValueChange = { reportDate = it },
+                                readOnly = !canEditCoScholastic,
                                 label = { Text("Date (dd/mm/yy, e.g. 25/03/27)") },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
 
-                            Button(
-                                onClick = {
-                                    val p = daysPresentText.toIntOrNull() ?: 0
-                                    val w = workingDaysText.toIntOrNull() ?: 0
-                                    val err = ReportCalculations.validateAttendance(p, w)
-                                    if (err != null) {
-                                        attendanceError = err
-                                    } else {
-                                        viewModel.saveTermInfo(
-                                            TermInfoEntity(
-                                                studentId = student.id,
-                                                termNo = selectedTerm,
-                                                daysPresent = p,
-                                                workingDays = w,
-                                                remarks = remarks.trim(),
-                                                promotedTo = promotedTo.trim(),
-                                                reportDate = reportDate.trim()
+                            if (canEditCoScholastic) {
+                                Button(
+                                    onClick = {
+                                        val p = daysPresentText.toIntOrNull() ?: 0
+                                        val w = workingDaysText.toIntOrNull() ?: 0
+                                        val err = ReportCalculations.validateAttendance(p, w)
+                                        if (err != null) {
+                                            attendanceError = err
+                                        } else {
+                                            viewModel.saveTermInfo(
+                                                TermInfoEntity(
+                                                    studentId = student.id,
+                                                    termNo = selectedTerm,
+                                                    daysPresent = p,
+                                                    workingDays = w,
+                                                    remarks = remarks.trim(),
+                                                    promotedTo = promotedTo.trim(),
+                                                    reportDate = reportDate.trim()
+                                                )
                                             )
-                                        )
-                                    }
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .testTag("save_term_info_button")
-                            ) {
-                                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Save Term-$selectedTerm Details")
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .testTag("save_term_info_button")
+                                ) {
+                                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Save Term-$selectedTerm Details")
+                                }
                             }
                         }
                     }

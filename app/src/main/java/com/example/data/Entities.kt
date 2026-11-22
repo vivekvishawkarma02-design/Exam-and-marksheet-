@@ -4,25 +4,78 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
-import com.example.domain.SchoolClass
 
+@Entity(tableName = "schools")
+data class SchoolEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val address: String = "",
+    val mobile: String = "",
+    val email: String = "",
+    val logoBase64: String = "",
+    val active: Boolean = true
+)
+
+@Entity(
+    tableName = "class_groups",
+    foreignKeys = [
+        ForeignKey(
+            entity = SchoolEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["schoolId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index(value = ["schoolId", "sortOrder"])
+    ]
+)
+data class ClassGroupEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val schoolId: Long,
+    val name: String,
+    val shortLabel: String,
+    val sortOrder: Int,
+    val templateKey: String = ""
+)
+
+@Entity(
+    tableName = "school_classes",
+    foreignKeys = [
+        ForeignKey(
+            entity = SchoolEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["schoolId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = ClassGroupEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["classGroupId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index(value = ["schoolId", "sortOrder"]),
+        Index(value = ["schoolId", "name"], unique = true),
+        Index(value = ["classGroupId"])
+    ]
+)
+data class SchoolClassEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val schoolId: Long,
+    val classGroupId: Long,
+    val name: String,
+    val sortOrder: Int
+)
+
+/**
+ * Global application settings only (session, pass percent, report display flags, backup timestamp).
+ * Per-school name, address, mobile, email, logo, and classes live in `schools` and `school_classes`.
+ */
 @Entity(tableName = "school_settings")
 data class SchoolSettingsEntity(
     @PrimaryKey val id: Int = 1,
-    val cpsName: String = "C.P.S. SCHOOL",
-    val cpsAddress: String = "Harikaranpur Bijaura Ghazipur (U.P.)",
-    val cpsMobile: String = "",
-    val cpsEmail: String = "",
-    val cpsLogoBase64: String = "",
-    val cpsLogoCleared: Boolean = false,
-    val cpiName: String = "C.P.I. SCHOOL",
-    val cpiAddress: String = "Harikaranpur Bijaura Ghazipur (U.P.)",
-    val cpiMobile: String = "",
-    val cpiEmail: String = "",
-    val cpiLogoBase64: String = "",
-    val cpiLogoCleared: Boolean = false,
-    val useSameLogoForBoth: Boolean = false,
-    val classIdentityMapCsv: String = SchoolClass.serializeIdentityMap(SchoolClass.defaultClassIdentityMap()),
     val currentSession: String = "2026-2027",
     val sessionsCsv: String = "2026-2027",
     val passPercent: Int = 33,
@@ -40,24 +93,53 @@ data class SchoolSettingsEntity(
 
 @Entity(
     tableName = "subjects",
-    indices = [Index(value = ["classGroup", "sortOrder"])]
+    foreignKeys = [
+        ForeignKey(
+            entity = SchoolEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["schoolId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = ClassGroupEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["classGroupId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index(value = ["classGroupId", "sortOrder"]),
+        Index(value = ["schoolId"])
+    ]
 )
 data class SubjectEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val classGroup: Int,
+    val schoolId: Long,
+    val classGroupId: Long,
     val name: String,
     val sortOrder: Int
 )
 
 @Entity(
     tableName = "students",
+    foreignKeys = [
+        ForeignKey(
+            entity = SchoolEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["schoolId"],
+            onDelete = ForeignKey.RESTRICT
+        )
+    ],
     indices = [
-        Index(value = ["session", "admNo"], unique = true),
-        Index(value = ["session", "className", "section", "rollNo"])
+        Index(value = ["schoolId", "session", "admNo"], unique = true),
+        Index(value = ["schoolId", "session", "className", "section", "rollNo"]),
+        Index(value = ["classId"])
     ]
 )
 data class StudentEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val schoolId: Long,
+    val classId: Long = 0L,
     val session: String,
     val admNo: String,
     val name: String,

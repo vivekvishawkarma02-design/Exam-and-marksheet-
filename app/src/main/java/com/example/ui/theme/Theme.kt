@@ -73,7 +73,7 @@ val AppShapes = Shapes(
 )
 
 @Composable
-fun CpiReportCardTheme(
+fun SchoolAppTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {

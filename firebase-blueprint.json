@@ -1,0 +1,299 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Private profile and organisation memberships for a signed-in user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID matching the document ID." },
+        "name": { "type": "string", "description": "Display name of the user." },
+        "email": { "type": "string", "description": "Email address of the user." },
+        "memberships": { "type": "array", "description": "Bounded list (<= 30) of organisations the user belongs to." },
+        "pendingRequests": { "type": "array", "description": "Bounded list (<= 20) of pending join requests submitted by the user." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["uid", "name", "email", "memberships", "pendingRequests", "createdAt", "updatedAt"]
+    },
+    "OrgCodeReservation": {
+      "title": "OrgCodeReservation",
+      "description": "Exact-lookup reservation mapping a unique lowercase organisation code to its orgId and public display name only.",
+      "type": "object",
+      "properties": {
+        "orgId": { "type": "string" },
+        "name": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["orgId", "name", "ownerUid", "createdAt"]
+    },
+    "Organisation": {
+      "title": "Organisation",
+      "description": "Multi-tenant organisation holding one or more schools, members, settings, and audit logs.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "contactMobile": { "type": "string" },
+        "contactEmail": { "type": "string" },
+        "settings": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "code", "ownerUid", "contactMobile", "contactEmail", "settings", "createdAt", "updatedAt"]
+    },
+    "OrgMember": {
+      "title": "OrgMember",
+      "description": "Member record with role, allowed schools, 8-module permissions, teacher profile fields, and activity timestamp.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "mobile": { "type": "string" },
+        "role": { "type": "string", "enum": ["OWNER", "ADMIN", "OFFICE_OPERATOR", "TEACHER", "OTHER"] },
+        "status": { "type": "string", "enum": ["active", "removed"] },
+        "allSchools": { "type": "boolean" },
+        "schools": { "type": "array" },
+        "permissions": { "type": "object" },
+        "teacherProfileCompleted": { "type": "boolean" },
+        "teacherPhotoBase64": { "type": "string" },
+        "requestedSubjects": { "type": "array" },
+        "requestedClasses": { "type": "array" },
+        "assignedClassSubjects": { "type": "array" },
+        "inviteCodeUsed": { "type": "string" },
+        "lastActiveAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email", "mobile", "role", "status", "allSchools", "schools", "permissions", "teacherProfileCompleted", "teacherPhotoBase64", "requestedSubjects", "requestedClasses", "assignedClassSubjects", "lastActiveAt", "createdAt", "updatedAt"]
+    },
+    "JoinRequest": {
+      "title": "JoinRequest",
+      "description": "Pending membership request created by a signed-in user knowing only the organisation code.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "message": { "type": "string" },
+        "requestedRole": { "type": "string", "enum": ["TEACHER", "OFFICE_OPERATOR", "OTHER"] },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email", "message", "requestedRole", "status", "createdAt", "updatedAt"]
+    },
+    "InviteCode": {
+      "title": "InviteCode",
+      "description": "One-time expiring invite code with preset role and access created by an organisation admin.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "orgId": { "type": "string" },
+        "orgName": { "type": "string" },
+        "presetRole": { "type": "string", "enum": ["ADMIN", "OFFICE_OPERATOR", "TEACHER", "OTHER"] },
+        "allSchools": { "type": "boolean" },
+        "schools": { "type": "array" },
+        "permissions": { "type": "object" },
+        "createdByUid": { "type": "string" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "usedByUid": { "type": "string" },
+        "usedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "orgId", "orgName", "presetRole", "allSchools", "schools", "permissions", "createdByUid", "expiresAt", "usedByUid", "createdAt"]
+    },
+    "School": {
+      "title": "School",
+      "description": "School profile inside an organisation including logo (<150 KB), class groups, subjects, and classes.",
+      "type": "object",
+      "properties": {
+        "schoolKey": { "type": "string" },
+        "name": { "type": "string" },
+        "address": { "type": "string" },
+        "mobile": { "type": "string" },
+        "email": { "type": "string" },
+        "logoBase64": { "type": "string" },
+        "active": { "type": "boolean" },
+        "classGroups": { "type": "array" },
+        "classes": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolKey", "name", "address", "mobile", "email", "logoBase64", "active", "classGroups", "classes", "createdAt", "updatedAt"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Student record scoped to a single school within an organisation.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "classId": { "type": "string" },
+        "session": { "type": "string" },
+        "admNo": { "type": "string" },
+        "name": { "type": "string" },
+        "fatherName": { "type": "string" },
+        "motherName": { "type": "string" },
+        "dob": { "type": "string" },
+        "mobile": { "type": "string" },
+        "address": { "type": "string" },
+        "photoBase64": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "rollNo": { "type": "integer" },
+        "sample": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "classId", "session", "admNo", "name", "fatherName", "motherName", "dob", "mobile", "address", "photoBase64", "className", "section", "rollNo", "sample", "createdAt", "updatedAt"]
+    },
+    "Mark": {
+      "title": "Mark",
+      "description": "Subject exam component mark for a student within a school.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "className": { "type": "string" },
+        "subjectName": { "type": "string" },
+        "componentKey": { "type": "string" },
+        "rawValue": { "type": "string" },
+        "updatedByUid": { "type": "string" },
+        "updatedByName": { "type": "string" },
+        "clientEditedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentId", "schoolId", "className", "subjectName", "componentKey", "rawValue", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "MarkEditLog": {
+      "title": "MarkEditLog",
+      "description": "Append-only edit history entry per mark change recording who changed what, when, old value, and new value.",
+      "type": "object",
+      "properties": {
+        "markDocId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "className": { "type": "string" },
+        "subjectName": { "type": "string" },
+        "componentKey": { "type": "string" },
+        "oldValue": { "type": "string" },
+        "newValue": { "type": "string" },
+        "editorUid": { "type": "string" },
+        "editorName": { "type": "string" },
+        "clientEditedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["markDocId", "studentId", "studentName", "schoolId", "className", "subjectName", "componentKey", "oldValue", "newValue", "editorUid", "editorName", "clientEditedAtMs", "createdAt"]
+    },
+    "CoScholastic": {
+      "title": "CoScholastic",
+      "description": "Co-scholastic area grade for a student and term.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "termNo": { "type": "integer" },
+        "areaCode": { "type": "string" },
+        "grade": { "type": "string" },
+        "updatedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentId", "schoolId", "termNo", "areaCode", "grade", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "TermInfo": {
+      "title": "TermInfo",
+      "description": "Attendance, remarks, promotion, and report date per student and term.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "termNo": { "type": "integer" },
+        "daysPresent": { "type": "integer" },
+        "workingDays": { "type": "integer" },
+        "remarks": { "type": "string" },
+        "promotedTo": { "type": "string" },
+        "reportDate": { "type": "string" },
+        "updatedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentId", "schoolId", "termNo", "daysPresent", "workingDays", "remarks", "promotedTo", "reportDate", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "AuditLogEntry": {
+      "title": "AuditLogEntry",
+      "description": "Append-only audit trail recording who changed marks, students, members, or access and when.",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string" },
+        "actorName": { "type": "string" },
+        "action": { "type": "string" },
+        "targetType": { "type": "string" },
+        "targetId": { "type": "string" },
+        "summary": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorUid", "actorName", "action", "targetType", "targetId", "summary", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Private user account and membership index."
+    },
+    "/orgCodes/{code}": {
+      "schema": { "$ref": "#/entities/OrgCodeReservation" },
+      "description": "Exact-code public lookup returning only orgId and organisation name."
+    },
+    "/organisations/{orgId}": {
+      "schema": { "$ref": "#/entities/Organisation" },
+      "description": "Multi-tenant organisation root document."
+    },
+    "/organisations/{orgId}/members/{memberUid}": {
+      "schema": { "$ref": "#/entities/OrgMember" },
+      "description": "Organisation member access control record."
+    },
+    "/organisations/{orgId}/joinRequests/{reqUid}": {
+      "schema": { "$ref": "#/entities/JoinRequest" },
+      "description": "Pending membership requests awaiting admin approval."
+    },
+    "/organisations/{orgId}/inviteCodes/{inviteCode}": {
+      "schema": { "$ref": "#/entities/InviteCode" },
+      "description": "One-time expiring invite codes with preset roles."
+    },
+    "/organisations/{orgId}/schools/{schoolId}": {
+      "schema": { "$ref": "#/entities/School" },
+      "description": "Schools belonging to an organisation."
+    },
+    "/organisations/{orgId}/schools/{schoolId}/students/{studentId}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Students enrolled in a school."
+    },
+    "/organisations/{orgId}/schools/{schoolId}/marks/{markId}": {
+      "schema": { "$ref": "#/entities/Mark" },
+      "description": "Subject exam component marks."
+    },
+    "/organisations/{orgId}/schools/{schoolId}/markEditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/MarkEditLog" },
+      "description": "Append-only per-mark edit history readable by admins and marks viewers."
+    },
+    "/organisations/{orgId}/schools/{schoolId}/coScholastic/{coId}": {
+      "schema": { "$ref": "#/entities/CoScholastic" },
+      "description": "Co-scholastic area grades."
+    },
+    "/organisations/{orgId}/schools/{schoolId}/termInfo/{termInfoId}": {
+      "schema": { "$ref": "#/entities/TermInfo" },
+      "description": "Attendance and term remarks."
+    },
+    "/organisations/{orgId}/auditLog/{entryId}": {
+      "schema": { "$ref": "#/entities/AuditLogEntry" },
+      "description": "Append-only organisation audit log viewable by admins."
+    }
+  }
+}

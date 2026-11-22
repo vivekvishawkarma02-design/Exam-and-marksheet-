@@ -1,5 +1,5 @@
 /**
- * Pure calculation & validation logic for CPI-CPS Report Card.
+ * Pure calculation & validation logic for School Report Card.
  * Unified 10 / 30 / 60 exam structure for both Term-I and Term-II:
  * - Internal Assessment (IA): max 10
  * - Unit Test (UT1 / UT2): max 30
@@ -14,8 +14,6 @@ export const MAX_MARKS = {
   TERM_TOTAL: 100,
   ANNUAL_TOTAL: 200,
 } as const;
-
-export type SchoolIdentityCode = 'CPS' | 'CPI';
 
 export type MarkComponentKey =
   | 'T1_IA'
@@ -474,33 +472,6 @@ export function calculateAttendance(
   };
 }
 
-/**
- * Resolves school identity (CPS for Nursery-5th, CPI for 6th-8th) with optional custom mapping.
- */
-export function resolveSchoolIdentityForClass(
-  className: string,
-  customMap?: Readonly<Record<string, SchoolIdentityCode>>
-): SchoolIdentityCode {
-  const normalized = className.trim();
-  if (customMap && customMap[normalized]) {
-    return customMap[normalized];
-  }
-  const upper = normalized.toUpperCase();
-  if (
-    upper === '6TH' ||
-    upper === '7TH' ||
-    upper === '8TH' ||
-    upper === 'VI' ||
-    upper === 'VII' ||
-    upper === 'VIII' ||
-    upper === '6' ||
-    upper === '7' ||
-    upper === '8'
-  ) {
-    return 'CPI';
-  }
-  return 'CPS';
-}
 
 /**
  * Competition class ranking (1, 1, 3) by overallTotal, excluding pending students.

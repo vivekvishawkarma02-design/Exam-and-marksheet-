@@ -50,8 +50,8 @@ import com.example.util.BackupAndCsvManager
 
 @Composable
 fun MarksCsvImportController(
-    uiState: CpiUiState,
-    viewModel: CpiViewModel,
+    uiState: SchoolUiState,
+    viewModel: SchoolViewModel,
     showSetupDialog: Boolean,
     onDismissSetupDialog: () -> Unit
 ) {
@@ -74,8 +74,9 @@ fun MarksCsvImportController(
         }
     }
 
+    val activeClass = uiState.effectiveClassName
     val suggestedTemplateFileName =
-        "Marks_Template_Class_${uiState.filter.className}_${uiState.filter.section}_${uiState.filter.session}.csv"
+        "Marks_Template_Class_${activeClass}_${uiState.filter.section}_${uiState.filter.session}.csv"
 
     if (showSetupDialog && pendingPreview == null) {
         AlertDialog(
@@ -132,9 +133,9 @@ fun MarksCsvImportController(
                     }
 
                     Text(
-                        text = "• Matches students by Adm No. (or Class + Section + Roll No.).\n" +
+                        text = "• Matches students in ${uiState.activeSchool.name} by Adm No. (or Class + Section + Roll No.).\n" +
                             "• Enter AB for absent; blank cells keep existing marks unchanged.\n" +
-                            "• Download the pre-filled template for Class ${uiState.filter.className}-${uiState.filter.section} to edit in Excel or Google Sheets.",
+                            "• Download the pre-filled template for Class $activeClass-${uiState.filter.section} to edit in Excel or Google Sheets.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -174,7 +175,7 @@ fun MarksCsvImportController(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Save CSV Template (${uiState.filter.className}-${uiState.filter.section})")
+                        Text("Save CSV Template ($activeClass-${uiState.filter.section})")
                     }
                 }
             },

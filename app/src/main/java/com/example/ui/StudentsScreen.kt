@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.UploadFile
@@ -62,9 +63,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.SchoolClassEntity
 import com.example.data.StudentEntity
+import com.example.domain.AppModule
 import com.example.domain.ReportCalculations
-import com.example.domain.SchoolClass
 import com.example.util.ImageUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -72,8 +74,8 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun StudentsScreen(
-    uiState: CpiUiState,
-    viewModel: CpiViewModel,
+    uiState: SchoolUiState,
+    viewModel: SchoolViewModel,
     onOpenCoScholastic: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -81,6 +83,10 @@ fun StudentsScreen(
     var editingStudent by remember { mutableStateOf<StudentEntity?>(null) }
     var showAddEditDialog by remember { mutableStateOf(false) }
     var deletingStudent by remember { mutableStateOf<StudentEntity?>(null) }
+    var historyStudent by remember { mutableStateOf<StudentEntity?>(null) }
+    val canEditStudents = uiState.canEdit(AppModule.STUDENTS)
+    val canViewCoScholastic = uiState.canView(AppModule.CO_SCHOLASTIC)
+    val canViewMarksHistory = uiState.isAdmin
 
     val csvLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -90,11 +96,20 @@ fun StudentsScreen(
         }
     }
 
-    val perfMap = remember(uiState.allStudents, uiState.allMarks, uiState.filter, uiState.subjects) {
+    val activeClassName = uiState.effectiveClassName
+    val perfMap = remember(
+        uiState.activeSchool.id,
+        uiState.allStudents,
+        uiState.allMarks,
+        uiState.filter,
+        uiState.subjects,
+        activeClassName
+    ) {
         uiState.performanceWithRanksForClass(
-            uiState.filter.session,
-            uiState.filter.className,
-            uiState.filter.section
+            schoolId = uiState.activeSchool.id,
+            session = uiState.filter.session,
+            className = activeClassName,
+            section = uiState.filter.section
         )
     }
 
@@ -138,23 +153,27 @@ fun StudentsScreen(
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                text = "${uiState.filteredStudents.size} in Class ${uiState.filter.className}-${uiState.filter.section}  •  ${uiState.sessionStudents.size} total",
+                                text = "${uiState.filteredStudents.size} in Class $activeClassName-${uiState.filter.section}  •  ${uiState.sessionStudents.size} in ${uiState.activeSchool.name}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
-                        OutlinedButton(
-                            onClick = { csvLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain", "*/*")) },
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                            modifier = Modifier.testTag("import_csv_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.UploadFile,
-                                contentDescription = "Import CSV",
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("CSV", style = MaterialTheme.typography.labelLarge)
+                        if (canEditStudents) {
+                            OutlinedButton(
+                                onClick = { csvLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain", "*/*")) },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                modifier = Modifier.testTag("import_csv_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.UploadFile,
+                                    contentDescription = "Import CSV",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("CSV", style = MaterialTheme.typography.labelLarge)
+                            }
                         }
                     }
 
@@ -195,13 +214,15 @@ fun StudentsScreen(
                 ) {
                     EmptyStatePanel(
                         icon = Icons.Default.Groups,
-                        title = if (searchQuery.isNotEmpty()) "No matching students" else "No students in Class ${uiState.filter.className}-${uiState.filter.section}",
+                        title = if (searchQuery.isNotEmpty()) "No matching students" else "No students in Class $activeClassName-${uiState.filter.section}",
                         message = if (searchQuery.isNotEmpty())
                             "Try clearing the search text or switching class/section."
+                        else if (canEditStudents)
+                            "Tap the + button to add a student, or import a class roster from CSV."
                         else
-                            "Tap the + button to add a student, or import a class roster from CSV.",
-                        actionLabel = if (searchQuery.isEmpty()) "Add First Student" else null,
-                        onAction = if (searchQuery.isEmpty()) {
+                            "No students found in this class and section (view-only access).",
+                        actionLabel = if (searchQuery.isEmpty() && canEditStudents) "Add First Student" else null,
+                        onAction = if (searchQuery.isEmpty() && canEditStudents) {
                             {
                                 editingStudent = null
                                 showAddEditDialog = true
@@ -223,6 +244,10 @@ fun StudentsScreen(
                                 "${ReportCalculations.formatPercent(it.overallPercentage)}% (${it.overallGrade})"
                             },
                             resultStatus = perf?.overallResult,
+                            canEdit = canEditStudents,
+                            canViewCoScholastic = canViewCoScholastic,
+                            canViewMarksHistory = canViewMarksHistory,
+                            onMarksHistory = { historyStudent = student },
                             onEdit = {
                                 editingStudent = student
                                 showAddEditDialog = true
@@ -238,27 +263,31 @@ fun StudentsScreen(
             }
         }
 
-        FloatingActionButton(
-            onClick = {
-                editingStudent = null
-                showAddEditDialog = true
-            },
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp)
-                .testTag("add_student_fab")
-        ) {
-            Icon(Icons.Default.Add, contentDescription = "Add Student")
+        if (canEditStudents) {
+            FloatingActionButton(
+                onClick = {
+                    editingStudent = null
+                    showAddEditDialog = true
+                },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+                    .testTag("add_student_fab")
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Add Student")
+            }
         }
     }
 
     if (showAddEditDialog) {
         StudentFormDialog(
             existing = editingStudent,
+            schoolId = uiState.activeSchool.id,
+            schoolClasses = uiState.activeSchoolClasses,
             defaultSession = uiState.filter.session,
-            defaultClass = uiState.filter.className,
+            defaultClass = activeClassName,
             defaultSection = uiState.filter.section,
             sessions = uiState.settings.sessionsList(),
             viewModel = viewModel,
@@ -278,6 +307,14 @@ fun StudentsScreen(
             onDismiss = { deletingStudent = null }
         )
     }
+
+    historyStudent?.let { st ->
+        StudentMarksHistoryDialog(
+            title = "${st.name} — Marks History",
+            logs = uiState.markEditLogsForStudent(st.id),
+            onDismiss = { historyStudent = null }
+        )
+    }
 }
 
 @Composable
@@ -285,6 +322,10 @@ private fun StudentCard(
     student: StudentEntity,
     percentText: String?,
     resultStatus: com.example.domain.ResultStatus?,
+    canEdit: Boolean,
+    canViewCoScholastic: Boolean,
+    canViewMarksHistory: Boolean,
+    onMarksHistory: () -> Unit,
     onEdit: () -> Unit,
     onCoScholastic: () -> Unit,
     onDelete: () -> Unit
@@ -389,26 +430,42 @@ private fun StudentCard(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    IconButton(onClick = onCoScholastic) {
-                        Icon(
-                            imageVector = Icons.Default.FactCheck,
-                            contentDescription = "Co-Scholastic and Attendance",
-                            tint = MaterialTheme.colorScheme.secondary
-                        )
+                    if (canViewMarksHistory) {
+                        IconButton(
+                            onClick = onMarksHistory,
+                            modifier = Modifier.testTag("student_marks_history_${student.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.History,
+                                contentDescription = "Marks edit history",
+                                tint = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
                     }
-                    IconButton(onClick = onEdit) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Edit student",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                    if (canViewCoScholastic) {
+                        IconButton(onClick = onCoScholastic) {
+                            Icon(
+                                imageVector = Icons.Default.FactCheck,
+                                contentDescription = "Co-Scholastic and Attendance",
+                                tint = MaterialTheme.colorScheme.secondary
+                            )
+                        }
                     }
-                    IconButton(onClick = onDelete) {
-                        Icon(
-                            imageVector = Icons.Default.DeleteOutline,
-                            contentDescription = "Delete student",
-                            tint = MaterialTheme.colorScheme.error
-                        )
+                    if (canEdit) {
+                        IconButton(onClick = onEdit) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit student",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        IconButton(onClick = onDelete) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteOutline,
+                                contentDescription = "Delete student",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
                     }
                 }
             }
@@ -419,18 +476,24 @@ private fun StudentCard(
 @Composable
 private fun StudentFormDialog(
     existing: StudentEntity?,
+    schoolId: Long,
+    schoolClasses: List<SchoolClassEntity>,
     defaultSession: String,
     defaultClass: String,
     defaultSection: String,
     sessions: List<String>,
-    viewModel: CpiViewModel,
+    viewModel: SchoolViewModel,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    val availableClassNames = remember(schoolClasses, defaultClass) {
+        schoolClasses.map { it.name }.ifEmpty { listOf(defaultClass.ifBlank { "1st" }) }
+    }
+
     var session by remember { mutableStateOf(existing?.session ?: defaultSession) }
-    var className by remember { mutableStateOf(existing?.className ?: defaultClass) }
+    var className by remember { mutableStateOf(existing?.className ?: defaultClass.ifBlank { availableClassNames.first() }) }
     var section by remember { mutableStateOf(existing?.section ?: defaultSection) }
     var rollNoText by remember { mutableStateOf(existing?.rollNo?.toString() ?: "") }
     var admNo by remember { mutableStateOf(existing?.admNo ?: "") }
@@ -444,9 +507,9 @@ private fun StudentFormDialog(
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     // Auto-suggest next roll number when adding a new student
-    LaunchedEffect(existing, session, className, section) {
+    LaunchedEffect(existing, schoolId, session, className, section) {
         if (existing == null) {
-            val suggested = viewModel.suggestRollNo(session, className, section)
+            val suggested = viewModel.suggestRollNo(schoolId, session, className, section)
             rollNoText = suggested.toString()
         }
     }
@@ -457,7 +520,7 @@ private fun StudentFormDialog(
         if (uri != null) {
             scope.launch {
                 val encoded = withContext(Dispatchers.IO) {
-                    ImageUtils.encodeUriToBase64Under150Kb(context, uri)
+                    ImageUtils.encodeUriToBase64Under200Kb(context, uri)
                 }
                 if (encoded != null) {
                     photoBase64 = encoded
@@ -503,7 +566,7 @@ private fun StudentFormDialog(
                         ) {
                             Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (photoBase64.isEmpty()) "Pick Photo (<150 KB)" else "Change Photo")
+                            Text(if (photoBase64.isEmpty()) "Pick Photo (<200 KB)" else "Change Photo")
                         }
                         if (photoBase64.isNotEmpty()) {
                             TextButton(onClick = { photoBase64 = "" }) {
@@ -524,7 +587,7 @@ private fun StudentFormDialog(
                     CompactDropdownSelector(
                         label = "Class",
                         selectedValue = className,
-                        options = SchoolClass.entries.map { it.displayName },
+                        options = availableClassNames,
                         onSelect = { className = it },
                         modifier = Modifier.weight(1f)
                     )
@@ -630,8 +693,13 @@ private fun StudentFormDialog(
                         roll == null || roll <= 0 -> errorMessage = "Enter a valid positive Roll No."
                         else -> {
                             errorMessage = null
+                            val matchedClassId = schoolClasses.firstOrNull {
+                                it.name.equals(className, ignoreCase = true)
+                            }?.id ?: existing?.classId ?: 0L
                             val entity = StudentEntity(
                                 id = existing?.id ?: 0L,
+                                schoolId = existing?.schoolId ?: schoolId,
+                                classId = matchedClassId,
                                 session = session,
                                 admNo = admNo.trim(),
                                 name = name.trim(),

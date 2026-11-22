@@ -1,0 +1,848 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // GLOBAL PRIMITIVES & STATIC VALIDATORS
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidOrgCode(code) {
+      return code is string && code.size() >= 4 && code.size() <= 30 && code.matches('^[a-z0-9][a-z0-9\\-]{2,28}[a-z0-9]$');
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isValidAccessLevel(lvl) {
+      return lvl is string && lvl in ['none', 'view', 'edit'];
+    }
+
+    function isValidPermissionsMap(perms) {
+      return perms is map &&
+        perms.size() == 8 &&
+        perms.keys().hasAll(['students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members']) &&
+        perms.students in ['none', 'view', 'edit'] &&
+        perms.marks in ['none', 'view', 'edit'] &&
+        perms.coScholastic in ['none', 'view', 'edit'] &&
+        perms.reports in ['none', 'view', 'edit'] &&
+        perms.timetable in ['none', 'view', 'edit'] &&
+        perms.teachers in ['none', 'view', 'edit'] &&
+        perms.settings in ['none', 'view', 'edit'] &&
+        perms.members in ['none', 'view', 'edit'];
+    }
+
+    function isValidStringList(listVal, maxLen) {
+      return listVal is list && listVal.size() <= maxLen &&
+        (listVal.size() == 0 || listVal[0] is string);
+    }
+
+    function isValidSettingsMap(s) {
+      return s is map &&
+        s.size() == 6 &&
+        s.keys().hasAll(['currentSession', 'sessionsCsv', 'passPercent', 'showPhotoAndAdmOnAnnual', 'showClassRank', 'lastBackupEpochMs']) &&
+        s.currentSession is string && s.currentSession.size() >= 4 && s.currentSession.size() <= 30 &&
+        s.sessionsCsv is string && s.sessionsCsv.size() >= 4 && s.sessionsCsv.size() <= 500 &&
+        s.passPercent is int && s.passPercent >= 1 && s.passPercent <= 100 &&
+        s.showPhotoAndAdmOnAnnual is bool &&
+        s.showClassRank is bool &&
+        s.lastBackupEpochMs is int && s.lastBackupEpochMs >= 0;
+    }
+
+    // =========================================================================
+    // RELATIONAL / RBAC HELPERS (Zero-trust, evaluated server-side)
+    // =========================================================================
+    function memberPath(orgId, uid) {
+      return /databases/$(database)/documents/organisations/$(orgId)/members/$(uid);
+    }
+
+    function orgPath(orgId) {
+      return /databases/$(database)/documents/organisations/$(orgId);
+    }
+
+    function memberExists(orgId) {
+      return isSignedIn() && exists(memberPath(orgId, request.auth.uid));
+    }
+
+    function memberData(orgId) {
+      return get(memberPath(orgId, request.auth.uid)).data;
+    }
+
+    function isActiveMember(orgId) {
+      return memberExists(orgId) && memberData(orgId).status == 'active';
+    }
+
+    function isOrgOwner(orgId) {
+      return memberExists(orgId) && memberData(orgId).status == 'active' && memberData(orgId).role == 'OWNER';
+    }
+
+    function isOrgAdmin(orgId) {
+      return memberExists(orgId) && memberData(orgId).status == 'active' && memberData(orgId).role in ['OWNER', 'ADMIN'];
+    }
+
+    function hasModuleView(orgId, moduleKey) {
+      let m = memberData(orgId);
+      return memberExists(orgId) && m.status == 'active' && (
+        m.role in ['OWNER', 'ADMIN'] || m.permissions[moduleKey] in ['view', 'edit']
+      );
+    }
+
+    function hasModuleEdit(orgId, moduleKey) {
+      let m = memberData(orgId);
+      return memberExists(orgId) && m.status == 'active' && (
+        m.role in ['OWNER', 'ADMIN'] || m.permissions[moduleKey] == 'edit'
+      );
+    }
+
+    function canAccessSchool(orgId, schoolId) {
+      let m = memberData(orgId);
+      return memberExists(orgId) && m.status == 'active' && (
+        m.role in ['OWNER', 'ADMIN'] || m.allSchools == true || schoolId in m.schools
+      );
+    }
+
+    function canEditMarkScope(orgId, schoolId, className, subjectName) {
+      let m = memberData(orgId);
+      return memberExists(orgId) && m.status == 'active' &&
+        (m.role in ['OWNER', 'ADMIN'] || m.allSchools == true || schoolId in m.schools) &&
+        (m.role in ['OWNER', 'ADMIN'] || m.permissions.marks == 'edit') && (
+          m.role in ['OWNER', 'ADMIN'] ||
+          m.role != 'TEACHER' ||
+          m.assignedClassSubjects.size() == 0 ||
+          (schoolId + '|' + className + '|' + subjectName) in m.assignedClassSubjects
+        );
+    }
+
+    function canUpdateMember(orgId, memberUid) {
+      let inc = request.resource.data;
+      let ex = resource.data;
+      let diffKeys = inc.diff(ex).affectedKeys();
+      let isSelf = request.auth.uid == memberUid &&
+        ex.status == 'active' &&
+        inc.role == ex.role &&
+        inc.status == ex.status &&
+        inc.allSchools == ex.allSchools &&
+        inc.schools == ex.schools &&
+        inc.permissions == ex.permissions &&
+        inc.assignedClassSubjects == ex.assignedClassSubjects &&
+        diffKeys.hasOnly([
+          'name', 'mobile', 'teacherProfileCompleted', 'teacherPhotoBase64',
+          'requestedSubjects', 'requestedClasses', 'lastActiveAt', 'updatedAt'
+        ]);
+      let actor = memberData(orgId);
+      let actorActive = memberExists(orgId) && actor.status == 'active';
+      let actorAdmin = actorActive && actor.role in ['OWNER', 'ADMIN'];
+      let actorCanManage = actorAdmin || (actorActive && actor.permissions.members == 'edit');
+      let isAdminManage = actorCanManage &&
+        ex.role != 'OWNER' &&
+        inc.role != 'OWNER' &&
+        diffKeys.hasOnly([
+          'role', 'status', 'allSchools', 'schools', 'permissions',
+          'assignedClassSubjects', 'updatedAt'
+        ]);
+      let isOwnershipTransfer = actorActive && actor.role == 'OWNER' &&
+        inc.status == 'active' &&
+        diffKeys.hasOnly(['role', 'allSchools', 'permissions', 'updatedAt']) &&
+        getAfter(orgPath(orgId)).data.ownerUid != request.auth.uid && (
+          (memberUid == getAfter(orgPath(orgId)).data.ownerUid && inc.role == 'OWNER' && inc.allSchools == true) ||
+          (memberUid == request.auth.uid && ex.role == 'OWNER' && inc.role == 'ADMIN')
+        );
+      return isSelf || isAdminManage || isOwnershipTransfer;
+    }
+
+    // =========================================================================
+    // ENTITY VALIDATION BLUEPRINTS
+    // =========================================================================
+    function isValidUserAccount(data, uid) {
+      return data.keys().hasAll(['uid', 'name', 'email', 'memberships', 'pendingRequests', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'name', 'email', 'memberships', 'pendingRequests', 'createdAt', 'updatedAt']) &&
+        data.uid == uid &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.email is string && data.email.size() <= 160 &&
+        data.memberships is list && data.memberships.size() <= 30 &&
+        data.pendingRequests is list && data.pendingRequests.size() <= 20 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidOrgCodeReservation(data) {
+      return data.keys().hasAll(['orgId', 'name', 'ownerUid', 'createdAt']) &&
+        data.keys().hasOnly(['orgId', 'name', 'ownerUid', 'createdAt']) &&
+        isValidId(data.orgId) &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
+        data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidOrganisation(data) {
+      return data.keys().hasAll(['name', 'code', 'ownerUid', 'contactMobile', 'contactEmail', 'settings', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['name', 'code', 'ownerUid', 'contactMobile', 'contactEmail', 'settings', 'createdAt', 'updatedAt']) &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
+        isValidOrgCode(data.code) &&
+        data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+        data.contactMobile is string && data.contactMobile.size() <= 40 &&
+        data.contactEmail is string && data.contactEmail.size() <= 160 &&
+        isValidSettingsMap(data.settings) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidMember(data, memberUid) {
+      return data.keys().hasAll([
+          'uid', 'name', 'email', 'mobile', 'role', 'status',
+          'allSchools', 'schools', 'permissions',
+          'teacherProfileCompleted', 'teacherPhotoBase64',
+          'requestedSubjects', 'requestedClasses', 'assignedClassSubjects',
+          'lastActiveAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'name', 'email', 'mobile', 'role', 'status',
+          'allSchools', 'schools', 'permissions',
+          'teacherProfileCompleted', 'teacherPhotoBase64',
+          'requestedSubjects', 'requestedClasses', 'assignedClassSubjects',
+          'inviteCodeUsed', 'lastActiveAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.uid == memberUid &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.email is string && data.email.size() <= 160 &&
+        data.mobile is string && data.mobile.size() <= 40 &&
+        data.role in ['OWNER', 'ADMIN', 'OFFICE_OPERATOR', 'TEACHER', 'OTHER'] &&
+        data.status in ['active', 'removed'] &&
+        data.allSchools is bool &&
+        isValidStringList(data.schools, 50) &&
+        isValidPermissionsMap(data.permissions) &&
+        data.teacherProfileCompleted is bool &&
+        data.teacherPhotoBase64 is string && data.teacherPhotoBase64.size() <= 220000 &&
+        isValidStringList(data.requestedSubjects, 30) &&
+        isValidStringList(data.requestedClasses, 30) &&
+        isValidStringList(data.assignedClassSubjects, 100) &&
+        (!('inviteCodeUsed' in data) || (data.inviteCodeUsed is string && data.inviteCodeUsed.size() <= 32)) &&
+        isValidTimestamp(data.lastActiveAt) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidJoinRequest(data, reqUid) {
+      return data.keys().hasAll(['uid', 'name', 'email', 'message', 'requestedRole', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'name', 'email', 'message', 'requestedRole', 'status', 'reviewedByUid', 'createdAt', 'updatedAt']) &&
+        data.uid == reqUid &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.email is string && data.email.size() <= 160 &&
+        data.message is string && data.message.size() <= 400 &&
+        data.requestedRole in ['TEACHER', 'OFFICE_OPERATOR', 'OTHER'] &&
+        data.status in ['pending', 'approved', 'rejected'] &&
+        (!('reviewedByUid' in data) || (data.reviewedByUid is string && data.reviewedByUid.size() <= 128)) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidInviteCode(data, orgId, codeId) {
+      return data.keys().hasAll([
+          'code', 'orgId', 'orgName', 'presetRole', 'allSchools', 'schools',
+          'permissions', 'createdByUid', 'expiresAt', 'usedByUid', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'code', 'orgId', 'orgName', 'presetRole', 'allSchools', 'schools',
+          'permissions', 'createdByUid', 'expiresAt', 'usedByUid', 'usedAt', 'createdAt'
+        ]) &&
+        data.code == codeId &&
+        data.orgId == orgId &&
+        data.orgName is string && data.orgName.size() >= 2 && data.orgName.size() <= 120 &&
+        data.presetRole in ['ADMIN', 'OFFICE_OPERATOR', 'TEACHER', 'OTHER'] &&
+        data.allSchools is bool &&
+        isValidStringList(data.schools, 50) &&
+        isValidPermissionsMap(data.permissions) &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+        data.expiresAt is timestamp &&
+        data.usedByUid is string && data.usedByUid.size() <= 128 &&
+        (!('usedAt' in data) || isValidTimestamp(data.usedAt)) &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidSchool(data, schoolId) {
+      return data.keys().hasAll(['schoolKey', 'name', 'address', 'mobile', 'email', 'logoBase64', 'active', 'classGroups', 'classes', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['schoolKey', 'name', 'address', 'mobile', 'email', 'logoBase64', 'active', 'classGroups', 'classes', 'createdAt', 'updatedAt']) &&
+        data.schoolKey == schoolId &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.address is string && data.address.size() <= 300 &&
+        data.mobile is string && data.mobile.size() <= 40 &&
+        data.email is string && data.email.size() <= 160 &&
+        data.logoBase64 is string && data.logoBase64.size() <= 220000 &&
+        data.active is bool &&
+        data.classGroups is list && data.classGroups.size() <= 30 &&
+        data.classes is list && data.classes.size() <= 60 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStudent(data, schoolId) {
+      return data.keys().hasAll([
+          'schoolId', 'classId', 'session', 'admNo', 'name', 'fatherName', 'motherName',
+          'dob', 'mobile', 'address', 'photoBase64', 'className', 'section', 'rollNo',
+          'sample', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'classId', 'session', 'admNo', 'name', 'fatherName', 'motherName',
+          'dob', 'mobile', 'address', 'photoBase64', 'className', 'section', 'rollNo',
+          'sample', 'createdAt', 'updatedAt'
+        ]) &&
+        data.schoolId == schoolId &&
+        data.classId is string && data.classId.size() <= 128 &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.admNo is string && data.admNo.size() >= 1 && data.admNo.size() <= 60 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.fatherName is string && data.fatherName.size() <= 120 &&
+        data.motherName is string && data.motherName.size() <= 120 &&
+        data.dob is string && data.dob.size() <= 40 &&
+        data.mobile is string && data.mobile.size() <= 40 &&
+        data.address is string && data.address.size() <= 300 &&
+        data.photoBase64 is string && data.photoBase64.size() <= 220000 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+        data.rollNo is int && data.rollNo >= 1 && data.rollNo <= 9999 &&
+        data.sample is bool &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidMark(data, schoolId) {
+      return data.keys().hasAll(['studentId', 'schoolId', 'className', 'subjectName', 'componentKey', 'rawValue', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['studentId', 'schoolId', 'className', 'subjectName', 'componentKey', 'rawValue', 'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt']) &&
+        isValidId(data.studentId) &&
+        data.schoolId == schoolId &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 80 &&
+        data.componentKey in ['T1_IA', 'T1_UT', 'T1_EXAM', 'T2_IA', 'T2_UT', 'T2_EXAM'] &&
+        data.rawValue is string && data.rawValue.size() <= 16 &&
+        data.updatedByUid == request.auth.uid &&
+        (!('updatedByName' in data) || (data.updatedByName is string && data.updatedByName.size() <= 120)) &&
+        (!('clientEditedAtMs' in data) || (data.clientEditedAtMs is int && data.clientEditedAtMs >= 0)) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidMarkEditLog(data, schoolId) {
+      return data.keys().hasAll([
+          'markDocId', 'studentId', 'studentName', 'schoolId', 'className', 'subjectName',
+          'componentKey', 'oldValue', 'newValue', 'editorUid', 'editorName', 'clientEditedAtMs', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'markDocId', 'studentId', 'studentName', 'schoolId', 'className', 'subjectName',
+          'componentKey', 'oldValue', 'newValue', 'editorUid', 'editorName', 'clientEditedAtMs', 'createdAt'
+        ]) &&
+        isValidId(data.markDocId) &&
+        isValidId(data.studentId) &&
+        data.studentName is string && data.studentName.size() <= 120 &&
+        data.schoolId == schoolId &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 80 &&
+        data.componentKey in ['T1_IA', 'T1_UT', 'T1_EXAM', 'T2_IA', 'T2_UT', 'T2_EXAM'] &&
+        data.oldValue is string && data.oldValue.size() <= 16 &&
+        data.newValue is string && data.newValue.size() <= 16 &&
+        data.editorUid == request.auth.uid &&
+        data.editorName is string && data.editorName.size() >= 1 && data.editorName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidCoScholastic(data, schoolId) {
+      return data.keys().hasAll(['studentId', 'schoolId', 'termNo', 'areaCode', 'grade', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['studentId', 'schoolId', 'termNo', 'areaCode', 'grade', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.studentId) &&
+        data.schoolId == schoolId &&
+        data.termNo in [1, 2] &&
+        data.areaCode is string && data.areaCode.size() >= 1 && data.areaCode.size() <= 40 &&
+        data.grade is string && data.grade.size() <= 10 &&
+        data.updatedByUid == request.auth.uid &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidTermInfo(data, schoolId) {
+      return data.keys().hasAll(['studentId', 'schoolId', 'termNo', 'daysPresent', 'workingDays', 'remarks', 'promotedTo', 'reportDate', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['studentId', 'schoolId', 'termNo', 'daysPresent', 'workingDays', 'remarks', 'promotedTo', 'reportDate', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.studentId) &&
+        data.schoolId == schoolId &&
+        data.termNo in [1, 2] &&
+        data.daysPresent is int && data.daysPresent >= 0 && data.daysPresent <= 366 &&
+        data.workingDays is int && data.workingDays >= 0 && data.workingDays <= 366 &&
+        data.remarks is string && data.remarks.size() <= 400 &&
+        data.promotedTo is string && data.promotedTo.size() <= 60 &&
+        data.reportDate is string && data.reportDate.size() <= 40 &&
+        data.updatedByUid == request.auth.uid &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAuditEntry(data) {
+      return data.keys().hasAll(['actorUid', 'actorName', 'action', 'targetType', 'targetId', 'summary', 'createdAt']) &&
+        data.keys().hasOnly(['actorUid', 'actorName', 'action', 'targetType', 'targetId', 'summary', 'schoolId', 'createdAt']) &&
+        data.actorUid == request.auth.uid &&
+        data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
+        data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
+        data.targetType in ['mark', 'student', 'member', 'access', 'school', 'organisation', 'migration', 'invite'] &&
+        data.targetId is string && data.targetId.size() <= 128 &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 300 &&
+        (!('schoolId' in data) || (data.schoolId is string && data.schoolId.size() <= 128)) &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    // =========================================================================
+    // 1. PRIVATE USER ACCOUNT & MEMBERSHIPS INDEX
+    // =========================================================================
+    match /users/{uid} {
+      allow get: if isSignedIn() && request.auth.uid == uid;
+      allow list: if false;
+      allow create: if isSignedIn() &&
+        request.auth.uid == uid &&
+        isValidUserAccount(incoming(), uid);
+      allow update: if isSignedIn() &&
+        request.auth.uid == uid &&
+        isValidUserAccount(incoming(), uid) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'memberships', 'pendingRequests', 'updatedAt']);
+      allow delete: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    // =========================================================================
+    // 2. ORG CODE RESERVATION (Exact-lookup ONLY by code; NEVER listable)
+    // =========================================================================
+    match /orgCodes/{code} {
+      allow get: if isSignedIn() && isValidOrgCode(code);
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+        isValidOrgCode(code) &&
+        isValidOrgCodeReservation(incoming()) &&
+        incoming().ownerUid == request.auth.uid &&
+        existsAfter(orgPath(incoming().orgId)) &&
+        getAfter(orgPath(incoming().orgId)).data.ownerUid == request.auth.uid &&
+        getAfter(orgPath(incoming().orgId)).data.code == code;
+
+      allow update: if isSignedIn() &&
+        isValidOrgCode(code) &&
+        isValidOrgCodeReservation(incoming()) &&
+        existing().ownerUid == request.auth.uid &&
+        incoming().orgId == existing().orgId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'ownerUid']);
+
+      allow delete: if isSignedIn() &&
+        isValidOrgCode(code) &&
+        existing().ownerUid == request.auth.uid;
+    }
+
+    // =========================================================================
+    // 3. ORGANISATIONS & MULTI-TENANT SUBCOLLECTIONS
+    // =========================================================================
+    match /organisations/{orgId} {
+      allow get: if isSignedIn() && isValidId(orgId) && isActiveMember(orgId);
+      allow list: if false;
+
+      // Atomic creation: reserves orgCode and creates OWNER member in the same transaction
+      allow create: if isSignedIn() &&
+        isValidId(orgId) &&
+        isValidOrganisation(incoming()) &&
+        incoming().ownerUid == request.auth.uid &&
+        existsAfter(/databases/$(database)/documents/orgCodes/$(incoming().code)) &&
+        existsAfter(memberPath(orgId, request.auth.uid)) &&
+        getAfter(memberPath(orgId, request.auth.uid)).data.role == 'OWNER' &&
+        getAfter(memberPath(orgId, request.auth.uid)).data.status == 'active';
+
+      allow update: if isSignedIn() &&
+        isValidId(orgId) &&
+        isValidOrganisation(incoming()) &&
+        incoming().code == existing().code &&
+        incoming().createdAt == existing().createdAt && (
+          // Action 1: Admin or settings-editor updating org profile or global settings
+          (
+            (isOrgAdmin(orgId) || hasModuleEdit(orgId, 'settings')) &&
+            incoming().ownerUid == existing().ownerUid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'contactMobile', 'contactEmail', 'settings', 'updatedAt'])
+          ) ||
+          // Action 2: Owner transferring ownership to an existing active member
+          (
+            existing().ownerUid == request.auth.uid &&
+            isOrgOwner(orgId) &&
+            exists(memberPath(orgId, incoming().ownerUid)) &&
+            get(memberPath(orgId, incoming().ownerUid)).data.status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['ownerUid', 'updatedAt'])
+          )
+        );
+
+      // Only the Owner may delete the organisation
+      allow delete: if isSignedIn() &&
+        isValidId(orgId) &&
+        existing().ownerUid == request.auth.uid &&
+        isOrgOwner(orgId);
+
+      // -----------------------------------------------------------------------
+      // 3a. MEMBERS
+      // -----------------------------------------------------------------------
+      match /members/{memberUid} {
+        allow get: if isSignedIn() && isValidId(memberUid) && (
+          request.auth.uid == memberUid ||
+          isOrgAdmin(orgId) ||
+          hasModuleView(orgId, 'members')
+        );
+        allow list: if isSignedIn() && (
+          isOrgAdmin(orgId) ||
+          hasModuleView(orgId, 'members')
+        );
+
+        allow create: if isSignedIn() &&
+          isValidId(memberUid) &&
+          isValidMember(incoming(), memberUid) && (
+            // Action 1: Org creation bootstrap (Owner creates their own OWNER record atomically)
+            (
+              request.auth.uid == memberUid &&
+              incoming().role == 'OWNER' &&
+              incoming().status == 'active' &&
+              incoming().allSchools == true &&
+              existsAfter(orgPath(orgId)) &&
+              getAfter(orgPath(orgId)).data.ownerUid == request.auth.uid
+            ) ||
+            // Action 2: Admin or Members-editor approving a join request / adding a non-owner member
+            (
+              (isOrgAdmin(orgId) || hasModuleEdit(orgId, 'members')) &&
+              incoming().role != 'OWNER' &&
+              incoming().status == 'active'
+            ) ||
+            // Action 3: One-time invite code redemption in an atomic transaction
+            (
+              request.auth.uid == memberUid &&
+              incoming().role != 'OWNER' &&
+              incoming().status == 'active' &&
+              'inviteCodeUsed' in incoming() &&
+              isValidId(incoming().inviteCodeUsed) &&
+              exists(/databases/$(database)/documents/organisations/$(orgId)/inviteCodes/$(incoming().inviteCodeUsed)) &&
+              get(/databases/$(database)/documents/organisations/$(orgId)/inviteCodes/$(incoming().inviteCodeUsed)).data.usedByUid == '' &&
+              get(/databases/$(database)/documents/organisations/$(orgId)/inviteCodes/$(incoming().inviteCodeUsed)).data.expiresAt > request.time &&
+              getAfter(/databases/$(database)/documents/organisations/$(orgId)/inviteCodes/$(incoming().inviteCodeUsed)).data.usedByUid == request.auth.uid &&
+              incoming().role == get(/databases/$(database)/documents/organisations/$(orgId)/inviteCodes/$(incoming().inviteCodeUsed)).data.presetRole &&
+              incoming().allSchools == get(/databases/$(database)/documents/organisations/$(orgId)/inviteCodes/$(incoming().inviteCodeUsed)).data.allSchools &&
+              incoming().schools == get(/databases/$(database)/documents/organisations/$(orgId)/inviteCodes/$(incoming().inviteCodeUsed)).data.schools &&
+              incoming().permissions == get(/databases/$(database)/documents/organisations/$(orgId)/inviteCodes/$(incoming().inviteCodeUsed)).data.permissions
+            )
+          );
+
+        allow update: if isSignedIn() &&
+          isValidId(memberUid) &&
+          isValidMember(incoming(), memberUid) &&
+          incoming().uid == existing().uid &&
+          incoming().createdAt == existing().createdAt &&
+          canUpdateMember(orgId, memberUid);
+
+        allow delete: if isSignedIn() && isValidId(memberUid) && (
+          // Owner can never be removed individually; only deleted when the entire organisation is deleted by Owner
+          (existing().role == 'OWNER' && isOrgOwner(orgId) && !existsAfter(orgPath(orgId))) ||
+          // Any non-owner member can leave the organisation
+          (request.auth.uid == memberUid && existing().role != 'OWNER') ||
+          // Admin or Owner can remove a non-owner member
+          (isOrgAdmin(orgId) && existing().role != 'OWNER')
+        );
+      }
+
+      // -----------------------------------------------------------------------
+      // 3b. JOIN REQUESTS
+      // -----------------------------------------------------------------------
+      match /joinRequests/{reqUid} {
+        allow get: if isSignedIn() && isValidId(reqUid) && (
+          request.auth.uid == reqUid ||
+          isOrgAdmin(orgId) ||
+          hasModuleView(orgId, 'members')
+        );
+        allow list: if isSignedIn() && (
+          isOrgAdmin(orgId) ||
+          hasModuleView(orgId, 'members')
+        );
+
+        allow create: if isSignedIn() &&
+          isValidId(reqUid) &&
+          request.auth.uid == reqUid &&
+          isValidJoinRequest(incoming(), reqUid) &&
+          incoming().status == 'pending' &&
+          exists(orgPath(orgId));
+
+        allow update: if isSignedIn() &&
+          isValidId(reqUid) &&
+          isValidJoinRequest(incoming(), reqUid) &&
+          incoming().uid == existing().uid &&
+          incoming().createdAt == existing().createdAt && (
+            // Action 1: Admin or Members-editor approving/rejecting a pending request
+            (
+              (isOrgAdmin(orgId) || hasModuleEdit(orgId, 'members')) &&
+              existing().status == 'pending' &&
+              incoming().status in ['approved', 'rejected'] &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedByUid', 'updatedAt'])
+            ) ||
+            // Action 2: Requester updating or resubmitting a pending/rejected request
+            (
+              request.auth.uid == reqUid &&
+              existing().status in ['pending', 'rejected'] &&
+              incoming().status == 'pending' &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['name', 'message', 'requestedRole', 'status', 'updatedAt'])
+            )
+          );
+
+        allow delete: if isSignedIn() && isValidId(reqUid) && (
+          request.auth.uid == reqUid ||
+          isOrgAdmin(orgId) ||
+          hasModuleEdit(orgId, 'members')
+        );
+      }
+
+      // -----------------------------------------------------------------------
+      // 3c. ONE-TIME INVITE CODES
+      // -----------------------------------------------------------------------
+      match /inviteCodes/{inviteCode} {
+        allow get: if isSignedIn() && isValidId(inviteCode);
+        allow list: if isSignedIn() && (
+          isOrgAdmin(orgId) ||
+          hasModuleView(orgId, 'members')
+        );
+
+        allow create: if isSignedIn() &&
+          isValidId(inviteCode) &&
+          isValidInviteCode(incoming(), orgId, inviteCode) &&
+          isOrgAdmin(orgId) &&
+          incoming().createdByUid == request.auth.uid &&
+          incoming().usedByUid == '' &&
+          incoming().expiresAt > request.time;
+
+        allow update: if isSignedIn() &&
+          isValidId(inviteCode) &&
+          isValidInviteCode(incoming(), orgId, inviteCode) &&
+          existing().usedByUid == '' &&
+          existing().expiresAt > request.time &&
+          incoming().usedByUid == request.auth.uid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['usedByUid', 'usedAt']) &&
+          existsAfter(memberPath(orgId, request.auth.uid));
+
+        allow delete: if isSignedIn() && isValidId(inviteCode) && isOrgAdmin(orgId);
+      }
+
+      // -----------------------------------------------------------------------
+      // 3d. AUDIT LOG (Append-only by members, readable ONLY by Admins)
+      // -----------------------------------------------------------------------
+      match /auditLog/{entryId} {
+        allow get, list: if isSignedIn() && isOrgAdmin(orgId);
+        allow create: if isSignedIn() &&
+          isValidId(entryId) &&
+          isValidAuditEntry(incoming()) && (
+            isActiveMember(orgId) ||
+            (existsAfter(orgPath(orgId)) && getAfter(orgPath(orgId)).data.ownerUid == request.auth.uid)
+          );
+        allow update: if false;
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
+      }
+
+      // -----------------------------------------------------------------------
+      // 3e. SCHOOLS & SCHOOL-SCOPED ACADEMIC DATA
+      // -----------------------------------------------------------------------
+      match /schools/{schoolId} {
+        allow get: if isSignedIn() && isValidId(schoolId) && canAccessSchool(orgId, schoolId);
+        allow list: if isSignedIn() && (
+          isOrgAdmin(orgId) ||
+          (isActiveMember(orgId) && memberData(orgId).allSchools == true)
+        );
+
+        allow create: if isSignedIn() &&
+          isValidId(schoolId) &&
+          isValidSchool(incoming(), schoolId) && (
+            // Bootstrap first school atomically with organisation creation
+            (existsAfter(orgPath(orgId)) && getAfter(orgPath(orgId)).data.ownerUid == request.auth.uid) ||
+            isOrgAdmin(orgId) ||
+            hasModuleEdit(orgId, 'settings')
+          );
+
+        allow update: if isSignedIn() &&
+          isValidId(schoolId) &&
+          isValidSchool(incoming(), schoolId) &&
+          incoming().schoolKey == existing().schoolKey &&
+          incoming().createdAt == existing().createdAt &&
+          canAccessSchool(orgId, schoolId) &&
+          (isOrgAdmin(orgId) || hasModuleEdit(orgId, 'settings')) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'address', 'mobile', 'email', 'logoBase64',
+            'active', 'classGroups', 'classes', 'updatedAt'
+          ]);
+
+        allow delete: if isSignedIn() && isValidId(schoolId) && isOrgAdmin(orgId);
+
+        // --- STUDENTS ---
+        match /students/{studentId} {
+          allow get, list: if isSignedIn() &&
+            canAccessSchool(orgId, schoolId) && (
+              hasModuleView(orgId, 'students') ||
+              hasModuleView(orgId, 'marks') ||
+              hasModuleView(orgId, 'coScholastic') ||
+              hasModuleView(orgId, 'reports')
+            );
+
+          allow create: if isSignedIn() &&
+            isValidId(studentId) &&
+            isValidStudent(incoming(), schoolId) &&
+            canAccessSchool(orgId, schoolId) &&
+            hasModuleEdit(orgId, 'students');
+
+          allow update: if isSignedIn() &&
+            isValidId(studentId) &&
+            isValidStudent(incoming(), schoolId) &&
+            incoming().schoolId == existing().schoolId &&
+            incoming().createdAt == existing().createdAt &&
+            canAccessSchool(orgId, schoolId) &&
+            hasModuleEdit(orgId, 'students') &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'classId', 'session', 'admNo', 'name', 'fatherName', 'motherName',
+              'dob', 'mobile', 'address', 'photoBase64', 'className', 'section',
+              'rollNo', 'sample', 'updatedAt'
+            ]);
+
+          allow delete: if isSignedIn() &&
+            isValidId(studentId) &&
+            canAccessSchool(orgId, schoolId) &&
+            hasModuleEdit(orgId, 'students');
+        }
+
+        // --- MARKS ---
+        match /marks/{markId} {
+          allow get, list: if isSignedIn() &&
+            canAccessSchool(orgId, schoolId) && (
+              hasModuleView(orgId, 'marks') ||
+              hasModuleView(orgId, 'reports')
+            );
+
+          allow create: if isSignedIn() &&
+            isValidId(markId) &&
+            isValidMark(incoming(), schoolId) &&
+            canEditMarkScope(orgId, schoolId, incoming().className, incoming().subjectName);
+
+          allow update: if isSignedIn() &&
+            isValidId(markId) &&
+            isValidMark(incoming(), schoolId) &&
+            incoming().studentId == existing().studentId &&
+            incoming().schoolId == existing().schoolId &&
+            incoming().subjectName == existing().subjectName &&
+            incoming().componentKey == existing().componentKey &&
+            incoming().createdAt == existing().createdAt &&
+            canEditMarkScope(orgId, schoolId, incoming().className, incoming().subjectName) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'className', 'rawValue', 'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+            ]);
+
+          allow delete: if isSignedIn() &&
+            isValidId(markId) &&
+            canEditMarkScope(orgId, schoolId, existing().className, existing().subjectName);
+        }
+
+        // --- MARK EDIT LOGS (Phase 3: Append-only marks change history) ---
+        match /markEditLogs/{logId} {
+          allow get, list: if isSignedIn() &&
+            canAccessSchool(orgId, schoolId) && (
+              isOrgAdmin(orgId) ||
+              hasModuleView(orgId, 'marks')
+            );
+
+          allow create: if isSignedIn() &&
+            isValidId(logId) &&
+            isValidMarkEditLog(incoming(), schoolId) &&
+            canEditMarkScope(orgId, schoolId, incoming().className, incoming().subjectName);
+
+          allow update: if false;
+          allow delete: if false;
+        }
+
+        // --- CO-SCHOLASTIC ---
+        match /coScholastic/{coId} {
+          allow get, list: if isSignedIn() &&
+            canAccessSchool(orgId, schoolId) && (
+              hasModuleView(orgId, 'coScholastic') ||
+              hasModuleView(orgId, 'reports')
+            );
+
+          allow create: if isSignedIn() &&
+            isValidId(coId) &&
+            isValidCoScholastic(incoming(), schoolId) &&
+            canAccessSchool(orgId, schoolId) &&
+            hasModuleEdit(orgId, 'coScholastic');
+
+          allow update: if isSignedIn() &&
+            isValidId(coId) &&
+            isValidCoScholastic(incoming(), schoolId) &&
+            incoming().studentId == existing().studentId &&
+            incoming().schoolId == existing().schoolId &&
+            incoming().termNo == existing().termNo &&
+            incoming().areaCode == existing().areaCode &&
+            incoming().createdAt == existing().createdAt &&
+            canAccessSchool(orgId, schoolId) &&
+            hasModuleEdit(orgId, 'coScholastic') &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'grade', 'updatedByUid', 'updatedAt'
+            ]);
+
+          allow delete: if isSignedIn() &&
+            isValidId(coId) &&
+            canAccessSchool(orgId, schoolId) &&
+            hasModuleEdit(orgId, 'coScholastic');
+        }
+
+        // --- TERM INFO (ATTENDANCE & REMARKS) ---
+        match /termInfo/{termInfoId} {
+          allow get, list: if isSignedIn() &&
+            canAccessSchool(orgId, schoolId) && (
+              hasModuleView(orgId, 'coScholastic') ||
+              hasModuleView(orgId, 'reports')
+            );
+
+          allow create: if isSignedIn() &&
+            isValidId(termInfoId) &&
+            isValidTermInfo(incoming(), schoolId) &&
+            canAccessSchool(orgId, schoolId) &&
+            hasModuleEdit(orgId, 'coScholastic');
+
+          allow update: if isSignedIn() &&
+            isValidId(termInfoId) &&
+            isValidTermInfo(incoming(), schoolId) &&
+            incoming().studentId == existing().studentId &&
+            incoming().schoolId == existing().schoolId &&
+            incoming().termNo == existing().termNo &&
+            incoming().createdAt == existing().createdAt &&
+            canAccessSchool(orgId, schoolId) &&
+            hasModuleEdit(orgId, 'coScholastic') &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'daysPresent', 'workingDays', 'remarks', 'promotedTo',
+              'reportDate', 'updatedByUid', 'updatedAt'
+            ]);
+
+          allow delete: if isSignedIn() &&
+            isValidId(termInfoId) &&
+            canAccessSchool(orgId, schoolId) &&
+            hasModuleEdit(orgId, 'coScholastic');
+        }
+      }
+    }
+  }
+}

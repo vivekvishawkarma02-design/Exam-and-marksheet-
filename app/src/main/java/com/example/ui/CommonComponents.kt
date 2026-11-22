@@ -16,15 +16,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -44,14 +49,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.domain.ResolvedSchoolIdentity
+import com.example.data.SchoolEntity
 import com.example.domain.ResultStatus
-import com.example.domain.SchoolClass
 import com.example.ui.theme.AbsentAmber
 import com.example.ui.theme.AbsentAmberContainer
 import com.example.ui.theme.FailRed
@@ -59,6 +62,251 @@ import com.example.ui.theme.FailRedContainer
 import com.example.ui.theme.PassGreen
 import com.example.ui.theme.PassGreenContainer
 import com.example.util.ImageUtils
+
+@Composable
+fun SchoolSwitcherBar(
+    uiState: SchoolUiState,
+    onSelectSchool: (Long) -> Unit,
+    onManageSchools: () -> Unit,
+    onSwitchOrganisation: () -> Unit = {},
+    onSyncStatusClick: () -> Unit = {},
+    onOpenConflictLog: () -> Unit = {},
+    onDismissConflicts: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val activeSchool = uiState.activeSchool
+    val canManageSchools = uiState.canEdit(com.example.domain.AppModule.SETTINGS)
+    val switchableSchools = remember(uiState.schools) {
+        val active = uiState.schools.filter { it.active }
+        active.ifEmpty { uiState.schools }
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
+        shadowElevation = 2.dp,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column {
+            // Compact Multi-Tenant Organisation & Live Offline/Sync Status Header Strip
+            uiState.activeOrg?.let { org ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .minimumInteractiveComponentSize()
+                            .clickable(onClick = onSwitchOrganisation)
+                            .testTag("switch_org_header_button"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Apartment,
+                            contentDescription = "Switch organisation",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = org.name,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        uiState.currentMember?.orgRole?.let { role ->
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Text(
+                                    text = role.shortLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
+                    SyncStatusChip(
+                        syncUiState = uiState.syncUiState,
+                        onClick = onSyncStatusClick
+                    )
+                }
+                if (uiState.markConflicts.isNotEmpty()) {
+                    ConflictNoticeBanner(
+                        conflicts = uiState.markConflicts,
+                        onViewLog = onOpenConflictLog,
+                        onDismiss = onDismissConflicts
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .minimumInteractiveComponentSize()
+                            .clickable(enabled = switchableSchools.size > 1 || canManageSchools) { expanded = true }
+                            .testTag("top_school_switcher")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            SchoolLogoAvatar(
+                                school = activeSchool,
+                                size = 34.dp
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "ACTIVE SCHOOL (${switchableSchools.size})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = activeSchool.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            if (switchableSchools.size > 1 || canManageSchools) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "Switch school",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false }
+                    ) {
+                        switchableSchools.forEach { school ->
+                            val isSelected = school.id == activeSchool.id
+                            DropdownMenuItem(
+                                leadingIcon = {
+                                    SchoolLogoAvatar(school = school, size = 28.dp)
+                                },
+                                text = {
+                                    Column {
+                                        Text(
+                                            text = school.name,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "${uiState.classCountForSchool(school.id)} classes",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                trailingIcon = if (isSelected) {
+                                    {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Selected",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                } else null,
+                                onClick = {
+                                    expanded = false
+                                    onSelectSchool(school.id)
+                                },
+                                modifier = Modifier.testTag("switch_school_${school.id}")
+                            )
+                        }
+                        if (canManageSchools) {
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Apartment,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                text = {
+                                    Text(
+                                        text = "Manage Schools & Classes",
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                onClick = {
+                                    expanded = false
+                                    onManageSchools()
+                                },
+                                modifier = Modifier.testTag("switcher_manage_schools")
+                            )
+                        }
+                    }
+                }
+
+                if (canManageSchools) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .clickable(onClick = onManageSchools)
+                            .testTag("top_manage_schools_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = "Manage schools",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Schools",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+    }
+}
 
 @Composable
 fun CompactDropdownSelector(
@@ -96,7 +344,7 @@ fun CompactDropdownSelector(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = selectedValue,
+                        text = selectedValue.ifBlank { "—" },
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -136,12 +384,13 @@ fun CompactDropdownSelector(
 
 @Composable
 fun SessionClassSectionBar(
-    uiState: CpiUiState,
+    uiState: SchoolUiState,
     onSessionSelected: (String) -> Unit,
     onClassSelected: (String) -> Unit,
     onSectionSelected: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val classOptions = uiState.activeSchoolClassNames.ifEmpty { listOf("No classes") }
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -156,9 +405,11 @@ fun SessionClassSectionBar(
         )
         CompactDropdownSelector(
             label = "Class",
-            selectedValue = uiState.filter.className,
-            options = SchoolClass.entries.map { it.displayName },
-            onSelect = onClassSelected,
+            selectedValue = uiState.effectiveClassName.ifBlank { "—" },
+            options = classOptions,
+            onSelect = { chosen ->
+                if (chosen in uiState.activeSchoolClassNames) onClassSelected(chosen)
+            },
             modifier = Modifier.weight(1f),
             testTag = "picker_class"
         )
@@ -175,50 +426,61 @@ fun SessionClassSectionBar(
 
 @Composable
 fun SchoolLogoAvatar(
-    identity: ResolvedSchoolIdentity,
+    school: SchoolEntity,
     size: Dp = 54.dp,
     modifier: Modifier = Modifier
 ) {
-    val customBitmap: Bitmap? = remember(identity.logoBase64) {
-        ImageUtils.decodeBase64ToBitmap(identity.logoBase64)
+    SchoolLogoAvatar(
+        logoBase64 = school.logoBase64,
+        schoolName = school.name,
+        size = size,
+        modifier = modifier
+    )
+}
+
+@Composable
+fun SchoolLogoAvatar(
+    logoBase64: String,
+    schoolName: String,
+    size: Dp = 54.dp,
+    modifier: Modifier = Modifier
+) {
+    val customBitmap: Bitmap? = remember(logoBase64) {
+        ImageUtils.resolveSchoolLogoBitmap(logoBase64)
     }
+    val initials = remember(schoolName) {
+        val parts = schoolName.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        when {
+            parts.isEmpty() -> "SC"
+            parts.size == 1 -> parts[0].take(2).uppercase()
+            else -> "${parts[0].first().uppercaseChar()}${parts[1].first().uppercaseChar()}"
+        }
+    }
+
     Box(
         modifier = modifier
             .size(size)
             .clip(RoundedCornerShape(12.dp))
-            .background(Color.White)
-            .border(1.5.dp, MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(12.dp)),
+            .background(if (customBitmap != null) Color.White else MaterialTheme.colorScheme.primaryContainer)
+            .border(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f), RoundedCornerShape(12.dp)),
         contentAlignment = Alignment.Center
     ) {
-        when {
-            customBitmap != null -> {
-                Image(
-                    bitmap = customBitmap.asImageBitmap(),
-                    contentDescription = "${identity.schoolName} logo",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .size(size)
-                        .padding(3.dp)
-                )
-            }
-            identity.logoCleared -> {
-                Text(
-                    text = "LOGO",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            else -> {
-                Image(
-                    painter = painterResource(id = ImageUtils.defaultLogoResForIdentity(identity.code)),
-                    contentDescription = "${identity.schoolName} official logo",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .size(size)
-                        .padding(2.dp)
-                )
-            }
+        if (customBitmap != null) {
+            Image(
+                bitmap = customBitmap.asImageBitmap(),
+                contentDescription = "$schoolName logo",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .size(size)
+                    .padding(3.dp)
+            )
+        } else {
+            Text(
+                text = initials,
+                style = if (size >= 48.dp) MaterialTheme.typography.titleMedium else MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
         }
     }
 }

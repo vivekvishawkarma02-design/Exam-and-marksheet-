@@ -1,11 +1,11 @@
 package com.example.ui
 
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,26 +14,35 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Gavel
+import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Restore
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -41,7 +50,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -50,6 +58,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -57,6 +66,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -67,13 +77,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.LegacyBackupPayload
+import com.example.data.LegacyImportTarget
+import com.example.data.SchoolEntity
 import com.example.data.SubjectEntity
-import com.example.domain.ClassGroup
-import com.example.domain.ResolvedSchoolIdentity
-import com.example.domain.SchoolClass
-import com.example.domain.SchoolIdentityCode
+import com.example.data.cloud.LocalMigrationSummary
+import com.example.domain.AppModule
 import com.example.ui.theme.AbsentAmber
 import com.example.ui.theme.AbsentAmberContainer
 import com.example.util.PdfExportHelper
@@ -83,67 +95,68 @@ import java.util.Locale
 
 @Composable
 fun SettingsScreen(
-    uiState: CpiUiState,
-    viewModel: CpiViewModel,
+    uiState: SchoolUiState,
+    viewModel: SchoolViewModel,
     focusBackupSection: Boolean = false,
     onBackupFocusConsumed: () -> Unit = {},
+    onManageSchools: () -> Unit = {},
+    localMigrationSummary: LocalMigrationSummary = LocalMigrationSummary(),
+    onOpenLocalMigration: () -> Unit = {},
+    onSwitchOrganisation: () -> Unit = {},
+    onLeaveOrganisation: () -> Unit = {},
+    onDeleteOrganisationClick: () -> Unit = {},
+    onOpenLegalDoc: (LegalDocType) -> Unit = {},
+    onSignOut: () -> Unit = {},
+    onDeleteAccountClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val listState = rememberLazyListState()
     val pendingImport by viewModel.pendingImportBackup.collectAsStateWithLifecycle()
+    val pendingLegacyImport by viewModel.pendingLegacyBackup.collectAsStateWithLifecycle()
     val settings = uiState.settings
-
-    // Selected school identity editor tab (CPS vs CPI)
-    var editingIdentity by remember { mutableStateOf(SchoolIdentityCode.CPS) }
-
-    var cpsName by remember(settings.cpsName) { mutableStateOf(settings.cpsName) }
-    var cpsAddress by remember(settings.cpsAddress) { mutableStateOf(settings.cpsAddress) }
-    var cpsMobile by remember(settings.cpsMobile) { mutableStateOf(settings.cpsMobile) }
-    var cpsEmail by remember(settings.cpsEmail) { mutableStateOf(settings.cpsEmail) }
-
-    var cpiName by remember(settings.cpiName) { mutableStateOf(settings.cpiName) }
-    var cpiAddress by remember(settings.cpiAddress) { mutableStateOf(settings.cpiAddress) }
-    var cpiMobile by remember(settings.cpiMobile) { mutableStateOf(settings.cpiMobile) }
-    var cpiEmail by remember(settings.cpiEmail) { mutableStateOf(settings.cpiEmail) }
+    val activeSchool = uiState.activeSchool
+    val schoolGroups = uiState.activeSchoolGroups
+    val canEditSettings = uiState.canEdit(AppModule.SETTINGS)
+    val canViewSettings = uiState.canView(AppModule.SETTINGS)
 
     var passPercentText by remember(settings.passPercent) { mutableStateOf(settings.passPercent.toString()) }
+    var selectedGroupId by remember(activeSchool.id, schoolGroups) {
+        mutableLongStateOf(schoolGroups.firstOrNull()?.id ?: 0L)
+    }
+    val selectedGroup = schoolGroups.firstOrNull { it.id == selectedGroupId } ?: schoolGroups.firstOrNull()
 
-    var selectedGroup by remember { mutableStateOf(ClassGroup.PRIMARY) }
+    // Backup scope: "All schools" vs active school only
+    var backupAllSchools by remember { mutableStateOf(true) }
+
     var showAddSessionDialog by remember { mutableStateOf(false) }
+    var showAddGroupDialog by remember { mutableStateOf(false) }
     var showAddSubjectDialog by remember { mutableStateOf(false) }
     var renamingSubject by remember { mutableStateOf<SubjectEntity?>(null) }
     var deletingSubject by remember { mutableStateOf<SubjectEntity?>(null) }
     var confirmClearSample by remember { mutableStateOf(false) }
+    var confirmLeaveOrg by remember { mutableStateOf(false) }
     var showMarksCsvDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(focusBackupSection) {
-        if (focusBackupSection) {
+        if (focusBackupSection && canEditSettings) {
             listState.animateScrollToItem(5)
             onBackupFocusConsumed()
+        } else if (focusBackupSection) {
+            onBackupFocusConsumed()
         }
-    }
-
-    val logoPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
-        if (uri != null) viewModel.updateIdentityLogoFromUri(editingIdentity, uri)
     }
 
     val exportBackupLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
-        if (uri != null) viewModel.exportBackupToUri(uri)
+        if (uri != null) viewModel.exportBackupToUri(uri, allSchools = backupAllSchools)
     }
 
     val importBackupLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) viewModel.prepareBackupImportFromUri(uri)
-    }
-
-    val classIdentityMap = remember(settings.classIdentityMapCsv) {
-        SchoolClass.parseIdentityMap(settings.classIdentityMapCsv)
     }
 
     LazyColumn(
@@ -158,44 +171,25 @@ fun SettingsScreen(
         item {
             Column {
                 Text(
-                    text = "Settings & Backup",
+                    text = if (canViewSettings) "Settings, Cloud & Backup" else "Account & Organisation",
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    text = "C.P.S. / C.P.I. school identities, class mapping, subjects, and JSON backup",
+                    text = if (canViewSettings)
+                        "Organisation account, session rules, school subjects, and JSON backup"
+                    else
+                        "Switch organisation, view privacy terms, sign out, or manage your account",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
 
-        // 1. DUAL SCHOOL IDENTITIES (C.P.S. SCHOOL & C.P.I. SCHOOL)
+        // 0.5 ORGANISATION & CLOUD ACCOUNT CARD (Always visible to every signed-in member)
         item {
-            val previewIdentity = if (editingIdentity == SchoolIdentityCode.CPS) {
-                ResolvedSchoolIdentity(
-                    code = SchoolIdentityCode.CPS,
-                    schoolName = cpsName.ifBlank { "C.P.S. SCHOOL" },
-                    address = cpsAddress,
-                    mobile = cpsMobile,
-                    email = cpsEmail,
-                    logoBase64 = settings.cpsLogoBase64,
-                    logoCleared = settings.cpsLogoCleared
-                )
-            } else {
-                val effectiveBase64 = if (settings.useSameLogoForBoth) settings.cpsLogoBase64 else settings.cpiLogoBase64
-                val effectiveCleared = if (settings.useSameLogoForBoth) settings.cpsLogoCleared else settings.cpiLogoCleared
-                ResolvedSchoolIdentity(
-                    code = if (settings.useSameLogoForBoth) SchoolIdentityCode.CPS else SchoolIdentityCode.CPI,
-                    schoolName = cpiName.ifBlank { "C.P.I. SCHOOL" },
-                    address = cpiAddress,
-                    mobile = cpiMobile,
-                    email = cpiEmail,
-                    logoBase64 = effectiveBase64,
-                    logoCleared = effectiveCleared
-                )
-            }
-
+            val activeOrg = uiState.activeOrg
+            val member = uiState.currentMember
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -205,217 +199,6 @@ fun SettingsScreen(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        text = "School Identities (CPS & CPI)",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        FilterChip(
-                            selected = editingIdentity == SchoolIdentityCode.CPS,
-                            onClick = { editingIdentity = SchoolIdentityCode.CPS },
-                            label = { Text("C.P.S. (Nur–5th)", fontWeight = FontWeight.Bold) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("identity_tab_cps")
-                        )
-                        FilterChip(
-                            selected = editingIdentity == SchoolIdentityCode.CPI,
-                            onClick = { editingIdentity = SchoolIdentityCode.CPI },
-                            label = { Text("C.P.I. (6th–8th)", fontWeight = FontWeight.Bold) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("identity_tab_cpi")
-                        )
-                    }
-
-                    // Use same logo checkbox
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = settings.useSameLogoForBoth,
-                            onCheckedChange = { checked ->
-                                viewModel.updateSettings(
-                                    settings.copy(useSameLogoForBoth = checked),
-                                    if (checked) "Using C.P.S. logo for both schools" else "Using separate logos for C.P.S. and C.P.I."
-                                )
-                            },
-                            modifier = Modifier.testTag("checkbox_use_same_logo")
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Use the same logo for both schools",
-                                style = MaterialTheme.typography.titleSmall
-                            )
-                            Text(
-                                text = if (settings.useSameLogoForBoth)
-                                    "Both schools share the C.P.S. logo slot"
-                                else
-                                    "Each school uses its own bundled or uploaded logo",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    // Logo preview + upload / clear / restore controls
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        SchoolLogoAvatar(identity = previewIdentity, size = 62.dp)
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            OutlinedButton(
-                                onClick = {
-                                    logoPicker.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
-                                },
-                                modifier = Modifier.testTag("upload_school_logo_button")
-                            ) {
-                                Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Upload ${editingIdentity.code} Logo")
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                TextButton(
-                                    onClick = { viewModel.clearIdentityLogo(editingIdentity) },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                ) {
-                                    Text("Placeholder Box", style = MaterialTheme.typography.labelMedium)
-                                }
-                                TextButton(
-                                    onClick = { viewModel.restoreBundledIdentityLogo(editingIdentity) },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                ) {
-                                    Text("Official Logo", style = MaterialTheme.typography.labelMedium)
-                                }
-                            }
-                        }
-                    }
-
-                    if (editingIdentity == SchoolIdentityCode.CPS) {
-                        OutlinedTextField(
-                            value = cpsName,
-                            onValueChange = { cpsName = it },
-                            label = { Text("C.P.S. School Name") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = cpsAddress,
-                            onValueChange = { cpsAddress = it },
-                            label = { Text("C.P.S. Address") },
-                            maxLines = 2,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
-                                value = cpsMobile,
-                                onValueChange = { cpsMobile = it },
-                                label = { Text("Mobile") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                                modifier = Modifier.weight(1f)
-                            )
-                            OutlinedTextField(
-                                value = cpsEmail,
-                                onValueChange = { cpsEmail = it },
-                                label = { Text("E-mail") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                                modifier = Modifier.weight(1.1f)
-                            )
-                        }
-                    } else {
-                        OutlinedTextField(
-                            value = cpiName,
-                            onValueChange = { cpiName = it },
-                            label = { Text("C.P.I. School Name") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = cpiAddress,
-                            onValueChange = { cpiAddress = it },
-                            label = { Text("C.P.I. Address") },
-                            maxLines = 2,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
-                                value = cpiMobile,
-                                onValueChange = { cpiMobile = it },
-                                label = { Text("Mobile") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                                modifier = Modifier.weight(1f)
-                            )
-                            OutlinedTextField(
-                                value = cpiEmail,
-                                onValueChange = { cpiEmail = it },
-                                label = { Text("E-mail") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                                modifier = Modifier.weight(1.1f)
-                            )
-                        }
-                    }
-
-                    Button(
-                        onClick = {
-                            viewModel.updateSettings(
-                                settings.copy(
-                                    cpsName = cpsName.trim().ifEmpty { "C.P.S. SCHOOL" },
-                                    cpsAddress = cpsAddress.trim(),
-                                    cpsMobile = cpsMobile.trim(),
-                                    cpsEmail = cpsEmail.trim(),
-                                    cpiName = cpiName.trim().ifEmpty { "C.P.I. SCHOOL" },
-                                    cpiAddress = cpiAddress.trim(),
-                                    cpiMobile = cpiMobile.trim(),
-                                    cpiEmail = cpiEmail.trim()
-                                ),
-                                "Saved C.P.S. & C.P.I. school profiles"
-                            )
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("save_school_settings_button")
-                    ) {
-                        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Save School Identities")
-                    }
-                }
-            }
-        }
-
-        // 2. CLASS-TO-SCHOOL IDENTITY MAPPING
-        item {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -423,82 +206,237 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Class-to-School Mapping",
+                                text = activeOrg?.name ?: "Organisation & Account",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            val sub = buildString {
+                                if (activeOrg != null) append("@${activeOrg.code}")
+                                if (member != null) {
+                                    if (isNotEmpty()) append("  •  ")
+                                    append(member.orgRole.label)
+                                }
+                            }
+                            if (sub.isNotBlank()) {
+                                Text(
+                                    text = sub,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        SyncStatusChip(status = uiState.syncStatus)
+                    }
+
+                    if (member != null) {
+                        Text(
+                            text = "Signed in as ${member.name.ifBlank { member.email }} (${member.email})",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (localMigrationSummary.hasDataToUpload && uiState.isAdmin) {
+                        Button(
+                            onClick = onOpenLocalMigration,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("settings_upload_local_data_button")
+                        ) {
+                            Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Upload This Phone's Data (${localMigrationSummary.studentCount} students)")
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onSwitchOrganisation,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                                .testTag("settings_switch_org_button"),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Switch Org", maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = onSignOut,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                                .testTag("settings_sign_out_button"),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Sign Out", maxLines = 1)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        TextButton(
+                            onClick = { onOpenLegalDoc(LegalDocType.PRIVACY_POLICY) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("settings_privacy_policy_button")
+                        ) {
+                            Icon(Icons.Default.PrivacyTip, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Privacy Policy")
+                        }
+                        TextButton(
+                            onClick = { onOpenLegalDoc(LegalDocType.TERMS_OF_SERVICE) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("settings_terms_button")
+                        ) {
+                            Icon(Icons.Default.Gavel, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Terms")
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    if (activeOrg != null && !uiState.isOwner) {
+                        OutlinedButton(
+                            onClick = { confirmLeaveOrg = true },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .testTag("settings_leave_org_button")
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Leave Organisation")
+                        }
+                    }
+
+                    if (activeOrg != null && uiState.isOwner) {
+                        OutlinedButton(
+                            onClick = onDeleteOrganisationClick,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .testTag("settings_delete_org_button")
+                        ) {
+                            Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Delete Organisation (Requires Backup)")
+                        }
+                    }
+
+                    TextButton(
+                        onClick = onDeleteAccountClick,
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_delete_account_button")
+                    ) {
+                        Text("Delete My Account")
+                    }
+
+                    Text(
+                        text = "Cloud sync & cache: Your organisation's records are stored securely in Google Cloud Firestore and cached on-device for offline use. Signing out clears the local cloud cache on this phone.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        if (canViewSettings && !canEditSettings) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = AbsentAmberContainer,
+                    border = BorderStroke(1.dp, AbsentAmber.copy(alpha = 0.4f))
+                ) {
+                    Text(
+                        text = "View-only Settings access: You can view the active session and subject configuration, but only members with Settings edit permission can modify them.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF4E2D00),
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+        }
+
+        // 1. SCHOOLS & CLASSES SHORTCUT CARD
+        if (canEditSettings) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        SchoolLogoAvatar(school = activeSchool, size = 50.dp)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Schools, Logos & Classes",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                text = "Choose which school identity prints on each class's report",
+                                text = "Active: ${activeSchool.name}  •  ${uiState.activeSchools.size} active / ${uiState.schools.size} total",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                        }
-                        TextButton(
-                            onClick = {
-                                val defaults = SchoolClass.serializeIdentityMap(SchoolClass.defaultClassIdentityMap())
-                                viewModel.updateSettings(
-                                    settings.copy(classIdentityMapCsv = defaults),
-                                    "Reset class-to-school mapping to defaults"
-                                )
-                            }
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Reset")
                         }
                     }
-
-                    SchoolClass.entries.forEachIndexed { idx, sc ->
-                        val assigned = classIdentityMap[sc.displayName] ?: sc.defaultIdentity
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Class ${sc.displayName}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                FilterChip(
-                                    selected = assigned == SchoolIdentityCode.CPS,
-                                    onClick = { viewModel.updateClassIdentityMapping(sc.displayName, SchoolIdentityCode.CPS) },
-                                    label = { Text("C.P.S.", style = MaterialTheme.typography.labelMedium) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                                    ),
-                                    modifier = Modifier.testTag("map_${sc.displayName}_CPS")
-                                )
-                                FilterChip(
-                                    selected = assigned == SchoolIdentityCode.CPI,
-                                    onClick = { viewModel.updateClassIdentityMapping(sc.displayName, SchoolIdentityCode.CPI) },
-                                    label = { Text("C.P.I.", style = MaterialTheme.typography.labelMedium) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = MaterialTheme.colorScheme.secondary,
-                                        selectedLabelColor = MaterialTheme.colorScheme.onSecondary
-                                    ),
-                                    modifier = Modifier.testTag("map_${sc.displayName}_CPI")
-                                )
-                            }
-                        }
-                        if (idx < SchoolClass.entries.lastIndex) {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        }
+                    Text(
+                        text = "Add any number of schools with their own name, address, mobile, email, logo (<200 KB), and custom classes (such as 9th or 10th).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Button(
+                        onClick = onManageSchools,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("settings_manage_schools_button")
+                    ) {
+                        Icon(Icons.Default.Apartment, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Manage Schools & Classes")
+                    }
                     }
                 }
             }
         }
 
-        // 3. SESSION, PASS % & ANNUAL CARD DISPLAY OPTIONS
-        item {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
+        // 2. GLOBAL SESSION, PASS % & ANNUAL CARD OPTIONS
+        if (canEditSettings) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -509,7 +447,7 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "Session & Report Options",
+                            text = "Global Session & Report Options",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -612,7 +550,7 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.titleSmall
                             )
                             Text(
-                                text = "Ranked by overall total within session, class & section",
+                                text = "Ranked by overall total within school, session, class & section",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -625,18 +563,20 @@ fun SettingsScreen(
                             modifier = Modifier.testTag("toggle_class_rank")
                         )
                     }
+                    }
                 }
             }
         }
 
-        // 4. EDITABLE SUBJECT LISTS PER CLASS GROUP
-        item {
-            val groupSubjects = uiState.subjectsForGroup(selectedGroup)
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
+        // 3. EDITABLE SUBJECT LISTS PER CLASS GROUP (for active school)
+        if (canEditSettings) {
+            item {
+                val groupSubjects = selectedGroup?.let { uiState.subjectsForGroupId(it.id) }.orEmpty()
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -648,110 +588,139 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Subjects by Class Group",
+                                text = "Subjects (${activeSchool.name})",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "Add, rename, reorder, or remove subjects",
+                                text = "Add groups or edit, rename & reorder subjects",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        TextButton(onClick = { viewModel.resetGroupSubjects(selectedGroup) }) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Defaults")
+                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            TextButton(onClick = { showAddGroupDialog = true }) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text("Group")
+                            }
+                            if (selectedGroup != null && selectedGroup.templateKey.isNotEmpty()) {
+                                TextButton(onClick = { viewModel.resetGroupSubjects(selectedGroup) }) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text("Defaults")
+                                }
+                            }
                         }
                     }
 
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        ClassGroup.entries.forEach { grp ->
+                        schoolGroups.forEach { grp ->
                             FilterChip(
-                                selected = selectedGroup == grp,
-                                onClick = { selectedGroup = grp },
+                                selected = selectedGroup?.id == grp.id,
+                                onClick = { selectedGroupId = grp.id },
                                 label = { Text(grp.shortLabel) },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = MaterialTheme.colorScheme.secondary,
                                     selectedLabelColor = MaterialTheme.colorScheme.onSecondary
                                 ),
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.testTag("subject_group_chip_${grp.id}")
                             )
                         }
                     }
 
-                    groupSubjects.forEachIndexed { idx, subject ->
-                        Row(
+                    if (groupSubjects.isEmpty()) {
+                        Text(
+                            text = "No subjects configured in this group yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        groupSubjects.forEachIndexed { idx, subject ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${idx + 1}.",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.width(24.dp)
+                                )
+                                Text(
+                                    text = subject.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = {
+                                        selectedGroup?.let { viewModel.moveSubject(it.id, subject.id, moveUp = true) }
+                                    },
+                                    enabled = idx > 0
+                                ) {
+                                    Icon(Icons.Default.ArrowUpward, contentDescription = "Move up", modifier = Modifier.size(18.dp))
+                                }
+                                IconButton(
+                                    onClick = {
+                                        selectedGroup?.let { viewModel.moveSubject(it.id, subject.id, moveUp = false) }
+                                    },
+                                    enabled = idx < groupSubjects.lastIndex
+                                ) {
+                                    Icon(Icons.Default.ArrowDownward, contentDescription = "Move down", modifier = Modifier.size(18.dp))
+                                }
+                                IconButton(onClick = { renamingSubject = subject }) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Rename subject", modifier = Modifier.size(18.dp))
+                                }
+                                IconButton(onClick = { deletingSubject = subject }) {
+                                    Icon(
+                                        Icons.Default.DeleteOutline,
+                                        contentDescription = "Delete subject",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            if (idx < groupSubjects.lastIndex) {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            }
+                        }
+                    }
+
+                    if (selectedGroup != null) {
+                        OutlinedButton(
+                            onClick = { showAddSubjectDialog = true },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .height(46.dp)
                         ) {
-                            Text(
-                                text = "${idx + 1}.",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.width(24.dp)
-                            )
-                            Text(
-                                text = subject.name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(
-                                onClick = { viewModel.moveSubject(selectedGroup, subject.id, moveUp = true) },
-                                enabled = idx > 0
-                            ) {
-                                Icon(Icons.Default.ArrowUpward, contentDescription = "Move up", modifier = Modifier.size(18.dp))
-                            }
-                            IconButton(
-                                onClick = { viewModel.moveSubject(selectedGroup, subject.id, moveUp = false) },
-                                enabled = idx < groupSubjects.lastIndex
-                            ) {
-                                Icon(Icons.Default.ArrowDownward, contentDescription = "Move down", modifier = Modifier.size(18.dp))
-                            }
-                            IconButton(onClick = { renamingSubject = subject }) {
-                                Icon(Icons.Default.Edit, contentDescription = "Rename subject", modifier = Modifier.size(18.dp))
-                            }
-                            IconButton(onClick = { deletingSubject = subject }) {
-                                Icon(
-                                    Icons.Default.DeleteOutline,
-                                    contentDescription = "Delete subject",
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                        if (idx < groupSubjects.lastIndex) {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Add Subject to ${selectedGroup.shortLabel}")
                         }
                     }
-
-                    OutlinedButton(
-                        onClick = { showAddSubjectDialog = true },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(46.dp)
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Add Subject to ${selectedGroup.shortLabel}")
                     }
                 }
             }
         }
 
-        // 5. JSON BACKUP & RESTORE
-        item {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
+        // 4. JSON BACKUP & RESTORE (with "All schools" vs Active School export scope)
+        if (canEditSettings) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -796,12 +765,49 @@ fun SettingsScreen(
                                     color = if (uiState.isBackupOverdue) Color(0xFF4E2D00) else MaterialTheme.colorScheme.onPrimaryContainer
                                 )
                                 Text(
-                                    text = "All records live locally on this device. Export a JSON backup regularly to keep your school data safe.",
+                                    text = "Backups include schools, logos, classes, subjects, students, marks, attendance, and settings.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (uiState.isBackupOverdue) Color(0xFF6B4200) else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
+                    }
+
+                    // Backup Export Scope: All Schools (recommended) vs Active School Only
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = backupAllSchools,
+                            onClick = { backupAllSchools = true },
+                            label = { Text("All Schools (${uiState.schools.size})") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("backup_scope_all_schools")
+                        )
+                        FilterChip(
+                            selected = !backupAllSchools,
+                            onClick = { backupAllSchools = false },
+                            label = {
+                                Text(
+                                    text = activeSchool.name,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.secondary,
+                                selectedLabelColor = MaterialTheme.colorScheme.onSecondary
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("backup_scope_active_school")
+                        )
                     }
 
                     Row(
@@ -810,7 +816,7 @@ fun SettingsScreen(
                     ) {
                         Button(
                             onClick = {
-                                exportBackupLauncher.launch("CPI_CPS_Backup_${uiState.filter.session}.json")
+                                exportBackupLauncher.launch(viewModel.suggestedBackupFileName(backupAllSchools))
                             },
                             modifier = Modifier
                                 .weight(1f)
@@ -825,12 +831,12 @@ fun SettingsScreen(
 
                         OutlinedButton(
                             onClick = {
-                                viewModel.createShareableBackupFile { file ->
+                                viewModel.createShareableBackupFile(allSchools = backupAllSchools) { file ->
                                     PdfExportHelper.shareFile(
                                         context = context,
                                         file = file,
                                         mimeType = "application/json",
-                                        chooserTitle = "Share CPI-CPS Report Card Backup"
+                                        chooserTitle = "Share School Report Card Backup"
                                     )
                                 }
                             },
@@ -855,7 +861,7 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Import Backup JSON (Replace or Merge)")
+                        Text("Import Backup JSON (v3 or Older Backup)")
                     }
 
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -871,17 +877,19 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Import Marks from CSV / Download Template")
                     }
+                    }
                 }
             }
         }
 
-        // 6. SAMPLE DATA CONTROLS
-        item {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
+        // 5. SAMPLE DATA CONTROLS
+        if (canEditSettings) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -893,7 +901,7 @@ fun SettingsScreen(
                     )
                     Text(
                         text = if (uiState.sampleStudentCount > 0)
-                            "${uiState.sampleStudentCount} sample student(s) (Nursery, 2nd, 6th) are loaded so you can preview both C.P.S. and C.P.I. reports right away."
+                            "${uiState.sampleStudentCount} sample student(s) (Nursery, 2nd, 6th) are loaded for quick report card preview."
                         else
                             "No sample students currently loaded.",
                         style = MaterialTheme.typography.bodySmall,
@@ -921,13 +929,27 @@ fun SettingsScreen(
                                     .weight(1f)
                                     .height(46.dp)
                             ) {
-                                Text("Load Sample Data")
+                                Text("Load Sample Data into ${activeSchool.name}")
                             }
                         }
                     }
                 }
+                }
             }
         }
+    }
+
+    if (confirmLeaveOrg) {
+        ConfirmDangerDialog(
+            title = "Leave '${uiState.activeOrg?.name ?: "Organisation"}'?",
+            message = "You will lose access to this organisation's schools and records unless an admin invites or approves you again.",
+            confirmLabel = "Leave Organisation",
+            onConfirm = {
+                confirmLeaveOrg = false
+                onLeaveOrganisation()
+            },
+            onDismiss = { confirmLeaveOrg = false }
+        )
     }
 
     // Dialogs
@@ -952,14 +974,24 @@ fun SettingsScreen(
         )
     }
 
-    if (showAddSubjectDialog) {
+    if (showAddGroupDialog) {
+        AddClassGroupDialog(
+            schoolName = activeSchool.name,
+            onSave = { name, shortLabel, subs, onResult ->
+                viewModel.addClassGroup(activeSchool.id, name, shortLabel, subs, onResult)
+            },
+            onDismiss = { showAddGroupDialog = false }
+        )
+    }
+
+    if (showAddSubjectDialog && selectedGroup != null) {
         SingleInputDialog(
             title = "Add Subject",
             label = "Subject Name",
             initialValue = "",
             confirmLabel = "Add",
             onConfirm = {
-                viewModel.addSubject(selectedGroup, it)
+                viewModel.addSubject(activeSchool.id, selectedGroup.id, it)
                 showAddSubjectDialog = false
             },
             onDismiss = { showAddSubjectDialog = false }
@@ -983,7 +1015,7 @@ fun SettingsScreen(
     deletingSubject?.let { sub ->
         ConfirmDangerDialog(
             title = "Remove Subject?",
-            message = "Remove '${sub.name}' from ${ClassGroup.fromId(sub.classGroup).label}?",
+            message = "Remove '${sub.name}' from ${selectedGroup?.name ?: "this group"}?",
             confirmLabel = "Remove",
             onConfirm = {
                 viewModel.deleteSubject(sub)
@@ -1006,14 +1038,16 @@ fun SettingsScreen(
         )
     }
 
+    // Modern Multi-School Backup Restore Dialog
     pendingImport?.let { backup ->
         AlertDialog(
             onDismissRequest = viewModel::cancelPendingBackupImport,
-            title = { Text("Restore Backup", style = MaterialTheme.typography.titleLarge) },
+            title = { Text("Restore Multi-School Backup", style = MaterialTheme.typography.titleLarge) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val schoolNames = backup.schools.joinToString(", ") { it.name }.ifEmpty { "None" }
                     Text(
-                        text = "Backup contains ${backup.students.size} student(s), ${backup.marks.size} mark entries, and ${backup.subjects.size} subject definitions (${backup.settings.cpsName} & ${backup.settings.cpiName}).",
+                        text = "Backup contains ${backup.schools.size} school(s) ($schoolNames), ${backup.students.size} student(s), ${backup.marks.size} mark entries, and ${backup.subjects.size} subjects.",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Text(
@@ -1022,7 +1056,7 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "• Merge: keeps existing students and adds/updates matching Admission Nos.\n• Replace All: clears current device data and restores the backup exactly.",
+                        text = "• Merge: keeps existing schools & students and merges matching school names and Admission Nos.\n• Replace All: clears current device data and restores the backup exactly.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1048,6 +1082,162 @@ fun SettingsScreen(
             }
         )
     }
+
+    // Legacy Pre-Phase-1 Backup Migration Dialog (asks user which school old students belong to)
+    pendingLegacyImport?.let { legacy ->
+        LegacyBackupMigrationDialog(
+            payload = legacy,
+            existingSchools = uiState.schools,
+            onConfirm = { target -> viewModel.confirmLegacyBackupImport(target) },
+            onDismiss = viewModel::cancelPendingLegacyBackupImport
+        )
+    }
+}
+
+@Composable
+private fun LegacyBackupMigrationDialog(
+    payload: LegacyBackupPayload,
+    existingSchools: List<SchoolEntity>,
+    onConfirm: (LegacyImportTarget) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val suggested = payload.suggestedSchools.firstOrNull()
+    var createNewSchool by remember { mutableStateOf(true) }
+    var newSchoolName by remember { mutableStateOf(suggested?.suggestedName ?: "Imported School") }
+    var newSchoolAddress by remember { mutableStateOf(suggested?.address ?: "") }
+    var newSchoolMobile by remember { mutableStateOf(suggested?.mobile ?: "") }
+    var newSchoolEmail by remember { mutableStateOf(suggested?.email ?: "") }
+    var selectedExistingSchoolId by remember {
+        mutableLongStateOf(existingSchools.firstOrNull()?.id ?: 0L)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Import Older Backup Format",
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "This backup was created before multi-school support (${payload.students.size} student(s), ${payload.marks.size} marks, ${payload.termInfos.size} attendance records). Choose which school these students belong to:",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { createNewSchool = true },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(selected = createNewSchool, onClick = { createNewSchool = true })
+                    Text("Create a new school from backup", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                }
+
+                if (createNewSchool) {
+                    if (payload.suggestedSchools.size > 1) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            payload.suggestedSchools.forEach { preset ->
+                                FilterChip(
+                                    selected = newSchoolName == preset.suggestedName,
+                                    onClick = {
+                                        newSchoolName = preset.suggestedName
+                                        newSchoolAddress = preset.address
+                                        newSchoolMobile = preset.mobile
+                                        newSchoolEmail = preset.email
+                                    },
+                                    label = { Text(preset.suggestedName) }
+                                )
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = newSchoolName,
+                        onValueChange = { newSchoolName = it },
+                        label = { Text("New School Name*") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("legacy_school_name_input")
+                    )
+                    OutlinedTextField(
+                        value = newSchoolAddress,
+                        onValueChange = { newSchoolAddress = it },
+                        label = { Text("Address") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                if (existingSchools.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { createNewSchool = false },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = !createNewSchool, onClick = { createNewSchool = false })
+                        Text("Attach to an existing school", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    if (!createNewSchool) {
+                        val currentName = existingSchools.firstOrNull { it.id == selectedExistingSchoolId }?.name
+                            ?: existingSchools.first().name
+                        CompactDropdownSelector(
+                            label = "Target School",
+                            selectedValue = currentName,
+                            options = existingSchools.map { it.name },
+                            onSelect = { chosen ->
+                                existingSchools.firstOrNull { it.name == chosen }?.let {
+                                    selectedExistingSchoolId = it.id
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val target = if (createNewSchool) {
+                        LegacyImportTarget.CreateNewSchool(
+                            name = newSchoolName.trim(),
+                            address = newSchoolAddress.trim(),
+                            mobile = newSchoolMobile.trim(),
+                            email = newSchoolEmail.trim(),
+                            logoBase64 = payload.suggestedSchools.firstOrNull {
+                                it.suggestedName == newSchoolName.trim()
+                            }?.logoBase64 ?: suggested?.logoBase64.orEmpty()
+                        )
+                    } else {
+                        LegacyImportTarget.ExistingSchool(selectedExistingSchoolId)
+                    }
+                    onConfirm(target)
+                },
+                enabled = !createNewSchool || newSchoolName.isNotBlank(),
+                modifier = Modifier.testTag("confirm_legacy_backup_import_button")
+            ) {
+                Text("Import All Data")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }
 
 @Composable

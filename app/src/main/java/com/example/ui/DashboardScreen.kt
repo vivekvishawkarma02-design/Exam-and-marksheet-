@@ -16,14 +16,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
@@ -33,6 +38,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -51,6 +57,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.StudentEntity
+import com.example.domain.AppModule
+import com.example.domain.OrgRole
 import com.example.ui.theme.AbsentAmber
 import com.example.ui.theme.AbsentAmberContainer
 import com.example.ui.theme.FailRed
@@ -62,26 +71,220 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private data class QuickActionSpec(
+    val title: String,
+    val subtitle: String,
+    val icon: ImageVector,
+    val accent: Color,
+    val testTag: String,
+    val onClick: () -> Unit
+)
+
 @Composable
 fun DashboardScreen(
-    uiState: CpiUiState,
+    uiState: SchoolUiState,
     onSessionSelected: (String) -> Unit,
     onClassSelected: (String) -> Unit,
     onSectionSelected: (String) -> Unit,
     onStudentSelected: (Long?) -> Unit,
     onDeleteLegacyMarks: () -> Unit,
+    onNavigateToSchools: () -> Unit,
     onNavigateToStudents: () -> Unit,
     onNavigateToMarks: () -> Unit,
     onNavigateToCoScholastic: () -> Unit,
     onNavigateToReports: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToBackup: () -> Unit,
+    onOpenStudentMarks: (StudentEntity) -> Unit,
+    onOpenStudentCoScholastic: (StudentEntity) -> Unit,
+    onOpenStudentReport: (StudentEntity) -> Unit,
+    onNavigateToMembers: () -> Unit = {},
+    onEditOwnTeacherProfile: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val filtered = uiState.filteredStudents
     val selectedStudent = uiState.selectedStudent
-    val activeIdentity = uiState.activeSchoolIdentity
+    val activeSchool = uiState.activeSchool
+    val activeClassName = uiState.effectiveClassName
     var showLegacyConfirm by remember { mutableStateOf(false) }
+    var studentSearchQuery by remember { mutableStateOf("") }
+    var statusFilter by remember { mutableStateOf(DashboardStatusFilter.ALL) }
+    var onlyActiveClass by remember { mutableStateOf(false) }
+
+    val canViewStudents = uiState.canView(AppModule.STUDENTS)
+    val canViewMarks = uiState.canView(AppModule.MARKS)
+    val canViewCoScholastic = uiState.canView(AppModule.CO_SCHOLASTIC)
+    val canViewReports = uiState.canView(AppModule.REPORTS)
+    val canViewSettings = uiState.canView(AppModule.SETTINGS)
+    val canEditSettings = uiState.canEdit(AppModule.SETTINGS)
+    val canViewMembers = uiState.canView(AppModule.MEMBERS) || uiState.isAdmin
+    val canViewAcademicDirectory = canViewStudents || canViewMarks || canViewReports
+
+    val allSessionSummaries = remember(
+        uiState.schools,
+        uiState.schoolClasses,
+        uiState.classGroups,
+        uiState.allStudents,
+        uiState.allMarks,
+        uiState.subjects,
+        uiState.filter.schoolId,
+        uiState.filter.session,
+        uiState.settings
+    ) {
+        uiState.allSessionStudentSummaries()
+    }
+
+    val scopedSummaries = remember(allSessionSummaries, onlyActiveClass, activeClassName, uiState.filter.section) {
+        if (!onlyActiveClass) {
+            allSessionSummaries
+        } else {
+            allSessionSummaries.filter {
+                it.student.className.equals(activeClassName, ignoreCase = true) &&
+                    it.student.section.equals(uiState.filter.section, ignoreCase = true)
+            }
+        }
+    }
+
+    val passCount = remember(scopedSummaries) {
+        scopedSummaries.count { it.status == StudentAcademicStatus.PASS }
+    }
+    val needsAttentionCount = remember(scopedSummaries) {
+        scopedSummaries.count { it.status == StudentAcademicStatus.NEEDS_ATTENTION }
+    }
+    val pendingCount = remember(scopedSummaries) {
+        scopedSummaries.count { it.status == StudentAcademicStatus.PENDING }
+    }
+
+    val displayedSummaries = remember(scopedSummaries, statusFilter, studentSearchQuery) {
+        val q = studentSearchQuery.trim()
+        scopedSummaries.filter { item ->
+            val statusMatches = when (statusFilter) {
+                DashboardStatusFilter.ALL -> true
+                DashboardStatusFilter.PASS -> item.status == StudentAcademicStatus.PASS
+                DashboardStatusFilter.NEEDS_ATTENTION -> item.status == StudentAcademicStatus.NEEDS_ATTENTION
+                DashboardStatusFilter.PENDING -> item.status == StudentAcademicStatus.PENDING
+            }
+            val queryMatches = q.isEmpty() ||
+                item.student.name.contains(q, ignoreCase = true) ||
+                item.student.className.contains(q, ignoreCase = true) ||
+                "${item.student.className}-${item.student.section}".contains(q, ignoreCase = true) ||
+                item.student.admNo.contains(q, ignoreCase = true) ||
+                item.student.rollNo.toString() == q ||
+                item.schoolName.contains(q, ignoreCase = true)
+            statusMatches && queryMatches
+        }
+    }
+
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val secondaryColor = MaterialTheme.colorScheme.secondary
+    val tertiaryColor = MaterialTheme.colorScheme.tertiary
+    val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+    val quickActions = buildList {
+        if (canViewMarks) {
+            add(
+                QuickActionSpec(
+                    title = if (uiState.canEdit(AppModule.MARKS)) "Enter Marks" else "View Marks",
+                    subtitle = "IA 10, UT 30, Exam 60",
+                    icon = Icons.Default.EditNote,
+                    accent = primaryColor,
+                    testTag = "tile_enter_marks",
+                    onClick = onNavigateToMarks
+                )
+            )
+        }
+        if (canViewStudents) {
+            add(
+                QuickActionSpec(
+                    title = "Students",
+                    subtitle = if (uiState.canEdit(AppModule.STUDENTS)) "Add, edit, CSV import" else "View class roster",
+                    icon = Icons.Default.Groups,
+                    accent = secondaryColor,
+                    testTag = "tile_students",
+                    onClick = onNavigateToStudents
+                )
+            )
+        }
+        if (canViewCoScholastic) {
+            add(
+                QuickActionSpec(
+                    title = "Co-Scholastic",
+                    subtitle = "Grades & attendance",
+                    icon = Icons.Default.FactCheck,
+                    accent = secondaryColor,
+                    testTag = "tile_coscholastic",
+                    onClick = onNavigateToCoScholastic
+                )
+            )
+        }
+        if (canViewReports) {
+            add(
+                QuickActionSpec(
+                    title = "A4 Reports",
+                    subtitle = "Slips, Annual & ZIP",
+                    icon = Icons.Default.Description,
+                    accent = primaryColor,
+                    testTag = "tile_reports",
+                    onClick = onNavigateToReports
+                )
+            )
+        }
+        if (canViewMembers) {
+            val reqSub = if (uiState.pendingJoinRequestCount > 0) {
+                "${uiState.pendingJoinRequestCount} pending request(s)"
+            } else {
+                "${uiState.orgMembers.count { it.status == "active" }} active member(s)"
+            }
+            add(
+                QuickActionSpec(
+                    title = "Members",
+                    subtitle = reqSub,
+                    icon = Icons.Default.AdminPanelSettings,
+                    accent = tertiaryColor,
+                    testTag = "tile_members",
+                    onClick = onNavigateToMembers
+                )
+            )
+        }
+        if (canEditSettings) {
+            add(
+                QuickActionSpec(
+                    title = "Schools",
+                    subtitle = "${uiState.activeSchools.size} active • logos & classes",
+                    icon = Icons.Default.Apartment,
+                    accent = primaryColor,
+                    testTag = "tile_schools",
+                    onClick = onNavigateToSchools
+                )
+            )
+            val backupSub = if (uiState.settings.lastBackupEpochMs > 0L) {
+                val fmt = SimpleDateFormat("dd MMM yyyy", Locale.US)
+                "Last: ${fmt.format(Date(uiState.settings.lastBackupEpochMs))}"
+            } else {
+                "Export / Restore JSON"
+            }
+            add(
+                QuickActionSpec(
+                    title = "Backup",
+                    subtitle = backupSub,
+                    icon = Icons.Default.Backup,
+                    accent = tertiaryColor,
+                    testTag = "tile_backup",
+                    onClick = onNavigateToBackup
+                )
+            )
+        }
+        add(
+            QuickActionSpec(
+                title = "Settings",
+                subtitle = if (canViewSettings) "Session, pass %, account" else "Account & organisation",
+                icon = Icons.Default.Settings,
+                accent = mutedColor,
+                testTag = "tile_settings",
+                onClick = onNavigateToSettings
+            )
+        )
+    }
 
     LazyColumn(
         modifier = modifier
@@ -90,7 +293,7 @@ fun DashboardScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Dynamic Dual-Identity School Header Card (Auto-switches CPS vs CPI by selected class)
+        // Active School Header Card
         item {
             Box(
                 modifier = Modifier
@@ -108,31 +311,33 @@ fun DashboardScreen(
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     SchoolLogoAvatar(
-                        identity = activeIdentity,
+                        school = activeSchool,
                         size = 60.dp
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = activeIdentity.schoolName,
+                            text = activeSchool.name,
                             style = MaterialTheme.typography.headlineSmall,
                             color = Color.White,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Text(
-                            text = activeIdentity.address,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.88f),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        if (activeSchool.address.isNotBlank()) {
+                            Text(
+                                text = activeSchool.address,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.88f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         Spacer(modifier = Modifier.height(6.dp))
                         Surface(
                             shape = RoundedCornerShape(20.dp),
                             color = Color.White.copy(alpha = 0.16f)
                         ) {
                             Text(
-                                text = "Class ${uiState.filter.className} → ${activeIdentity.code.code}  •  Session ${uiState.filter.session}",
+                                text = "Class ${activeClassName.ifBlank { "—" }}-${uiState.filter.section}  •  Session ${uiState.filter.session}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -143,8 +348,82 @@ fun DashboardScreen(
             }
         }
 
-        // One-time Legacy Exam Structure Warning (if Note Book / Subject Enrich / Periodic Test marks exist)
-        if (uiState.legacyMarksCount > 0) {
+        // Teacher Own Profile Summary Card (visible to Teachers so they can view/update their own profile)
+        val member = uiState.currentMember
+        if (member != null && member.orgRole == OrgRole.TEACHER) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                    modifier = Modifier.testTag("teacher_profile_dashboard_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            StudentPhotoThumbnail(
+                                photoBase64 = member.teacherPhotoBase64,
+                                studentName = member.name.ifBlank { "T" },
+                                size = 46.dp
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "My Teacher Profile",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = member.name.ifBlank { member.email },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                val subSummary = member.requestedSubjects.joinToString(", ").ifBlank { "No subjects listed" }
+                                val clsSummary = member.requestedClasses.joinToString(", ").ifBlank { "No classes listed" }
+                                Text(
+                                    text = "Classes: $clsSummary  •  Subjects: $subSummary",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        if (member.assignedClassSubjects.isNotEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                            ) {
+                                Text(
+                                    text = "Marks editing restricted to ${member.assignedClassSubjects.size} assigned class-subject scope(s).",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = onEditOwnTeacherProfile,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("edit_teacher_profile_button")
+                        ) {
+                            Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Update My Teacher Profile")
+                        }
+                    }
+                }
+            }
+        }
+
+        // One-time Legacy Exam Structure Warning (only for admins / settings editors)
+        if (uiState.legacyMarksCount > 0 && canEditSettings) {
             item {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
@@ -186,8 +465,8 @@ fun DashboardScreen(
             }
         }
 
-        // Backup 30-day reminder banner
-        if (uiState.isBackupOverdue) {
+        // Backup 30-day reminder banner (only for settings editors)
+        if (uiState.isBackupOverdue && canEditSettings) {
             item {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
@@ -212,14 +491,14 @@ fun DashboardScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = if (uiState.settings.lastBackupEpochMs == 0L)
-                                    "No local JSON backup yet"
+                                    "No JSON backup exported yet"
                                 else
-                                    "Backup is over 30 days old",
+                                    "JSON backup is over 30 days old",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = Color(0xFF4E2D00)
                             )
                             Text(
-                                text = "Data stays offline on this phone. Tap here to save a JSON backup.",
+                                text = "Tap here to save an offline JSON backup of your organisation's cloud data.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color(0xFF6B4200)
                             )
@@ -229,132 +508,167 @@ fun DashboardScreen(
             }
         }
 
-        // Quick Context Pickers (Session, Class, Section, Student)
-        item {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+        // Quick Context Pickers (shown when member can view academic modules)
+        if (canViewAcademicDirectory) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Active Class & Student",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "10 / 30 / 60  •  ${uiState.subjectsForClass(activeClassName).size} Subjects",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        SessionClassSectionBar(
+                            uiState = uiState,
+                            onSessionSelected = onSessionSelected,
+                            onClassSelected = onClassSelected,
+                            onSectionSelected = onSectionSelected
+                        )
+                        val studentOptions = if (filtered.isEmpty()) {
+                            listOf("No students in Class $activeClassName-${uiState.filter.section}")
+                        } else {
+                            filtered.map { "Roll ${it.rollNo} • ${it.name}" }
+                        }
+                        val currentLabel = selectedStudent?.let { "Roll ${it.rollNo} • ${it.name}" }
+                            ?: studentOptions.first()
+
+                        CompactDropdownSelector(
+                            label = "Selected Student (${filtered.size} in section)",
+                            selectedValue = currentLabel,
+                            options = studentOptions,
+                            onSelect = { chosen ->
+                                val idx = studentOptions.indexOf(chosen)
+                                if (idx in filtered.indices) {
+                                    onStudentSelected(filtered[idx].id)
+                                }
+                            },
+                            testTag = "picker_student"
+                        )
+                    }
+                }
+            }
+
+            // KPI Summary Row
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "Students (${uiState.filter.session})",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = uiState.sessionStudents.size.toString(),
+                                style = MaterialTheme.typography.displaySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "${filtered.size} in Class $activeClassName-${uiState.filter.section}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "Marks Entered",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "${uiState.marksCompletionPercent}%",
+                                style = MaterialTheme.typography.displaySmall,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            LinearProgressIndicator(
+                                progress = { uiState.marksCompletionPercent / 100f },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                                color = MaterialTheme.colorScheme.secondary,
+                                trackColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        }
+                    }
+                }
+            }
+        } else if (uiState.canView(AppModule.TIMETABLE)) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text(
-                            text = "Active Class & Student",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary
+                        Icon(
+                            imageVector = Icons.Default.CalendarMonth,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp)
                         )
-                        Text(
-                            text = "10 / 30 / 60  •  ${uiState.subjectsForClass(uiState.filter.className).size} Subjects",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.secondary,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    SessionClassSectionBar(
-                        uiState = uiState,
-                        onSessionSelected = onSessionSelected,
-                        onClassSelected = onClassSelected,
-                        onSectionSelected = onSectionSelected
-                    )
-                    val studentOptions = if (filtered.isEmpty()) {
-                        listOf("No students in Class ${uiState.filter.className}-${uiState.filter.section}")
-                    } else {
-                        filtered.map { "Roll ${it.rollNo} • ${it.name}" }
-                    }
-                    val currentLabel = selectedStudent?.let { "Roll ${it.rollNo} • ${it.name}" }
-                        ?: studentOptions.first()
-
-                    CompactDropdownSelector(
-                        label = "Selected Student (${filtered.size} in section)",
-                        selectedValue = currentLabel,
-                        options = studentOptions,
-                        onSelect = { chosen ->
-                            val idx = studentOptions.indexOf(chosen)
-                            if (idx in filtered.indices) {
-                                onStudentSelected(filtered[idx].id)
-                            }
-                        },
-                        testTag = "picker_student"
-                    )
-                }
-            }
-        }
-
-        // KPI Summary Row
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Text(
-                            text = "Students (${uiState.filter.session})",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = uiState.sessionStudents.size.toString(),
-                            style = MaterialTheme.typography.displaySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = "${filtered.size} in Class ${uiState.filter.className}-${uiState.filter.section}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Text(
-                            text = "Marks Entered",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "${uiState.marksCompletionPercent}%",
-                            style = MaterialTheme.typography.displaySmall,
-                            color = MaterialTheme.colorScheme.secondary
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        LinearProgressIndicator(
-                            progress = { uiState.marksCompletionPercent / 100f },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp)),
-                            color = MaterialTheme.colorScheme.secondary,
-                            trackColor = MaterialTheme.colorScheme.primaryContainer
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Timetable Access Enabled",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Your role currently has view access to Timetable. Full timetable scheduling will be activated in the upcoming phases. Ask your admin if you need access to Students, Marks, or Reports.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // Quick Action Tiles
+        // Quick Action Tiles (strictly filtered to modules this member can view)
         item {
             Text(
                 text = "Quick Actions",
@@ -363,85 +677,75 @@ fun DashboardScreen(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    DashboardActionTile(
-                        title = "Enter Marks",
-                        subtitle = "IA 10, UT 30, Exam 60",
-                        icon = Icons.Default.EditNote,
-                        accent = MaterialTheme.colorScheme.primary,
-                        onClick = onNavigateToMarks,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("tile_enter_marks")
-                    )
-                    DashboardActionTile(
-                        title = "Students",
-                        subtitle = "Add, edit, CSV import",
-                        icon = Icons.Default.Groups,
-                        accent = MaterialTheme.colorScheme.secondary,
-                        onClick = onNavigateToStudents,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("tile_students")
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    DashboardActionTile(
-                        title = "Co-Scholastic",
-                        subtitle = "Grades & attendance",
-                        icon = Icons.Default.FactCheck,
-                        accent = MaterialTheme.colorScheme.secondary,
-                        onClick = onNavigateToCoScholastic,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("tile_coscholastic")
-                    )
-                    DashboardActionTile(
-                        title = "A4 Reports",
-                        subtitle = "Slips, Annual & ZIP",
-                        icon = Icons.Default.Description,
-                        accent = MaterialTheme.colorScheme.primary,
-                        onClick = onNavigateToReports,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("tile_reports")
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    DashboardActionTile(
-                        title = "Settings",
-                        subtitle = "CPS/CPI logos & map",
-                        icon = Icons.Default.Settings,
-                        accent = MaterialTheme.colorScheme.onSurfaceVariant,
-                        onClick = onNavigateToSettings,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("tile_settings")
-                    )
-                    val backupSub = if (uiState.settings.lastBackupEpochMs > 0L) {
-                        val fmt = SimpleDateFormat("dd MMM yyyy", Locale.US)
-                        "Last: ${fmt.format(Date(uiState.settings.lastBackupEpochMs))}"
-                    } else {
-                        "Export / Restore JSON"
+                quickActions.chunked(2).forEach { rowItems ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        rowItems.forEach { spec ->
+                            DashboardActionTile(
+                                title = spec.title,
+                                subtitle = spec.subtitle,
+                                icon = spec.icon,
+                                accent = spec.accent,
+                                onClick = spec.onClick,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag(spec.testTag)
+                            )
+                        }
+                        if (rowItems.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
                     }
-                    DashboardActionTile(
-                        title = "Backup",
-                        subtitle = backupSub,
-                        icon = Icons.Default.Backup,
-                        accent = MaterialTheme.colorScheme.tertiary,
-                        onClick = onNavigateToBackup,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("tile_backup")
+                }
+            }
+        }
+
+        // Student Dashboard Summary List (only shown if member has Students, Marks, or Reports access)
+        if (canViewAcademicDirectory) {
+            item {
+                StudentDashboardHeaderControls(
+                    totalCount = scopedSummaries.size,
+                    passCount = passCount,
+                    needsAttentionCount = needsAttentionCount,
+                    pendingCount = pendingCount,
+                    activeClassLabel = "$activeClassName-${uiState.filter.section}",
+                    searchQuery = studentSearchQuery,
+                    onSearchQueryChange = { studentSearchQuery = it },
+                    statusFilter = statusFilter,
+                    onStatusFilterSelected = { statusFilter = it },
+                    onlyActiveClass = onlyActiveClass,
+                    onToggleOnlyActiveClass = { onlyActiveClass = !onlyActiveClass },
+                    onManageAllStudents = onNavigateToStudents,
+                    showManageButton = canViewStudents
+                )
+            }
+
+            if (displayedSummaries.isEmpty()) {
+                item {
+                    StudentDashboardEmptyCard(
+                        hasAnySessionStudents = allSessionSummaries.isNotEmpty(),
+                        onClearFilters = {
+                            studentSearchQuery = ""
+                            statusFilter = DashboardStatusFilter.ALL
+                            onlyActiveClass = false
+                        },
+                        onNavigateToStudents = onNavigateToStudents,
+                        canManageStudents = uiState.canEdit(AppModule.STUDENTS)
+                    )
+                }
+            } else {
+                items(displayedSummaries, key = { "dash_st_${it.student.id}" }) { summary ->
+                    StudentSummaryDashboardCard(
+                        summary = summary,
+                        isCurrentlySelected = selectedStudent?.id == summary.student.id,
+                        onOpenMarks = onOpenStudentMarks,
+                        onOpenCoScholastic = onOpenStudentCoScholastic,
+                        onOpenReport = onOpenStudentReport,
+                        canOpenMarks = canViewMarks,
+                        canOpenCoScholastic = canViewCoScholastic,
+                        canOpenReport = canViewReports
                     )
                 }
             }

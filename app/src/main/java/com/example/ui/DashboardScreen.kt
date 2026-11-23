@@ -21,6 +21,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Apartment
+import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.AssignmentLate
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -28,6 +30,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.HowToReg
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
@@ -61,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import com.example.data.StudentEntity
 import com.example.domain.AppModule
 import com.example.domain.OrgRole
+import com.example.domain.PendingMarksItem
 import com.example.ui.theme.AbsentAmber
 import com.example.ui.theme.AbsentAmberContainer
 import com.example.ui.theme.FailRed
@@ -102,6 +106,11 @@ fun DashboardScreen(
     onNavigateToMembers: () -> Unit = {},
     onNavigateToTeachers: () -> Unit = {},
     onNavigateToTimetable: () -> Unit = {},
+    onNavigateToPendingMarks: () -> Unit = {},
+    onNavigateToWorkloadReport: () -> Unit = {},
+    onNavigateToTeacherAttendance: () -> Unit = {},
+    onOpenPendingMarksItem: (PendingMarksItem) -> Unit = {},
+    onOpenCoScholasticSection: (String, String, String) -> Unit = { _, _, _ -> },
     onEditOwnTeacherProfile: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -273,6 +282,40 @@ fun DashboardScreen(
                     onClick = onNavigateToTimetable
                 )
             )
+            add(
+                QuickActionSpec(
+                    title = "Staff Attendance",
+                    subtitle = if (uiState.canEdit(AppModule.TIMETABLE)) "Daily sheet & A4 PDF" else "View staff attendance",
+                    icon = Icons.Default.HowToReg,
+                    accent = secondaryColor,
+                    testTag = "tile_teacher_attendance",
+                    onClick = onNavigateToTeacherAttendance
+                )
+            )
+        }
+        if (canViewMarks) {
+            add(
+                QuickActionSpec(
+                    title = "Pending Marks",
+                    subtitle = if (uiState.isTeacherRestricted) "My incomplete marks" else "By exam & reminders",
+                    icon = Icons.Default.AssignmentLate,
+                    accent = AbsentAmber,
+                    testTag = "tile_pending_marks",
+                    onClick = onNavigateToPendingMarks
+                )
+            )
+        }
+        if (canViewTimetable || canViewTeachers) {
+            add(
+                QuickActionSpec(
+                    title = "Workload Report",
+                    subtitle = "Periods, subs, PDF/CSV",
+                    icon = Icons.Default.Assessment,
+                    accent = primaryColor,
+                    testTag = "tile_workload_report",
+                    onClick = onNavigateToWorkloadReport
+                )
+            )
         }
         if (canViewMembers) {
             val reqSub = if (uiState.pendingJoinRequestCount > 0) {
@@ -390,6 +433,29 @@ fun DashboardScreen(
                         }
                     }
                 }
+            }
+        }
+
+        // Phase 7: Teacher "My Day" Home Card (for any member linked to a Phase 4 Teacher profile)
+        if (uiState.resolveOwnLinkedTeacher() != null) {
+            item {
+                TeacherMyDayHomeCard(
+                    uiState = uiState,
+                    onOpenTimetable = onNavigateToTimetable,
+                    onOpenPendingMarks = onNavigateToPendingMarks,
+                    onOpenMarksForItem = onOpenPendingMarksItem,
+                    onOpenCoScholasticForSection = onOpenCoScholasticSection
+                )
+            }
+        }
+
+        // Phase 7: Admin / Non-restricted Pending Marks Summary Tile by Exam
+        if (canViewMarks && !uiState.isTeacherRestricted) {
+            item {
+                AdminPendingMarksSummaryCard(
+                    uiState = uiState,
+                    onOpenPendingMarks = onNavigateToPendingMarks
+                )
             }
         }
 

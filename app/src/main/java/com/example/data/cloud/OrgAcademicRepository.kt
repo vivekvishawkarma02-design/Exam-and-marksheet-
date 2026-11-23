@@ -13,6 +13,8 @@ import com.example.domain.MarkComponent
 import com.example.domain.MemberAccessProfile
 import com.example.domain.OfflineSyncEngine
 import com.example.domain.OrgAccessEvaluator
+import com.example.domain.Phase7AccessEvaluator
+import com.example.domain.SchoolAcademicBundleForPending
 import com.example.util.OperationType
 import com.example.util.friendlyFirestoreErrorMessage
 import com.example.util.handleFirestoreError
@@ -301,6 +303,57 @@ class OrgAcademicRepository(
         }
     }
 
+    /**
+     * Phase 7: Observes students + marks across all allowed schools for the Pending Marks List
+     * and Admin Home pending summary tile (offline-first from Firestore local cache).
+     */
+    fun observeMultiSchoolPendingBundles(
+        orgId: String,
+        schools: List<CloudSchoolRecord>,
+        member: MemberAccessProfile
+    ): Flow<List<SchoolAcademicBundleForPending>> {
+        val canReadMarks = OrgAccessEvaluator.canViewModule(member, AppModule.MARKS) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.REPORTS)
+        if (!OrgAccessEvaluator.isActive(member) || !canReadMarks || schools.isEmpty()) {
+            return flowOf(emptyList())
+        }
+        val allowedSchools = schools.filter { OrgAccessEvaluator.canAccessSchool(member, it.docId) }
+        if (allowedSchools.isEmpty()) return flowOf(emptyList())
+
+        val schoolFlows = allowedSchools.map { school ->
+            val schoolRef = db.collection("organisations").document(orgId)
+                .collection("schools").document(school.docId)
+            val stableSchoolId = StableDocId.toLong(school.docId)
+            val subjectsByClass = buildSubjectsByClassMap(school)
+
+            val stFlow = schoolRef.collection("students").snapshots(MetadataChanges.INCLUDE).map { snap ->
+                snap.documents.map { parseStudent(it, school.docId, stableSchoolId).entity }
+            }
+            val mkFlow = schoolRef.collection("marks").snapshots(MetadataChanges.INCLUDE).map { snap ->
+                snap.documents.map { parseMark(it, school.docId).entity }
+            }
+            combine(stFlow, mkFlow) { students, marks ->
+                SchoolAcademicBundleForPending(
+                    schoolDocId = school.docId,
+                    schoolName = school.name,
+                    students = students,
+                    marks = marks,
+                    subjectsByClass = subjectsByClass
+                )
+            }
+        }
+        return combine(schoolFlows) { arr -> arr.toList() }
+    }
+
+    private fun buildSubjectsByClassMap(school: CloudSchoolRecord): Map<String, List<String>> {
+        val groupSubjects = school.classGroups.associate { it.id to it.subjects }
+        val result = linkedMapOf<String, List<String>>()
+        for (cls in school.classes) {
+            result[cls.name] = groupSubjects[cls.classGroupId].orEmpty()
+        }
+        return result
+    }
+
     // =========================================================================
     // 2. SCHOOLS, CLASS GROUPS, CLASSES & SUBJECTS CRUD (Offline-First Enqueue)
     // =========================================================================
@@ -393,6 +446,84 @@ class OrgAcademicRepository(
                 summary = "Updated school '${record.name.trim()}'",
                 schoolId = record.docId
             )
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Phase 7: Per-school optional report-card switches (OFF by default) & open exams for teacher marks entry.
+     */
+    fun updateSchoolReportCardLinks(
+        orgId: String,
+        schoolDocId: String,
+        schoolName: String,
+        printClassTeacherNameOnReports: Boolean,
+        checkReportCardsReadyBeforeBatch: Boolean,
+        openExamsForTeachers: List<String>
+    ): Result<Unit> {
+        val path = "organisations/$orgId/schools/$schoolDocId"
+        return try {
+            requireUid()
+            val cleanOpen = openExamsForTeachers
+                .map { it.trim().uppercase() }
+                .filter { it in Phase7AccessEvaluator.ALL_EXAM_KEYS }
+                .distinct()
+            val payload = mapOf(
+                "printClassTeacherNameOnReports" to printClassTeacherNameOnReports,
+                "checkReportCardsReadyBeforeBatch" to checkReportCardsReadyBeforeBatch,
+                "openExamsForTeachers" to cleanOpen,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            val ref = db.collection("organisations").document(orgId)
+                .collection("schools").document(schoolDocId)
+            val task = ref.update(payload)
+            attachSyncListeners(task, OperationType.UPDATE, path) { ref.update(payload) }
+            orgRepo.logAuditNonBlocking(
+                orgId = orgId,
+                action = "SCHOOL_REPORT_LINKS_UPDATED",
+                targetType = "school",
+                targetId = schoolDocId,
+                summary = "Updated report links for '$schoolName' (Class teacher sign=${printClassTeacherNameOnReports}, Ready check=${checkReportCardsReadyBeforeBatch}, Open exams=${cleanOpen.joinToString(",")})",
+                schoolId = schoolDocId
+            )
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Phase 7: Keeps `classTeacherNamesBySection` on the school document synced whenever Phase 4
+     * class assignments change, so Reports can optionally print Class Teacher's name even if the
+     * user generating report cards does not have `teachers: view`.
+     */
+    fun updateSchoolClassTeacherNames(
+        orgId: String,
+        schoolDocId: String,
+        namesBySection: Map<String, String>
+    ): Result<Unit> {
+        val path = "organisations/$orgId/schools/$schoolDocId"
+        return try {
+            requireUid()
+            val cleanMap = namesBySection.entries
+                .take(120)
+                .associate { (k, v) -> k.take(60) to v.trim().take(120) }
+            val payload = mapOf(
+                "classTeacherNamesBySection" to cleanMap,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            val ref = db.collection("organisations").document(orgId)
+                .collection("schools").document(schoolDocId)
+            val task = ref.update(payload)
+            attachSyncListeners(task, OperationType.UPDATE, path) { ref.update(payload) }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -1251,6 +1382,23 @@ class OrgAcademicRepository(
             ?.mapNotNull { CloudSchoolClassItem.fromMap(it as? Map<*, *>) }
             ?.sortedBy { it.sortOrder }
             ?: emptyList()
+        val rawOpenExams = doc.get("openExamsForTeachers") as? List<*>
+        val parsedOpenExams = if (rawOpenExams == null) {
+            Phase7AccessEvaluator.ALL_EXAM_KEYS
+        } else {
+            rawOpenExams.mapNotNull { (it as? String)?.trim()?.uppercase() }
+                .filter { it in Phase7AccessEvaluator.ALL_EXAM_KEYS }
+                .distinct()
+        }
+        val rawCtMap = doc.get("classTeacherNamesBySection") as? Map<*, *>
+        val parsedCtMap = rawCtMap?.entries
+            ?.mapNotNull { (k, v) ->
+                val ks = (k as? String)?.trim().orEmpty()
+                val vs = (v as? String)?.trim().orEmpty()
+                if (ks.isNotEmpty() && vs.isNotEmpty()) ks to vs else null
+            }
+            ?.toMap()
+            .orEmpty()
         return CloudSchoolRecord(
             docId = doc.id,
             stableId = StableDocId.toLong(doc.id),
@@ -1262,7 +1410,11 @@ class OrgAcademicRepository(
             active = doc.getBoolean("active") ?: true,
             classGroups = groups,
             classes = classes,
-            createdAt = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            createdAt = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
+            printClassTeacherNameOnReports = doc.getBoolean("printClassTeacherNameOnReports") ?: false,
+            checkReportCardsReadyBeforeBatch = doc.getBoolean("checkReportCardsReadyBeforeBatch") ?: false,
+            openExamsForTeachers = parsedOpenExams,
+            classTeacherNamesBySection = parsedCtMap
         )
     }
 

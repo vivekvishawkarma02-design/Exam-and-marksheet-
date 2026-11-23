@@ -120,6 +120,10 @@
         "active": { "type": "boolean" },
         "classGroups": { "type": "array" },
         "classes": { "type": "array" },
+        "printClassTeacherNameOnReports": { "type": "boolean" },
+        "checkReportCardsReadyBeforeBatch": { "type": "boolean" },
+        "openExamsForTeachers": { "type": "array" },
+        "classTeacherNamesBySection": { "type": "object" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -330,6 +334,120 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["schoolId", "session", "className", "section", "day", "slotId", "subjectName", "teacherId", "teacherName", "locked", "updatedByUid", "updatedByName", "clientEditedAtMs", "createdAt", "updatedAt"]
+    },
+    "TeacherLeave": {
+      "title": "TeacherLeave",
+      "description": "Teacher leave record covering a single date or date range (optional half-day slots), with request/approval workflow.",
+      "type": "object",
+      "properties": {
+        "teacherId": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "reasonType": { "type": "string", "enum": ["CASUAL_LEAVE", "SICK", "DUTY", "OTHER"] },
+        "reasonNote": { "type": "string" },
+        "halfDay": { "type": "boolean" },
+        "halfDaySlotIds": { "type": "array" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED", "CANCELLED"] },
+        "requestedByUid": { "type": "string" },
+        "requestedByName": { "type": "string" },
+        "approvedByUid": { "type": "string" },
+        "approvedByName": { "type": "string" },
+        "approvedAtMs": { "type": "integer" },
+        "updatedByUid": { "type": "string" },
+        "updatedByName": { "type": "string" },
+        "clientEditedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["teacherId", "teacherName", "startDate", "endDate", "reasonType", "reasonNote", "halfDay", "halfDaySlotIds", "status", "requestedByUid", "requestedByName", "approvedByUid", "approvedByName", "approvedAtMs", "updatedByUid", "updatedByName", "clientEditedAtMs", "createdAt", "updatedAt"]
+    },
+    "Substitution": {
+      "title": "Substitution",
+      "description": "Date-scoped substitution assignment keyed deterministically by date, school, class, section, and slot; never alters weekly timetable.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "day": { "type": "string", "enum": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] },
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "slotId": { "type": "string" },
+        "slotLabel": { "type": "string" },
+        "startMinutes": { "type": "integer" },
+        "endMinutes": { "type": "integer" },
+        "subjectName": { "type": "string" },
+        "absentTeacherId": { "type": "string" },
+        "absentTeacherName": { "type": "string" },
+        "leaveId": { "type": "string" },
+        "substituteTeacherId": { "type": "string" },
+        "substituteTeacherName": { "type": "string" },
+        "overrideUsed": { "type": "boolean" },
+        "overrideReason": { "type": "string" },
+        "updatedByUid": { "type": "string" },
+        "updatedByName": { "type": "string" },
+        "clientEditedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["date", "day", "schoolId", "session", "className", "section", "slotId", "slotLabel", "startMinutes", "endMinutes", "subjectName", "absentTeacherId", "absentTeacherName", "leaveId", "substituteTeacherId", "substituteTeacherName", "overrideUsed", "overrideReason", "updatedByUid", "updatedByName", "clientEditedAtMs", "createdAt", "updatedAt"]
+    },
+    "TimetableUndoSnapshot": {
+      "title": "TimetableUndoSnapshot",
+      "description": "Latest pre-auto-generate snapshot per school and session allowing one-tap Undo auto-generate.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "scopeLabel": { "type": "string" },
+        "classNameFilter": { "type": "string" },
+        "sectionFilter": { "type": "string" },
+        "seedUsed": { "type": "integer" },
+        "previousCells": { "type": "array" },
+        "affectedCellIds": { "type": "array" },
+        "createdByUid": { "type": "string" },
+        "createdByName": { "type": "string" },
+        "createdAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "session", "scopeLabel", "classNameFilter", "sectionFilter", "seedUsed", "previousCells", "affectedCellIds", "createdByUid", "createdByName", "createdAtMs", "createdAt", "updatedAt"]
+    },
+    "TeacherAccessScope": {
+      "title": "TeacherAccessScope",
+      "description": "Server-verified mirror of a linked teacher member's Phase 4 class-section-subject assignments and class teacher sections enforced in Firestore security rules.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "assignedClassSectionSubjects": { "type": "array" },
+        "classTeacherSections": { "type": "array" },
+        "updatedByUid": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "teacherId", "teacherName", "assignedClassSectionSubjects", "classTeacherSections", "updatedByUid", "updatedAt"]
+    },
+    "TeacherAttendance": {
+      "title": "TeacherAttendance",
+      "description": "Daily per-school teacher attendance entry (Present, Absent, On Leave, Half-Day) controlled by Timetable module access.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "status": { "type": "string", "enum": ["PRESENT", "ABSENT", "ON_LEAVE", "HALF_DAY"] },
+        "note": { "type": "string" },
+        "linkedLeaveId": { "type": "string" },
+        "updatedByUid": { "type": "string" },
+        "updatedByName": { "type": "string" },
+        "clientEditedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["date", "schoolId", "teacherId", "teacherName", "status", "note", "linkedLeaveId", "updatedByUid", "updatedByName", "clientEditedAtMs", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -408,6 +526,26 @@
     "/organisations/{orgId}/timetableLayouts/{schoolId}": {
       "schema": { "$ref": "#/entities/PeriodStructure" },
       "description": "Mirrored per-school slot layout readable by Timetable viewers so view-only members render exact school timings."
+    },
+    "/organisations/{orgId}/teacherLeaves/{leaveId}": {
+      "schema": { "$ref": "#/entities/TeacherLeave" },
+      "description": "Teacher leave requests and approvals controlled by the Timetable module."
+    },
+    "/organisations/{orgId}/substitutions/{subId}": {
+      "schema": { "$ref": "#/entities/Substitution" },
+      "description": "Date-scoped daily substitution assignments controlled by the Timetable module."
+    },
+    "/organisations/{orgId}/timetableUndoSnapshots/{snapId}": {
+      "schema": { "$ref": "#/entities/TimetableUndoSnapshot" },
+      "description": "Pre-auto-generate undo snapshots controlled by Timetable edit access."
+    },
+    "/organisations/{orgId}/teacherScopes/{memberUid}": {
+      "schema": { "$ref": "#/entities/TeacherAccessScope" },
+      "description": "Server-verified teacher access scopes synced from Phase 4 assignments by Admins or Teachers-editors."
+    },
+    "/organisations/{orgId}/teacherAttendance/{attId}": {
+      "schema": { "$ref": "#/entities/TeacherAttendance" },
+      "description": "Daily per-school teacher attendance records controlled by the Timetable module."
     }
   }
 }

@@ -86,6 +86,7 @@ import com.example.data.SchoolEntity
 import com.example.data.SubjectEntity
 import com.example.data.cloud.LocalMigrationSummary
 import com.example.domain.AppModule
+import com.example.domain.ExamType
 import com.example.ui.theme.AbsentAmber
 import com.example.ui.theme.AbsentAmberContainer
 import com.example.util.PdfExportHelper
@@ -563,6 +564,143 @@ fun SettingsScreen(
                             modifier = Modifier.testTag("toggle_class_rank")
                         )
                     }
+                    }
+                }
+            }
+
+            // 2.5 PHASE 7: PER-SCHOOL REPORT CARD LINKS (OFF BY DEFAULT) & OPEN EXAMS FOR TEACHERS
+            item {
+                val printCtName = uiState.activeSchoolPrintClassTeacherName
+                val checkReady = uiState.activeSchoolCheckReportReady
+                val openExams = uiState.activeSchoolOpenExams
+
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.testTag("settings_report_links_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Report Card Links & Open Exams (${activeSchool.name})",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Per-school optional switches (both OFF by default so existing report card layouts stay untouched) and which exams teachers can enter marks for.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Print Class Teacher's name on reports",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "Shows assigned Class Teacher name under \"CLASS TEACHER'S SIGN\" on UT, Half-Yearly & Annual PDFs",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = printCtName,
+                                onCheckedChange = { checked ->
+                                    viewModel.updateSchoolReportCardLinks(
+                                        schoolId = activeSchool.id,
+                                        printClassTeacherNameOnReports = checked,
+                                        checkReportCardsReadyBeforeBatch = checkReady,
+                                        openExamsForTeachers = openExams
+                                    )
+                                },
+                                modifier = Modifier.testTag("toggle_print_class_teacher_name")
+                            )
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "\"Report cards ready\" check before batch export",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "Warns with a student list if marks, attendance, co-scholastic grades, or remarks are missing",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = checkReady,
+                                onCheckedChange = { checked ->
+                                    viewModel.updateSchoolReportCardLinks(
+                                        schoolId = activeSchool.id,
+                                        printClassTeacherNameOnReports = printCtName,
+                                        checkReportCardsReadyBeforeBatch = checked,
+                                        openExamsForTeachers = openExams
+                                    )
+                                },
+                                modifier = Modifier.testTag("toggle_report_cards_ready_check")
+                            )
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        Text(
+                            text = "Exams Open for Teacher Marks Entry",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Teachers can only edit marks for exams toggled ON below (Admins keep full access).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            ExamType.entries.forEach { exam ->
+                                val isOpen = openExams.any { it.equals(exam.name, ignoreCase = true) }
+                                FilterChip(
+                                    selected = isOpen,
+                                    onClick = {
+                                        val updated = if (isOpen) {
+                                            openExams.filterNot { it.equals(exam.name, ignoreCase = true) }
+                                        } else {
+                                            (openExams + exam.name).distinct()
+                                        }
+                                        viewModel.updateSchoolReportCardLinks(
+                                            schoolId = activeSchool.id,
+                                            printClassTeacherNameOnReports = printCtName,
+                                            checkReportCardsReadyBeforeBatch = checkReady,
+                                            openExamsForTeachers = updated
+                                        )
+                                    },
+                                    label = { Text(if (isOpen) "${exam.label} • Open" else "${exam.label} • Closed") },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                    ),
+                                    modifier = Modifier.testTag("open_exam_chip_${exam.name}")
+                                )
+                            }
+                        }
                     }
                 }
             }

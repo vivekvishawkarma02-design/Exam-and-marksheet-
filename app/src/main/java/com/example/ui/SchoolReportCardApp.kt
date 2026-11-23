@@ -70,9 +70,12 @@ import com.example.data.cloud.OfflinePrefsStore
 import com.example.data.cloud.OrgAcademicRepository
 import com.example.data.cloud.OrgCloudRepository
 import com.example.data.cloud.Phase4Repository
+import com.example.data.cloud.Phase6Repository
+import com.example.data.cloud.Phase7Repository
 import com.example.data.cloud.TimetableRepository
 import com.example.data.cloud.authStateFlow
 import com.example.domain.AppModule
+import com.example.domain.ExamType
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
@@ -89,6 +92,9 @@ object AppRoutes {
     const val ROUTE_TEACHER_PROFILE = "teacher_profile"
     const val ROUTE_TEACHERS = "teachers_and_assignments"
     const val ROUTE_TIMETABLE = "timetable"
+    const val ROUTE_PENDING_MARKS = "pending_marks"
+    const val ROUTE_WORKLOAD_REPORT = "workload_report"
+    const val ROUTE_TEACHER_ATTENDANCE = "teacher_attendance"
 }
 
 private enum class OnboardingSubScreen {
@@ -201,6 +207,8 @@ private fun AuthenticatedSessionHost(
     val academicRepo = remember(orgRepo) { OrgAcademicRepository(orgRepo) }
     val phase4Repo = remember(orgRepo) { Phase4Repository(orgRepo) }
     val timetableRepo = remember(orgRepo) { TimetableRepository(orgRepo) }
+    val phase6Repo = remember(orgRepo) { Phase6Repository(orgRepo) }
+    val phase7Repo = remember(orgRepo) { Phase7Repository(orgRepo) }
     val localRepo = remember(appContext) { ReportCardRepository(AppDatabase.getInstance(appContext).reportCardDao()) }
 
     val sessionViewModel: OrgSessionViewModel = viewModel(
@@ -334,6 +342,8 @@ private fun AuthenticatedSessionHost(
                     academicRepo = academicRepo,
                     phase4Repo = phase4Repo,
                     timetableRepo = timetableRepo,
+                    phase6Repo = phase6Repo,
+                    phase7Repo = phase7Repo,
                     localRepo = localRepo,
                     connectivityMonitor = connectivityMonitor,
                     offlinePrefs = offlinePrefs
@@ -426,6 +436,9 @@ private fun OrganisationWorkspace(
     var showDeleteOrgDialog by remember { mutableStateOf(false) }
     var showSyncDetailDialog by remember { mutableStateOf(false) }
     var showConflictHistoryDialog by remember { mutableStateOf(false) }
+    var pendingMarksJumpTarget by remember { mutableStateOf<Pair<ExamType, String>?>(null) }
+    var timetableJumpTab by remember { mutableStateOf<Int?>(null) }
+    var timetableJumpSubsDate by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.snackbar.collect { msg ->
@@ -521,7 +534,10 @@ private fun OrganisationWorkspace(
         currentRoute == AppRoutes.ROUTE_SCHOOLS ||
         currentRoute == AppRoutes.ROUTE_TEACHER_PROFILE ||
         currentRoute == AppRoutes.ROUTE_TEACHERS ||
-        currentRoute == AppRoutes.ROUTE_TIMETABLE
+        currentRoute == AppRoutes.ROUTE_TIMETABLE ||
+        currentRoute == AppRoutes.ROUTE_PENDING_MARKS ||
+        currentRoute == AppRoutes.ROUTE_WORKLOAD_REPORT ||
+        currentRoute == AppRoutes.ROUTE_TEACHER_ATTENDANCE
 
     fun navigateTopLevel(route: String) {
         navController.navigate(route) {
@@ -667,7 +683,37 @@ private fun OrganisationWorkspace(
                                     },
                                     onNavigateToTimetable = {
                                         if (uiState.canView(AppModule.TIMETABLE)) {
+                                            timetableJumpTab = null
+                                            timetableJumpSubsDate = null
                                             navController.navigate(AppRoutes.ROUTE_TIMETABLE) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToPendingMarks = {
+                                        if (uiState.canView(AppModule.MARKS)) {
+                                            navController.navigate(AppRoutes.ROUTE_PENDING_MARKS) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToWorkloadReport = {
+                                        if (uiState.canView(AppModule.TIMETABLE) || uiState.canView(AppModule.TEACHERS)) {
+                                            navController.navigate(AppRoutes.ROUTE_WORKLOAD_REPORT) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToTeacherAttendance = {
+                                        if (uiState.canView(AppModule.TIMETABLE)) {
+                                            navController.navigate(AppRoutes.ROUTE_TEACHER_ATTENDANCE) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onOpenPendingMarksItem = { item ->
+                                        if (uiState.canView(AppModule.MARKS)) {
+                                            viewModel.focusSchoolClassSection(item.schoolDocId, item.className, item.section)
+                                            pendingMarksJumpTarget = item.exam to item.subjectName
+                                            navigateTopLevel(AppRoutes.ROUTE_MARKS)
+                                        }
+                                    },
+                                    onOpenCoScholasticSection = { schId, cls, sec ->
+                                        if (uiState.canView(AppModule.CO_SCHOLASTIC)) {
+                                            viewModel.focusSchoolClassSection(schId, cls, sec)
+                                            navController.navigate(AppRoutes.ROUTE_COSCHOLASTIC) { launchSingleTop = true }
                                         }
                                     },
                                     onEditOwnTeacherProfile = {
@@ -720,7 +766,15 @@ private fun OrganisationWorkspace(
                                     viewModel = viewModel,
                                     onNavigateToStudents = {
                                         if (uiState.canView(AppModule.STUDENTS)) navigateTopLevel(AppRoutes.ROUTE_STUDENTS)
-                                    }
+                                    },
+                                    onNavigateToPendingMarks = {
+                                        if (uiState.canView(AppModule.MARKS)) {
+                                            navController.navigate(AppRoutes.ROUTE_PENDING_MARKS) { launchSingleTop = true }
+                                        }
+                                    },
+                                    initialJumpExam = pendingMarksJumpTarget?.first,
+                                    initialJumpSubject = pendingMarksJumpTarget?.second,
+                                    onJumpConsumed = { pendingMarksJumpTarget = null }
                                 )
                             }
 
@@ -816,7 +870,64 @@ private fun OrganisationWorkspace(
                                     TimetableScreen(
                                         uiState = uiState,
                                         viewModel = viewModel,
+                                        onBack = { navController.popBackStack() },
+                                        initialTabIndex = timetableJumpTab,
+                                        initialSubsDate = timetableJumpSubsDate,
+                                        onInitialJumpConsumed = {
+                                            timetableJumpTab = null
+                                            timetableJumpSubsDate = null
+                                        }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_PENDING_MARKS) {
+                                if (uiState.canView(AppModule.MARKS)) {
+                                    PendingMarksScreen(
+                                        uiState = uiState,
+                                        onBack = { navController.popBackStack() },
+                                        onOpenMarksForItem = { item ->
+                                            viewModel.focusSchoolClassSection(item.schoolDocId, item.className, item.section)
+                                            pendingMarksJumpTarget = item.exam to item.subjectName
+                                            navigateTopLevel(AppRoutes.ROUTE_MARKS)
+                                        }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_WORKLOAD_REPORT) {
+                                if (uiState.canView(AppModule.TIMETABLE) || uiState.canView(AppModule.TEACHERS)) {
+                                    WorkloadReportScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
                                         onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_TEACHER_ATTENDANCE) {
+                                if (uiState.canView(AppModule.TIMETABLE)) {
+                                    TeacherAttendanceScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() },
+                                        onJumpToSubstitutionsForDate = { dateIso ->
+                                            timetableJumpTab = 4 // TimetableTab.LEAVE_SUBS
+                                            timetableJumpSubsDate = dateIso
+                                            navController.navigate(AppRoutes.ROUTE_TIMETABLE) { launchSingleTop = true }
+                                        }
                                     )
                                 } else {
                                     LaunchedEffect(Unit) {

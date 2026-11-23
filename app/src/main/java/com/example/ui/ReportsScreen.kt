@@ -29,11 +29,14 @@ import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -41,6 +44,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,9 +67,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.domain.ClassReportReadinessResult
 import com.example.domain.ReportType
 import com.example.domain.SlipLayoutMode
+import com.example.ui.theme.AbsentAmber
 import com.example.util.PdfExportHelper
+
+private enum class PendingBatchAction {
+    COMBINED_PDF,
+    CLASS_ZIP
+}
 
 @Composable
 fun ReportsScreen(
@@ -77,6 +91,7 @@ fun ReportsScreen(
     var batchWholeClass by remember { mutableStateOf(false) }
     var slipLayoutMode by remember { mutableStateOf(SlipLayoutMode.TWO_PER_PAGE) }
     var currentPageIndex by remember { mutableIntStateOf(0) }
+    var readinessWarningDialog by remember { mutableStateOf<Pair<ClassReportReadinessResult, PendingBatchAction>?>(null) }
 
     LaunchedEffect(pdfState.previewPages.size) {
         currentPageIndex = 0
@@ -314,6 +329,13 @@ fun ReportsScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     Button(
                         onClick = {
+                            if (batchWholeClass && uiState.activeSchoolCheckReportReady) {
+                                val check = uiState.checkCurrentClassReportReadiness(selectedReportType)
+                                if (!check.isReady) {
+                                    readinessWarningDialog = check to PendingBatchAction.COMBINED_PDF
+                                    return@Button
+                                }
+                            }
                             viewModel.generatePdfReport(
                                 reportType = selectedReportType,
                                 batchWholeClass = batchWholeClass,
@@ -343,6 +365,13 @@ fun ReportsScreen(
                     if (batchWholeClass) {
                         OutlinedButton(
                             onClick = {
+                                if (uiState.activeSchoolCheckReportReady) {
+                                    val check = uiState.checkCurrentClassReportReadiness(selectedReportType)
+                                    if (!check.isReady) {
+                                        readinessWarningDialog = check to PendingBatchAction.CLASS_ZIP
+                                        return@OutlinedButton
+                                    }
+                                }
                                 viewModel.generateBatchClassZip(
                                     reportType = selectedReportType,
                                     slipLayoutMode = slipLayoutMode,
@@ -583,5 +612,87 @@ fun ReportsScreen(
                 }
             }
         }
+    }
+
+    // Phase 7 Optional "Report Cards Ready" Warning Dialog before batch export
+    readinessWarningDialog?.let { (result, action) ->
+        AlertDialog(
+            onDismissRequest = { readinessWarningDialog = null },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.WarningAmber,
+                    contentDescription = "Incomplete report cards warning",
+                    tint = AbsentAmber
+                )
+            },
+            title = {
+                Text(
+                    text = "Report Cards Not Ready (${result.issues.size} of ${result.totalStudents})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "${result.readyStudents} student(s) ready, ${result.issues.size} student(s) in Class ${result.className}-${result.section} are missing data for ${result.reportType.label}:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    HorizontalDivider()
+                    result.issues.forEach { issue ->
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "Roll ${issue.rollNo} • ${issue.studentName}",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = issue.summaryLine(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        readinessWarningDialog = null
+                        when (action) {
+                            PendingBatchAction.COMBINED_PDF -> viewModel.generatePdfReport(
+                                reportType = selectedReportType,
+                                batchWholeClass = true,
+                                slipLayoutMode = slipLayoutMode
+                            )
+                            PendingBatchAction.CLASS_ZIP -> viewModel.generateBatchClassZip(
+                                reportType = selectedReportType,
+                                slipLayoutMode = slipLayoutMode,
+                                onReady = {}
+                            )
+                        }
+                    },
+                    modifier = Modifier.testTag("readiness_export_anyway_button")
+                ) {
+                    Text("Export Anyway")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { readinessWarningDialog = null },
+                    modifier = Modifier.testTag("readiness_cancel_button")
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

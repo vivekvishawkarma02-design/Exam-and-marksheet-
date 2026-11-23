@@ -1139,6 +1139,688 @@ test("Phase 5: Timetable module enforces edit, view-only, no-access, school-scop
   await assertSucceeds(orgEditor.collection("timetableCells").doc(cellId).delete());
 });
 
+test("Phase 6 Auto-generate undo, teacher leaves (self-request vs approval) and substitutions rules", async () => {
+  const ts = pastDate(5000);
+  const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+  const TT_EDITOR_UID = "tt_p6_editor_uid";
+  const TT_VIEWER_UID = "tt_p6_teacher_uid";
+  const TT_NONE_UID = "tt_p6_none_uid";
+  const editorDb = testEnv.authenticatedContext(TT_EDITOR_UID).firestore();
+  const viewerDb = testEnv.authenticatedContext(TT_VIEWER_UID).firestore();
+  const noneDb = testEnv.authenticatedContext(TT_NONE_UID).firestore();
+  const outsiderDb = testEnv.authenticatedContext(OTHER_ORG_UID).firestore();
+
+  await seedOrgWithOwnerAndSchools();
+
+  // Seed members: Editor (timetable: edit, SCHOOL_1), Linked Teacher (timetable: view, teachers: none), No-access (timetable: none)
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("members").doc(TT_EDITOR_UID).set(
+      makeMemberPayload(TT_EDITOR_UID, {
+        role: "OFFICE_OPERATOR",
+        allSchools: false,
+        schools: [SCHOOL_1],
+        permissions: { ...teacherPermissions("view"), timetable: "edit", teachers: "view" },
+      })
+    )
+  );
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("members").doc(TT_VIEWER_UID).set(
+      makeMemberPayload(TT_VIEWER_UID, {
+        role: "TEACHER",
+        allSchools: true,
+        schools: [],
+        permissions: { ...teacherPermissions("view"), timetable: "view", teachers: "none" },
+      })
+    )
+  );
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("members").doc(TT_NONE_UID).set(
+      makeMemberPayload(TT_NONE_UID, {
+        role: "TEACHER",
+        allSchools: true,
+        schools: [],
+        permissions: { ...teacherPermissions("view"), timetable: "none", teachers: "none" },
+      })
+    )
+  );
+
+  // Seed two teacher profiles: one linked to TT_VIEWER_UID, one other teacher
+  const linkedTeacherId = "tchr_member_" + TT_VIEWER_UID;
+  const otherTeacherId = "tchr_other_01";
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("teachers").doc(linkedTeacherId).set({
+      name: "Ms. Viewer Teacher",
+      mobile: "9999999999",
+      email: "viewer@school.org",
+      photoBase64: "",
+      subjects: ["ENGLISH"],
+      schoolIds: [SCHOOL_1],
+      maxPeriodsPerDay: 6,
+      maxConsecutivePeriods: 3,
+      weeklyOffDays: [],
+      active: true,
+      linkedMemberUid: TT_VIEWER_UID,
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("teachers").doc(otherTeacherId).set({
+      name: "Mr. Other Teacher",
+      mobile: "8888888888",
+      email: "other@school.org",
+      photoBase64: "",
+      subjects: ["MATH"],
+      schoolIds: [SCHOOL_1],
+      maxPeriodsPerDay: 6,
+      maxConsecutivePeriods: 3,
+      weeklyOffDays: [],
+      active: true,
+      linkedMemberUid: "",
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+
+  const orgEditor = editorDb.collection("organisations").doc(ORG_ID);
+  const orgViewer = viewerDb.collection("organisations").doc(ORG_ID);
+  const orgNone = noneDb.collection("organisations").doc(ORG_ID);
+  const orgOutsider = outsiderDb.collection("organisations").doc(ORG_ID);
+
+  // 1. Linked teacher (timetable: view, teachers: none) CAN query their own linked teacher profile, CANNOT list all teachers
+  await assertSucceeds(
+    orgViewer.collection("teachers").where("linkedMemberUid", "==", TT_VIEWER_UID).get()
+  );
+  await assertFails(orgViewer.collection("teachers").get());
+
+  // 2. Linked teacher CAN submit a PENDING leave request for themselves
+  const selfLeavePayload = {
+    teacherId: linkedTeacherId,
+    teacherName: "Ms. Viewer Teacher",
+    startDate: "2026-11-25",
+    endDate: "2026-11-25",
+    reasonType: "SICK",
+    reasonNote: "Fever",
+    halfDay: false,
+    halfDaySlotIds: [],
+    status: "PENDING",
+    requestedByUid: TT_VIEWER_UID,
+    requestedByName: "Ms. Viewer Teacher",
+    approvedByUid: "",
+    approvedByName: "",
+    approvedAtMs: 0,
+    updatedByUid: TT_VIEWER_UID,
+    updatedByName: "Ms. Viewer Teacher",
+    clientEditedAtMs: Date.now() - 1000,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+  await assertSucceeds(orgViewer.collection("teacherLeaves").doc("lv_self_1").set(selfLeavePayload));
+
+  // Linked teacher CANNOT self-approve their own leave request
+  await assertFails(
+    orgViewer.collection("teacherLeaves").doc("lv_self_autoapprove").set({
+      ...selfLeavePayload,
+      status: "APPROVED",
+      approvedByUid: TT_VIEWER_UID,
+      approvedAtMs: Date.now(),
+    })
+  );
+
+  // Linked teacher CANNOT request leave for another teacher
+  await assertFails(
+    orgViewer.collection("teacherLeaves").doc("lv_spoof_other").set({
+      ...selfLeavePayload,
+      teacherId: otherTeacherId,
+      teacherName: "Mr. Other Teacher",
+    })
+  );
+
+  // Linked teacher CANNOT approve their pending leave via update, but CAN cancel their own pending leave
+  await assertFails(
+    orgViewer.collection("teacherLeaves").doc("lv_self_1").update({
+      status: "APPROVED",
+      approvedByUid: TT_VIEWER_UID,
+      approvedByName: "Ms. Viewer Teacher",
+      approvedAtMs: Date.now(),
+      updatedByUid: TT_VIEWER_UID,
+      updatedAt: pastDate(400),
+    })
+  );
+  await assertSucceeds(
+    orgViewer.collection("teacherLeaves").doc("lv_self_1").update({
+      status: "CANCELLED",
+      updatedByUid: TT_VIEWER_UID,
+      updatedAt: pastDate(400),
+    })
+  );
+
+  // 3. Editor (timetable: edit) CAN create & approve leave for any teacher
+  await assertSucceeds(
+    orgEditor.collection("teacherLeaves").doc("lv_admin_1").set({
+      ...selfLeavePayload,
+      teacherId: otherTeacherId,
+      teacherName: "Mr. Other Teacher",
+      status: "APPROVED",
+      requestedByUid: TT_EDITOR_UID,
+      requestedByName: "Office Editor",
+      approvedByUid: TT_EDITOR_UID,
+      approvedByName: "Office Editor",
+      approvedAtMs: Date.now() - 500,
+      updatedByUid: TT_EDITOR_UID,
+      updatedByName: "Office Editor",
+    })
+  );
+
+  // 4. Substitutions: Editor CAN create/update/delete for assigned SCHOOL_1, CANNOT write for SCHOOL_2
+  const subId = "sub_2026_11_25_sch_primary_01_5th_A_MON_slot_2";
+  const subPayload = {
+    date: "2026-11-25",
+    day: "WED",
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    className: "5th",
+    section: "A",
+    slotId: "MON_slot_2",
+    slotLabel: "Period 1",
+    startMinutes: 495,
+    endMinutes: 535,
+    subjectName: "MATH",
+    absentTeacherId: otherTeacherId,
+    absentTeacherName: "Mr. Other Teacher",
+    leaveId: "lv_admin_1",
+    substituteTeacherId: linkedTeacherId,
+    substituteTeacherName: "Ms. Viewer Teacher",
+    overrideUsed: false,
+    overrideReason: "",
+    updatedByUid: TT_EDITOR_UID,
+    updatedByName: "Office Editor",
+    clientEditedAtMs: Date.now() - 500,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+  await assertSucceeds(orgEditor.collection("substitutions").doc(subId).set(subPayload));
+  await assertFails(
+    orgEditor.collection("substitutions").doc("sub_sch2").set({ ...subPayload, schoolId: SCHOOL_2 })
+  );
+
+  // View-only member CAN read leaves & substitutions, CANNOT write substitutions or undo snapshots
+  await assertSucceeds(orgViewer.collection("teacherLeaves").get());
+  await assertSucceeds(orgViewer.collection("substitutions").get());
+  await assertFails(
+    orgViewer.collection("substitutions").doc("sub_viewer").set({ ...subPayload, updatedByUid: TT_VIEWER_UID })
+  );
+  await assertFails(orgViewer.collection("substitutions").doc(subId).delete());
+
+  // 5. Auto-generate undo snapshot: Editor CAN create & delete for SCHOOL_1; View-only CANNOT read or write
+  const undoId = "ttundo_sch_primary_01_2026_2027";
+  const undoPayload = {
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    scopeLabel: "Whole school",
+    classNameFilter: "",
+    sectionFilter: "",
+    seedUsed: 12345,
+    previousCells: [],
+    affectedCellIds: ["cell_1"],
+    createdByUid: TT_EDITOR_UID,
+    createdByName: "Office Editor",
+    createdAtMs: Date.now() - 500,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+  await assertSucceeds(orgEditor.collection("timetableUndoSnapshots").doc(undoId).set(undoPayload));
+  await assertFails(orgViewer.collection("timetableUndoSnapshots").get());
+  await assertFails(
+    orgViewer.collection("timetableUndoSnapshots").doc("ttundo_v").set({ ...undoPayload, createdByUid: TT_VIEWER_UID })
+  );
+
+  // 6. No-access member (timetable: none) & Cross-org outsider CANNOT read or write any Phase 6 collection
+  await assertFails(orgNone.collection("teacherLeaves").get());
+  await assertFails(orgNone.collection("substitutions").get());
+  await assertFails(orgNone.collection("timetableUndoSnapshots").get());
+  await assertFails(orgOutsider.collection("teacherLeaves").get());
+  await assertFails(orgOutsider.collection("substitutions").get());
+  await assertFails(orgOutsider.collection("timetableUndoSnapshots").get());
+
+  // Cleanup check for editor delete
+  await assertSucceeds(orgEditor.collection("substitutions").doc(subId).delete());
+  await assertSucceeds(orgEditor.collection("timetableUndoSnapshots").doc(undoId).delete());
+});
+
+// =============================================================================
+// 11. PHASE 7: TEACHER SCOPED MARKS/EXAMS, CLASS-TEACHER CO-SCHOLASTIC,
+//     TEACHER SCOPES PRIVACY, TEACHER ATTENDANCE & REPORT CARD LINKS
+// =============================================================================
+test("Phase 7: Server-side teacher scope enforcement for marks, open exams, class-teacher co-scholastic, teacher attendance & school links", async () => {
+  const TEACHER_A = "uid_p7_teacher_a";
+  const TEACHER_B = "uid_p7_teacher_b";
+  const OPERATOR = "uid_p7_operator";
+  const TT_VIEWER = "uid_p7_tt_viewer";
+  const OUTSIDER = "uid_p7_outsider";
+
+  await seedOrgWithOwnerAndSchools();
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    const orgRef = db.collection("organisations").doc(ORG_ID);
+    const ts = pastDate();
+
+    // Update SCHOOL_1 with Phase 7 settings: only UT1 open for teachers, optional toggles OFF initially
+    await orgRef.collection("schools").doc(SCHOOL_1).set({
+      printClassTeacherNameOnReports: false,
+      checkReportCardsReadyBeforeBatch: false,
+      openExamsForTeachers: ["UT1"],
+      classTeacherNamesBySection: { "3rd|A": "Mrs. Sharma" },
+      updatedAt: ts,
+    }, { merge: true });
+
+    // Seed two students in SCHOOL_1: 3rd-A and 3rd-B
+    await orgRef.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_3a").set({
+      schoolId: SCHOOL_1,
+      classId: "cls_3a",
+      session: "2026-2027",
+      admNo: "ADM-3A-01",
+      name: "Aarav Verma",
+      fatherName: "Rajesh Verma",
+      motherName: "Sunita Verma",
+      dob: "2017-05-12",
+      mobile: "9876543210",
+      address: "Lucknow",
+      photoBase64: "",
+      className: "3rd",
+      section: "A",
+      rollNo: 1,
+      sample: false,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await orgRef.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_3b").set({
+      schoolId: SCHOOL_1,
+      classId: "cls_3b",
+      session: "2026-2027",
+      admNo: "ADM-3B-01",
+      name: "Diya Singh",
+      fatherName: "Amit Singh",
+      motherName: "Priya Singh",
+      dob: "2017-08-21",
+      mobile: "9876543211",
+      address: "Lucknow",
+      photoBase64: "",
+      className: "3rd",
+      section: "B",
+      rollNo: 1,
+      sample: false,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // Teacher A: TEACHER role, marks:edit, coScholastic:edit, timetable:view, teachers:none, SCHOOL_1
+    await orgRef.collection("members").doc(TEACHER_A).set({
+      uid: TEACHER_A,
+      name: "Mrs. Sharma",
+      email: "sharma@org1.com",
+      mobile: "9999900001",
+      role: "TEACHER",
+      status: "active",
+      allSchools: false,
+      schools: [SCHOOL_1],
+      permissions: {
+        students: "view",
+        marks: "edit",
+        coScholastic: "edit",
+        reports: "view",
+        timetable: "view",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+      },
+      teacherProfileCompleted: true,
+      teacherPhotoBase64: "",
+      requestedSubjects: ["Maths"],
+      requestedClasses: ["3rd"],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // Teacher B: TEACHER role, marks:edit, coScholastic:edit, NOT a class teacher
+    await orgRef.collection("members").doc(TEACHER_B).set({
+      uid: TEACHER_B,
+      name: "Mr. Verma",
+      email: "verma@org1.com",
+      mobile: "9999900002",
+      role: "TEACHER",
+      status: "active",
+      allSchools: false,
+      schools: [SCHOOL_1],
+      permissions: {
+        students: "view",
+        marks: "edit",
+        coScholastic: "edit",
+        reports: "view",
+        timetable: "view",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+      },
+      teacherProfileCompleted: true,
+      teacherPhotoBase64: "",
+      requestedSubjects: ["English"],
+      requestedClasses: ["3rd"],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // Office Operator: OFFICE_OPERATOR role, marks:edit, coScholastic:edit, timetable:edit, SCHOOL_1 only
+    await orgRef.collection("members").doc(OPERATOR).set({
+      uid: OPERATOR,
+      name: "Office Operator",
+      email: "op@org1.com",
+      mobile: "9999900003",
+      role: "OFFICE_OPERATOR",
+      status: "active",
+      allSchools: false,
+      schools: [SCHOOL_1],
+      permissions: {
+        students: "edit",
+        marks: "edit",
+        coScholastic: "edit",
+        reports: "edit",
+        timetable: "edit",
+        teachers: "view",
+        settings: "none",
+        members: "none",
+      },
+      teacherProfileCompleted: false,
+      teacherPhotoBase64: "",
+      requestedSubjects: [],
+      requestedClasses: [],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // Timetable viewer: OTHER role, timetable:view only
+    await orgRef.collection("members").doc(TT_VIEWER).set({
+      uid: TT_VIEWER,
+      name: "Timetable Viewer",
+      email: "ttv@org1.com",
+      mobile: "9999900004",
+      role: "OTHER",
+      status: "active",
+      allSchools: true,
+      schools: [],
+      permissions: {
+        students: "none",
+        marks: "none",
+        coScholastic: "none",
+        reports: "none",
+        timetable: "view",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+      },
+      teacherProfileCompleted: false,
+      teacherPhotoBase64: "",
+      requestedSubjects: [],
+      requestedClasses: [],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // Server-verified teacherScopes docs
+    await orgRef.collection("teacherScopes").doc(TEACHER_A).set({
+      uid: TEACHER_A,
+      teacherId: "tchr_sharma",
+      teacherName: "Mrs. Sharma",
+      assignedClassSectionSubjects: [`${SCHOOL_1}|3rd|A|Maths`],
+      classTeacherSections: [`${SCHOOL_1}|3rd|A`],
+      updatedByUid: OWNER_UID,
+      updatedAt: ts,
+    });
+    await orgRef.collection("teacherScopes").doc(TEACHER_B).set({
+      uid: TEACHER_B,
+      teacherId: "tchr_verma",
+      teacherName: "Mr. Verma",
+      assignedClassSectionSubjects: [`${SCHOOL_1}|3rd|B|English`],
+      classTeacherSections: [],
+      updatedByUid: OWNER_UID,
+      updatedAt: ts,
+    });
+  });
+
+  const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const teacherADb = testEnv.authenticatedContext(TEACHER_A).firestore().collection("organisations").doc(ORG_ID);
+  const teacherBDb = testEnv.authenticatedContext(TEACHER_B).firestore().collection("organisations").doc(ORG_ID);
+  const operatorDb = testEnv.authenticatedContext(OPERATOR).firestore().collection("organisations").doc(ORG_ID);
+  const ttViewerDb = testEnv.authenticatedContext(TT_VIEWER).firestore().collection("organisations").doc(ORG_ID);
+  const outsiderDb = testEnv.authenticatedContext(OUTSIDER).firestore().collection("organisations").doc(ORG_ID);
+
+  const ts = pastDate();
+  const s1TeacherA = teacherADb.collection("schools").doc(SCHOOL_1);
+  const s1TeacherB = teacherBDb.collection("schools").doc(SCHOOL_1);
+  const s1Operator = operatorDb.collection("schools").doc(SCHOOL_1);
+
+  // 1. Teacher A CAN write marks & markEditLogs for assigned (3rd-A Maths) on OPEN exam UT1 (T1_UT)
+  await assertSucceeds(s1TeacherA.collection("marks").doc("m_3a_maths_ut1").set({
+    studentId: "stu_3a",
+    schoolId: SCHOOL_1,
+    className: "3rd",
+    subjectName: "Maths",
+    componentKey: "T1_UT",
+    rawValue: "18",
+    updatedByUid: TEACHER_A,
+    updatedByName: "Mrs. Sharma",
+    clientEditedAtMs: Date.now() - 500,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+  await assertSucceeds(s1TeacherA.collection("markEditLogs").doc("log_3a_maths_ut1").set({
+    markDocId: "m_3a_maths_ut1",
+    studentId: "stu_3a",
+    studentName: "Aarav Verma",
+    schoolId: SCHOOL_1,
+    className: "3rd",
+    subjectName: "Maths",
+    componentKey: "T1_UT",
+    oldValue: "",
+    newValue: "18",
+    editorUid: TEACHER_A,
+    editorName: "Mrs. Sharma",
+    clientEditedAtMs: Date.now() - 500,
+    createdAt: ts,
+  }));
+
+  // 2. Teacher A REFUSED on CLOSED exam (T1_EXAM when only UT1 is open)
+  await assertFails(s1TeacherA.collection("marks").doc("m_3a_maths_hy").set({
+    studentId: "stu_3a",
+    schoolId: SCHOOL_1,
+    className: "3rd",
+    subjectName: "Maths",
+    componentKey: "T1_EXAM",
+    rawValue: "65",
+    updatedByUid: TEACHER_A,
+    updatedByName: "Mrs. Sharma",
+    clientEditedAtMs: Date.now() - 500,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+
+  // 3. Teacher A REFUSED on unassigned subject (English in 3rd-A)
+  await assertFails(s1TeacherA.collection("marks").doc("m_3a_eng_ut1").set({
+    studentId: "stu_3a",
+    schoolId: SCHOOL_1,
+    className: "3rd",
+    subjectName: "English",
+    componentKey: "T1_UT",
+    rawValue: "15",
+    updatedByUid: TEACHER_A,
+    updatedByName: "Mrs. Sharma",
+    clientEditedAtMs: Date.now() - 500,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+
+  // 4. Teacher A REFUSED on different section (stu_3b in 3rd-B, even for Maths on open UT1)
+  await assertFails(s1TeacherA.collection("marks").doc("m_3b_maths_ut1").set({
+    studentId: "stu_3b",
+    schoolId: SCHOOL_1,
+    className: "3rd",
+    subjectName: "Maths",
+    componentKey: "T1_UT",
+    rawValue: "19",
+    updatedByUid: TEACHER_A,
+    updatedByName: "Mrs. Sharma",
+    clientEditedAtMs: Date.now() - 500,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+
+  // 5. Office Operator (non-teacher with marks:edit) KEEPS full access even on closed exams & other sections
+  await assertSucceeds(s1Operator.collection("marks").doc("m_3b_maths_hy").set({
+    studentId: "stu_3b",
+    schoolId: SCHOOL_1,
+    className: "3rd",
+    subjectName: "Maths",
+    componentKey: "T1_EXAM",
+    rawValue: "70",
+    updatedByUid: OPERATOR,
+    updatedByName: "Office Operator",
+    clientEditedAtMs: Date.now() - 500,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+
+  // 6. Co-Scholastic & TermInfo: Class Teacher A CAN edit stu_3a, REFUSED for stu_3b; Subject Teacher B REFUSED for both
+  await assertSucceeds(s1TeacherA.collection("coScholastic").doc("co_3a_t1_art").set({
+    studentId: "stu_3a",
+    schoolId: SCHOOL_1,
+    termNo: 1,
+    areaCode: "ART",
+    grade: "A",
+    updatedByUid: TEACHER_A,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+  await assertSucceeds(s1TeacherA.collection("termInfo").doc("ti_3a_t1").set({
+    studentId: "stu_3a",
+    schoolId: SCHOOL_1,
+    termNo: 1,
+    daysPresent: 92,
+    workingDays: 100,
+    remarks: "Excellent progress",
+    promotedTo: "4th",
+    reportDate: "2026-10-15",
+    updatedByUid: TEACHER_A,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+  await assertFails(s1TeacherA.collection("coScholastic").doc("co_3b_t1_art").set({
+    studentId: "stu_3b",
+    schoolId: SCHOOL_1,
+    termNo: 1,
+    areaCode: "ART",
+    grade: "A",
+    updatedByUid: TEACHER_A,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+  await assertFails(s1TeacherB.collection("coScholastic").doc("co_3b_t1_art_b").set({
+    studentId: "stu_3b",
+    schoolId: SCHOOL_1,
+    termNo: 1,
+    areaCode: "ART",
+    grade: "B",
+    updatedByUid: TEACHER_B,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+  await assertFails(s1TeacherB.collection("termInfo").doc("ti_3b_t1_b").set({
+    studentId: "stu_3b",
+    schoolId: SCHOOL_1,
+    termNo: 1,
+    daysPresent: 88,
+    workingDays: 100,
+    remarks: "Good",
+    promotedTo: "4th",
+    reportDate: "2026-10-15",
+    updatedByUid: TEACHER_B,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+
+  // 7. teacherScopes privacy & tamper resistance: Teacher A CAN read own doc, CANNOT read B's doc, CANNOT edit own doc; Owner CAN edit
+  await assertSucceeds(teacherADb.collection("teacherScopes").doc(TEACHER_A).get());
+  await assertFails(teacherADb.collection("teacherScopes").doc(TEACHER_B).get());
+  await assertFails(teacherADb.collection("teacherScopes").get());
+  await assertFails(teacherADb.collection("teacherScopes").doc(TEACHER_A).set({
+    uid: TEACHER_A,
+    teacherId: "tchr_sharma",
+    teacherName: "Mrs. Sharma",
+    assignedClassSectionSubjects: [`${SCHOOL_1}|3rd|A|Maths`, `${SCHOOL_1}|3rd|B|Maths`],
+    classTeacherSections: [`${SCHOOL_1}|3rd|A`, `${SCHOOL_1}|3rd|B`],
+    updatedByUid: TEACHER_A,
+    updatedAt: ts,
+  }));
+  await assertSucceeds(ownerDb.collection("teacherScopes").doc(TEACHER_A).set({
+    uid: TEACHER_A,
+    teacherId: "tchr_sharma",
+    teacherName: "Mrs. Sharma",
+    assignedClassSectionSubjects: [`${SCHOOL_1}|3rd|A|Maths`, `${SCHOOL_1}|3rd|A|Science`],
+    classTeacherSections: [`${SCHOOL_1}|3rd|A`],
+    updatedByUid: OWNER_UID,
+    updatedAt: ts,
+  }));
+
+  // 8. teacherAttendance: Operator (timetable:edit, SCHOOL_1) CAN write SCHOOL_1, REFUSED SCHOOL_2; TT_VIEWER CAN read, REFUSED write; Outsider REFUSED
+  const attId = `tatt_2026_09_14_${SCHOOL_1}_tchr_sharma`;
+  const attPayload = {
+    date: "2026-09-14",
+    schoolId: SCHOOL_1,
+    teacherId: "tchr_sharma",
+    teacherName: "Mrs. Sharma",
+    status: "PRESENT",
+    note: "",
+    linkedLeaveId: "",
+    updatedByUid: OPERATOR,
+    updatedByName: "Office Operator",
+    clientEditedAtMs: Date.now() - 500,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+  await assertSucceeds(operatorDb.collection("teacherAttendance").doc(attId).set(attPayload));
+  await assertFails(operatorDb.collection("teacherAttendance").doc("tatt_sch2").set({
+    ...attPayload,
+    schoolId: SCHOOL_2,
+  }));
+  await assertSucceeds(ttViewerDb.collection("teacherAttendance").get());
+  await assertFails(ttViewerDb.collection("teacherAttendance").doc("tatt_viewer").set({
+    ...attPayload,
+    updatedByUid: TT_VIEWER,
+  }));
+  await assertFails(outsiderDb.collection("teacherAttendance").get());
+
+  // 9. Per-school Report Card Links & Open Exams: Owner CAN update, Teacher REFUSED
+  await assertSucceeds(ownerDb.collection("schools").doc(SCHOOL_1).update({
+    printClassTeacherNameOnReports: true,
+    checkReportCardsReadyBeforeBatch: true,
+    openExamsForTeachers: ["UT1", "HALF_YEARLY"],
+    updatedAt: ts,
+  }));
+  await assertFails(teacherADb.collection("schools").doc(SCHOOL_1).update({
+    printClassTeacherNameOnReports: false,
+    updatedAt: ts,
+  }));
+});
+
+
 
 
 

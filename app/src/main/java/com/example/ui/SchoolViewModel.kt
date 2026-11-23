@@ -43,17 +43,30 @@ import com.example.data.cloud.NetworkConnectivityMonitor
 import com.example.data.cloud.OfflinePrefsStore
 import com.example.data.cloud.OrgAcademicRepository
 import com.example.data.cloud.OrgCloudRepository
+import com.example.data.cloud.CloudPhase6Snapshot
+import com.example.data.cloud.CloudPhase7Snapshot
 import com.example.data.cloud.Phase4Repository
+import com.example.data.cloud.Phase6Repository
+import com.example.data.cloud.Phase7Repository
 import com.example.data.cloud.StableDocId
 import com.example.data.cloud.TimetableRepository
 import com.example.domain.AppModule
 import com.example.domain.AssignmentWarning
 import com.example.domain.AttendanceSummary
+import com.example.domain.AutoGenerateConfig
+import com.example.domain.AutoGenerateEngine
+import com.example.domain.AutoGenerateProgress
+import com.example.domain.AutoGenerateResult
+import com.example.domain.ClassReportReadinessResult
 import com.example.domain.ClassSectionAssignment
 import com.example.domain.DayOfWeekCode
 import com.example.domain.DefaultSchoolTemplate
 import com.example.domain.DefaultSubjects
+import com.example.domain.ExamType
+import com.example.domain.LeaveReason
+import com.example.domain.LeaveStatus
 import com.example.domain.LocalPendingMarkEdit
+import com.example.domain.LocalPendingPhase6Edit
 import com.example.domain.LocalPendingTimetableEdit
 import com.example.domain.MarkComponent
 import com.example.domain.MarkConflictNotice
@@ -64,23 +77,48 @@ import com.example.domain.MemberStatus
 import com.example.domain.OfflineSyncEngine
 import com.example.domain.OrgAccessEvaluator
 import com.example.domain.OrgRole
+import com.example.domain.PendingMarksEngine
+import com.example.domain.PendingMarksExamSummary
+import com.example.domain.PendingMarksItem
 import com.example.domain.Phase4Validator
+import com.example.domain.Phase6ConflictNotice
+import com.example.domain.Phase6DateUtils
+import com.example.domain.Phase7AccessEvaluator
 import com.example.domain.ReportCalculations
+import com.example.domain.ReportReadinessEngine
 import com.example.domain.ReportType
 import com.example.domain.ResultStatus
+import com.example.domain.SchoolAcademicBundleForPending
 import com.example.domain.SchoolPeriodStructure
 import com.example.domain.ServerMarkObservation
 import com.example.domain.SlipLayoutMode
 import com.example.domain.StudentPerformanceReport
 import com.example.domain.SubjectRule
+import com.example.domain.SubstituteCandidate
+import com.example.domain.SubstitutionEngine
+import com.example.domain.SubstitutionNeedItem
+import com.example.domain.SubstitutionRecord
 import com.example.domain.SyncStatus
 import com.example.domain.SyncUiState
+import com.example.domain.TeacherAccessScope
+import com.example.domain.TeacherAttendanceEngine
+import com.example.domain.TeacherAttendanceRecord
+import com.example.domain.TeacherAttendanceStatus
+import com.example.domain.TeacherDailyAttendanceRow
+import com.example.domain.TeacherLeaveRecord
+import com.example.domain.TeacherMonthlyAttendanceSummaryRow
+import com.example.domain.TeacherMyDayEngine
+import com.example.domain.TeacherMyDaySummary
 import com.example.domain.TeacherProfile
+import com.example.domain.TeacherWorkloadReportRow
 import com.example.domain.TeacherWorkloadSummary
 import com.example.domain.TimetableCell
 import com.example.domain.TimetableConflictNotice
 import com.example.domain.TimetableEngine
 import com.example.domain.TimetableHardConflict
+import com.example.domain.TimetableUndoSnapshot
+import com.example.domain.WorkloadReportEngine
+import com.example.domain.WorkloadReportPeriodMode
 import com.example.util.BackupAndCsvManager
 import com.example.util.ClassTimetablePrintBundle
 import com.example.util.MarksCsvIssue
@@ -91,15 +129,23 @@ import com.example.util.ParsedBackupResult
 import com.example.util.PdfExportHelper
 import com.example.util.PdfReportGenerator
 import com.example.util.StudentReportBundle
+import com.example.util.SubstitutionPdfGenerator
+import com.example.util.SubstitutionSlipPrintBundle
+import com.example.util.TeacherAttendanceMonthlyPrintBundle
+import com.example.util.TeacherAttendancePdfGenerator
 import com.example.util.TeacherTimetablePrintBundle
 import com.example.util.TimetablePdfGenerator
 import com.example.util.TimetablePrintOrientation
+import com.example.util.WorkloadReportPdfGenerator
+import com.example.util.WorkloadReportPrintBundle
 import com.example.util.friendlyFirestoreErrorMessage
 import com.example.util.handleFirestoreError
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -217,10 +263,254 @@ data class SchoolUiState(
     // Phase 5: Timetable cells, mirrored layouts, and latest-edit-wins cell conflicts
     val timetableCells: List<TimetableCell> = emptyList(),
     val timetableLayoutsBySchool: Map<String, SchoolPeriodStructure> = emptyMap(),
-    val timetableConflicts: List<TimetableConflictNotice> = emptyList()
+    val timetableConflicts: List<TimetableConflictNotice> = emptyList(),
+    // Phase 6: Auto-generate undo snapshots, teacher leaves, substitutions, and leave/sub conflicts
+    val teacherLeaves: List<TeacherLeaveRecord> = emptyList(),
+    val substitutions: List<SubstitutionRecord> = emptyList(),
+    val undoSnapshots: List<TimetableUndoSnapshot> = emptyList(),
+    val ownLinkedTeacher: TeacherProfile? = null,
+    val phase6Conflicts: List<Phase6ConflictNotice> = emptyList(),
+    // Phase 7: Teacher access scopes, multi-school pending marks, teacher attendance & school report links
+    val ownTeacherScope: TeacherAccessScope? = null,
+    val allTeacherScopes: Map<String, TeacherAccessScope> = emptyMap(),
+    val teacherAttendanceRecords: List<TeacherAttendanceRecord> = emptyList(),
+    val multiSchoolPendingBundles: List<SchoolAcademicBundleForPending> = emptyList(),
+    val schoolRecordsByDocId: Map<String, CloudSchoolRecord> = emptyMap()
 ) {
     val activeSchoolDocId: String
         get() = schoolDocIdByLongId[activeSchool.id].orEmpty()
+
+    val activeSchoolCloudRecord: CloudSchoolRecord?
+        get() = schoolRecordsByDocId[activeSchoolDocId]
+
+    val activeSchoolPrintClassTeacherName: Boolean
+        get() = activeSchoolCloudRecord?.printClassTeacherNameOnReports ?: false
+
+    val activeSchoolCheckReportReady: Boolean
+        get() = activeSchoolCloudRecord?.checkReportCardsReadyBeforeBatch ?: false
+
+    val activeSchoolOpenExams: List<String>
+        get() = activeSchoolCloudRecord?.openExamsForTeachers ?: Phase7AccessEvaluator.ALL_EXAM_KEYS
+
+    val isTeacherRestricted: Boolean
+        get() = activeOrg != null && Phase7AccessEvaluator.isTeacherRestricted(accessProfile)
+
+    val effectiveOwnTeacherScope: TeacherAccessScope?
+        get() {
+            if (ownTeacherScope != null) return ownTeacherScope
+            val uid = currentMember?.uid.orEmpty()
+            if (uid.isBlank() || teachers.isEmpty()) return null
+            return Phase7AccessEvaluator.buildTeacherScopes(teachers, classAssignments)[uid]
+        }
+
+    val pendingLeaveRequestCount: Int
+        get() = teacherLeaves.count { it.status == LeaveStatus.PENDING }
+
+    fun latestUndoSnapshotForSchool(schoolDocId: String): TimetableUndoSnapshot? =
+        undoSnapshots.firstOrNull {
+            it.schoolId == schoolDocId && it.session.equals(filter.session, ignoreCase = true)
+        }
+
+    fun resolveOwnLinkedTeacher(): TeacherProfile? {
+        val uid = currentMember?.uid.orEmpty()
+        if (uid.isBlank()) return ownLinkedTeacher
+        return teachers.firstOrNull { it.linkedMemberUid == uid } ?: ownLinkedTeacher
+    }
+
+    fun classTeacherNameForSection(schoolDocId: String, className: String, section: String): String {
+        val normSec = section.trim().uppercase().ifBlank { "A" }
+        val assignment = classAssignments.firstOrNull {
+            it.schoolId == schoolDocId &&
+                it.className.equals(className.trim(), ignoreCase = true) &&
+                it.section.equals(normSec, ignoreCase = true)
+        }
+        val fromPhase4 = assignment?.classTeacherId?.takeIf { it.isNotBlank() }?.let { ctId ->
+            teachers.firstOrNull { it.id == ctId }?.name?.trim()
+        }
+        if (!fromPhase4.isNullOrBlank()) return fromPhase4
+        val map = schoolRecordsByDocId[schoolDocId]?.classTeacherNamesBySection.orEmpty()
+        return map["${className.trim()}|$normSec"]
+            ?: map.entries.firstOrNull { it.key.equals("${className.trim()}|$normSec", ignoreCase = true) }?.value
+            ?: ""
+    }
+
+    fun isExamOpenForCurrentSchool(exam: ExamType): Boolean {
+        if (!isTeacherRestricted) return true
+        return Phase7AccessEvaluator.isExamOpenForTeacher(exam, activeSchoolOpenExams)
+    }
+
+    fun allowedClassesForMarks(): List<String> = Phase7AccessEvaluator.allowedClassesForMarks(
+        member = accessProfile,
+        teacherScope = effectiveOwnTeacherScope,
+        schoolDocId = activeSchoolDocId,
+        allSchoolClasses = activeSchoolClassNames
+    )
+
+    fun allowedSectionsForMarks(className: String): List<String> = Phase7AccessEvaluator.allowedSectionsForMarks(
+        member = accessProfile,
+        teacherScope = effectiveOwnTeacherScope,
+        schoolDocId = activeSchoolDocId,
+        className = className,
+        allSections = availableSections
+    )
+
+    fun allowedSubjectsForMarks(className: String, section: String): List<String> = Phase7AccessEvaluator.allowedSubjectsForMarks(
+        member = accessProfile,
+        teacherScope = effectiveOwnTeacherScope,
+        schoolDocId = activeSchoolDocId,
+        className = className,
+        section = section,
+        allSubjects = subjectsForClass(className)
+    )
+
+    fun canEditCoScholasticFor(student: StudentEntity): Boolean {
+        if (activeOrg == null) return true
+        val schDocId = schoolDocIdByLongId[student.schoolId].orEmpty()
+        return Phase7AccessEvaluator.canEditCoScholasticOrTermInfo(
+            member = accessProfile,
+            teacherScope = effectiveOwnTeacherScope,
+            schoolDocId = schDocId,
+            className = student.className,
+            section = student.section
+        )
+    }
+
+    fun canEditCoScholasticForSection(className: String, section: String): Boolean {
+        if (activeOrg == null) return true
+        return Phase7AccessEvaluator.canEditCoScholasticOrTermInfo(
+            member = accessProfile,
+            teacherScope = effectiveOwnTeacherScope,
+            schoolDocId = activeSchoolDocId,
+            className = className,
+            section = section
+        )
+    }
+
+    private fun effectivePendingBundles(): List<SchoolAcademicBundleForPending> {
+        if (multiSchoolPendingBundles.isNotEmpty()) return multiSchoolPendingBundles
+        if (activeSchoolDocId.isBlank()) return emptyList()
+        val subsByClass = activeSchoolClasses.associate { cls ->
+            cls.name to subjectsForClass(cls.name, activeSchool.id)
+        }
+        return listOf(
+            SchoolAcademicBundleForPending(
+                schoolDocId = activeSchoolDocId,
+                schoolName = activeSchool.name,
+                students = allStudents.filter { it.schoolId == activeSchool.id },
+                marks = allMarks,
+                subjectsByClass = subsByClass
+            )
+        )
+    }
+
+    fun computePendingMarksItems(
+        schoolFilter: String? = null,
+        classFilter: String? = null,
+        examFilter: ExamType? = null,
+        teacherIdFilter: String? = null,
+        forceOwnTeacherOnly: Boolean = isTeacherRestricted
+    ): List<PendingMarksItem> {
+        val teacherScopeForFilter = if (forceOwnTeacherOnly) {
+            effectiveOwnTeacherScope ?: TeacherAccessScope(uid = currentMember?.uid.orEmpty())
+        } else {
+            null
+        }
+        return PendingMarksEngine.computePendingItems(
+            bundles = effectivePendingBundles(),
+            session = filter.session,
+            classAssignments = classAssignments,
+            teachers = teachers,
+            schoolFilter = schoolFilter,
+            classFilter = classFilter,
+            examFilter = examFilter,
+            teacherIdFilter = teacherIdFilter,
+            restrictToTeacherScope = teacherScopeForFilter
+        )
+    }
+
+    fun pendingMarksExamSummaries(): List<PendingMarksExamSummary> =
+        PendingMarksEngine.summarizeByExam(computePendingMarksItems())
+
+    fun buildTeacherMyDay(dateIso: String): TeacherMyDaySummary? {
+        val teacher = resolveOwnLinkedTeacher() ?: return null
+        val scope = effectiveOwnTeacherScope
+        val ownPending = if (canView(AppModule.MARKS)) {
+            PendingMarksEngine.computePendingItems(
+                bundles = effectivePendingBundles(),
+                session = filter.session,
+                classAssignments = classAssignments,
+                teachers = teachers.ifEmpty { listOf(teacher) },
+                restrictToTeacherScope = scope ?: TeacherAccessScope(uid = currentMember?.uid.orEmpty())
+            )
+        } else {
+            emptyList()
+        }
+        return TeacherMyDayEngine.buildTeacherMyDay(
+            teacher = teacher,
+            teacherScope = scope,
+            dateIso = dateIso,
+            session = filter.session,
+            timetableCells = activeSessionTimetableCells,
+            substitutions = substitutions,
+            periodStructuresBySchool = effectivePeriodStructuresBySchool,
+            schoolNamesById = schoolNamesByDocId,
+            pendingMarksForTeacher = ownPending
+        )
+    }
+
+    fun computeWorkloadReport(
+        referenceDateIso: String,
+        schoolIdFilter: String? = null,
+        teacherIdFilter: String? = null
+    ): List<TeacherWorkloadReportRow> = WorkloadReportEngine.computeWorkloadReport(
+        teachers = availableTimetableTeachers(),
+        timetableCells = activeSessionTimetableCells,
+        classAssignments = classAssignments,
+        substitutions = substitutions,
+        periodStructuresBySchool = effectivePeriodStructuresBySchool,
+        schoolNamesById = schoolNamesByDocId,
+        session = filter.session,
+        referenceDateIso = referenceDateIso,
+        schoolIdFilter = schoolIdFilter,
+        teacherIdFilter = teacherIdFilter
+    )
+
+    fun buildDailyTeacherAttendance(schoolDocId: String, dateIso: String): List<TeacherDailyAttendanceRow> =
+        TeacherAttendanceEngine.buildDailySheet(
+            schoolId = schoolDocId,
+            dateIso = dateIso,
+            teachers = availableTimetableTeachers(),
+            attendanceRecords = teacherAttendanceRecords,
+            approvedLeaves = teacherLeaves
+        )
+
+    fun buildMonthlyTeacherAttendance(schoolDocId: String, year: Int, month1Based: Int): List<TeacherMonthlyAttendanceSummaryRow> =
+        TeacherAttendanceEngine.buildMonthlySummary(
+            schoolId = schoolDocId,
+            year = year,
+            month1Based = month1Based,
+            teachers = availableTimetableTeachers(),
+            periodStructure = periodStructureForSchool(schoolDocId),
+            attendanceRecords = teacherAttendanceRecords,
+            approvedLeaves = teacherLeaves
+        )
+
+    fun checkCurrentClassReportReadiness(reportType: ReportType): ClassReportReadinessResult {
+        val cls = effectiveClassName
+        val sec = filter.section
+        val students = filteredStudents
+        val subs = subjectsForClass(cls)
+        return ReportReadinessEngine.checkClassReadiness(
+            className = cls,
+            section = sec,
+            reportType = reportType,
+            students = students,
+            subjects = subs,
+            marks = allMarks,
+            coScholastic = allCoScholastic,
+            termInfos = allTermInfos
+        )
+    }
 
     val schoolNamesByDocId: Map<String, String>
         get() = schools.mapNotNull { sch -> schoolDocIdByLongId[sch.id]?.let { it to sch.name } }.toMap()
@@ -320,10 +610,20 @@ data class SchoolUiState(
     fun canManageMembers(): Boolean =
         if (activeOrg == null) true else OrgAccessEvaluator.canManageMembers(accessProfile)
 
-    fun canEditMarkFor(student: StudentEntity, subjectName: String): Boolean {
+    fun canEditMarkFor(student: StudentEntity, subjectName: String, componentKey: String? = null): Boolean {
         if (activeOrg == null) return true
         val schDocId = schoolDocIdByLongId[student.schoolId].orEmpty()
-        return OrgAccessEvaluator.canEditMarksFor(accessProfile, schDocId, student.className, subjectName)
+        val openExams = schoolRecordsByDocId[schDocId]?.openExamsForTeachers ?: Phase7AccessEvaluator.ALL_EXAM_KEYS
+        return Phase7AccessEvaluator.canEditMarks(
+            member = accessProfile,
+            teacherScope = effectiveOwnTeacherScope,
+            schoolDocId = schDocId,
+            className = student.className,
+            section = student.section,
+            subjectName = subjectName,
+            openExamKeys = openExams,
+            componentKey = componentKey
+        )
     }
 
     val activeSchools: List<SchoolEntity>
@@ -567,6 +867,8 @@ class SchoolViewModel(
     private val academicRepo: OrgAcademicRepository,
     private val phase4Repo: Phase4Repository,
     private val timetableRepo: TimetableRepository,
+    private val phase6Repo: Phase6Repository,
+    private val phase7Repo: Phase7Repository,
     private val localRepo: ReportCardRepository,
     private val connectivityMonitor: NetworkConnectivityMonitor,
     private val offlinePrefs: OfflinePrefsStore
@@ -578,6 +880,7 @@ class SchoolViewModel(
     private val _membershipRevoked = MutableStateFlow(false)
     private val _markConflicts = MutableStateFlow<List<MarkConflictNotice>>(emptyList())
     private val _timetableConflicts = MutableStateFlow<List<TimetableConflictNotice>>(emptyList())
+    private val _phase6Conflicts = MutableStateFlow<List<Phase6ConflictNotice>>(emptyList())
     private val _observerRestartTick = MutableStateFlow(0)
 
     private val _pdfState = MutableStateFlow(PdfPreviewState())
@@ -585,6 +888,15 @@ class SchoolViewModel(
 
     private val _timetablePdfState = MutableStateFlow(TimetablePdfPreviewState())
     val timetablePdfState: StateFlow<TimetablePdfPreviewState> = _timetablePdfState.asStateFlow()
+
+    private val _autoGenerateProgress = MutableStateFlow(AutoGenerateProgress())
+    val autoGenerateProgress: StateFlow<AutoGenerateProgress> = _autoGenerateProgress.asStateFlow()
+
+    private val _autoGenerateResult = MutableStateFlow<AutoGenerateResult?>(null)
+    val autoGenerateResult: StateFlow<AutoGenerateResult?> = _autoGenerateResult.asStateFlow()
+
+    private var autoGenerateJob: Job? = null
+    private val autoGenerateCancelFlag = AtomicBoolean(false)
 
     private val _snackbar = MutableSharedFlow<String>(extraBufferCapacity = 12)
     val snackbar: SharedFlow<String> = _snackbar.asSharedFlow()
@@ -610,6 +922,9 @@ class SchoolViewModel(
     private val _academicSnapshot = MutableStateFlow(CloudSchoolAcademicSnapshot())
     private val _phase4Snapshot = MutableStateFlow(CloudPhase4Snapshot())
     private val _timetableSnapshot = MutableStateFlow(CloudTimetableSnapshot())
+    private val _phase6Snapshot = MutableStateFlow(CloudPhase6Snapshot())
+    private val _phase7Snapshot = MutableStateFlow(CloudPhase7Snapshot())
+    private val _multiSchoolPendingBundles = MutableStateFlow<List<SchoolAcademicBundleForPending>>(emptyList())
     private val _orgMembers = MutableStateFlow<List<CloudMember>>(emptyList())
     private val _joinRequests = MutableStateFlow<List<CloudJoinRequest>>(emptyList())
     private val _inviteCodes = MutableStateFlow<List<CloudInviteCode>>(emptyList())
@@ -627,6 +942,7 @@ class SchoolViewModel(
     private var seenActiveMemberOnce = false
     private var previousConfirmedProfile: MemberAccessProfile? = null
     private var isResettingCache = false
+    private var lastSyncedScopeSignature: String = ""
 
     private val coreCloudFlow = combine(
         _orgState,
@@ -641,15 +957,27 @@ class SchoolViewModel(
     private val combinedSyncErrorFlow = combine(
         academicRepo.syncError,
         phase4Repo.syncError,
-        timetableRepo.syncError
-    ) { acadErr, p4Err, ttErr -> acadErr ?: p4Err ?: ttErr }
+        timetableRepo.syncError,
+        phase6Repo.syncError,
+        phase7Repo.syncError
+    ) { acadErr, p4Err, ttErr, p6Err, p7Err -> acadErr ?: p4Err ?: ttErr ?: p6Err ?: p7Err }
 
-    private val phase4And5Flow = combine(
+    private val phase4To6Flow = combine(
         _phase4Snapshot,
         _timetableSnapshot,
-        _timetableConflicts
-    ) { p4, tt, ttConflicts ->
-        Phase4And5Bundle(p4, tt, ttConflicts)
+        _timetableConflicts,
+        _phase6Snapshot,
+        _phase6Conflicts
+    ) { p4, tt, ttConflicts, p6, p6Conflicts ->
+        Phase4And5Bundle(p4, tt, ttConflicts, p6, p6Conflicts)
+    }
+
+    private val phase4To7Flow = combine(
+        phase4To6Flow,
+        _phase7Snapshot,
+        _multiSchoolPendingBundles
+    ) { p46, p7, pendingBundles ->
+        Triple(p46, p7, pendingBundles)
     }
 
     private val syncExtrasFlow = combine(
@@ -667,9 +995,21 @@ class SchoolViewModel(
         _joinRequests,
         _inviteCodes,
         _auditLogs,
-        phase4And5Flow
-    ) { members, reqs, invites, logs, p45 ->
-        AdminAndPhase4Bundle(members, reqs, invites, logs, p45.phase4, p45.timetable, p45.timetableConflicts)
+        phase4To7Flow
+    ) { members, reqs, invites, logs, (p46, p7, pendingBundles) ->
+        AdminAndPhase4Bundle(
+            members = members,
+            joinRequests = reqs,
+            inviteCodes = invites,
+            auditLogs = logs,
+            phase4 = p46.phase4,
+            timetable = p46.timetable,
+            timetableConflicts = p46.timetableConflicts,
+            phase6 = p46.phase6,
+            phase6Conflicts = p46.phase6Conflicts,
+            phase7 = p7,
+            multiSchoolPendingBundles = pendingBundles
+        )
     }
 
     val uiState: StateFlow<SchoolUiState> = combine(
@@ -706,7 +1046,9 @@ class SchoolViewModel(
         val totalPendingCount = core.schoolsSnap.pendingWriteCount +
             core.academicSnap.pendingWriteCount +
             admin.phase4.pendingWriteCount +
-            admin.timetable.pendingWriteCount
+            admin.timetable.pendingWriteCount +
+            admin.phase6.pendingWriteCount +
+            admin.phase7.pendingWriteCount
 
         val syncUi = OfflineSyncEngine.computeSyncUiState(
             isOnline = core.isOnline,
@@ -752,7 +1094,17 @@ class SchoolViewModel(
             subjectRules = admin.phase4.subjectRules,
             timetableCells = admin.timetable.cells,
             timetableLayoutsBySchool = admin.timetable.layoutsBySchool,
-            timetableConflicts = admin.timetableConflicts
+            timetableConflicts = admin.timetableConflicts,
+            teacherLeaves = admin.phase6.leaves,
+            substitutions = admin.phase6.substitutions,
+            undoSnapshots = admin.phase6.undoSnapshots,
+            ownLinkedTeacher = admin.phase6.ownLinkedTeacher ?: admin.phase7.ownLinkedTeacherProfile,
+            phase6Conflicts = admin.phase6Conflicts,
+            ownTeacherScope = admin.phase7.ownTeacherScope,
+            allTeacherScopes = admin.phase7.allTeacherScopes,
+            teacherAttendanceRecords = admin.phase7.teacherAttendanceRecords,
+            multiSchoolPendingBundles = admin.multiSchoolPendingBundles,
+            schoolRecordsByDocId = schoolsRecords.associateBy { it.docId }
         )
     }.stateIn(
         scope = viewModelScope,
@@ -1026,6 +1378,148 @@ class SchoolViewModel(
                     evaluateTimetableConflicts(snap)
                 }
         }
+
+        // 10. Phase 6: Teacher Leaves, Substitutions, Auto-Generate Undo Snapshots
+        viewModelScope.launch {
+            combine(_observerRestartTick, _ownMember.map { it?.toAccessProfile() }) { tick, profile ->
+                tick to profile
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { (_, profile) ->
+                    if (profile == null || !OrgAccessEvaluator.canViewModule(profile, AppModule.TIMETABLE)) {
+                        flowOf(CloudPhase6Snapshot())
+                    } else {
+                        phase6Repo.observePhase6Data(orgId, profile, currentUserId)
+                            .catch { e ->
+                                val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
+                                if (cause != null) {
+                                    handleFirestoreError(cause, OperationType.LIST, "organisations/$orgId/teacherLeaves")
+                                    emit(CloudPhase6Snapshot())
+                                    return@catch
+                                }
+                                if (e is CancellationException) throw e
+                            }
+                    }
+                }
+                .collect { snap ->
+                    _phase6Snapshot.value = snap
+                    evaluatePhase6Conflicts(snap)
+                }
+        }
+
+        // 11. Phase 7: Teacher access scopes, own linked teacher profile, and teacher attendance
+        viewModelScope.launch {
+            combine(_observerRestartTick, _ownMember.map { it?.toAccessProfile() }) { tick, profile ->
+                tick to profile
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { (_, profile) ->
+                    if (profile == null || !OrgAccessEvaluator.isActive(profile)) {
+                        flowOf(CloudPhase7Snapshot())
+                    } else {
+                        phase7Repo.observePhase7Data(orgId, profile, currentUserId)
+                            .catch { e ->
+                                val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
+                                if (cause != null) {
+                                    handleFirestoreError(cause, OperationType.LIST, "organisations/$orgId/teacherScopes")
+                                    emit(CloudPhase7Snapshot())
+                                    return@catch
+                                }
+                                if (e is CancellationException) throw e
+                            }
+                    }
+                }
+                .collect { snap ->
+                    _phase7Snapshot.value = snap
+                }
+        }
+
+        // 12. Phase 7: Multi-school pending marks observer across all allowed schools
+        viewModelScope.launch {
+            combine(
+                _observerRestartTick,
+                _ownMember.map { it?.toAccessProfile() },
+                _schoolsSnapshot.map { it.schools }
+            ) { tick, profile, schools ->
+                Triple(tick, profile, schools)
+            }
+                .distinctUntilChanged { a, b ->
+                    a.first == b.first && a.second == b.second && a.third.map { it.docId } == b.third.map { it.docId }
+                }
+                .flatMapLatest { (_, profile, schools) ->
+                    if (profile == null || schools.isEmpty() || !OrgAccessEvaluator.isActive(profile)) {
+                        flowOf(emptyList())
+                    } else {
+                        academicRepo.observeMultiSchoolPendingBundles(orgId, schools, profile)
+                            .catch { e ->
+                                val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
+                                if (cause != null) {
+                                    handleFirestoreError(cause, OperationType.LIST, "organisations/$orgId/schools")
+                                    emit(emptyList())
+                                    return@catch
+                                }
+                                if (e is CancellationException) throw e
+                            }
+                    }
+                }
+                .collect { bundles ->
+                    _multiSchoolPendingBundles.value = bundles
+                }
+        }
+
+        // 13. Phase 7: Auto-heal server-verified teacherScopes whenever Admin/Teachers-editor loads Phase 4 data
+        viewModelScope.launch {
+            combine(
+                _ownMember.map { it?.toAccessProfile() },
+                _phase4Snapshot
+            ) { profile, p4 -> profile to p4 }
+                .collect { (profile, p4) ->
+                    if (profile == null) return@collect
+                    val canWriteScopes = OrgAccessEvaluator.isAdmin(profile) ||
+                        OrgAccessEvaluator.canEditModule(profile, AppModule.TEACHERS)
+                    if (!canWriteScopes || p4.teachers.isEmpty()) return@collect
+                    val derived = Phase7AccessEvaluator.buildTeacherScopes(p4.teachers, p4.classAssignments)
+                    if (derived.isEmpty()) return@collect
+                    val sig = derived.entries.sortedBy { it.key }.joinToString("||") { (uid, s) ->
+                        "$uid:${s.teacherId}:${s.assignedClassSectionSubjects.sorted().joinToString(",")}:${s.classTeacherSections.sorted().joinToString(",")}"
+                    }
+                    if (sig != lastSyncedScopeSignature) {
+                        val existingScopes = _phase7Snapshot.value.allTeacherScopes
+                        val needsSync = derived.any { (uid, scope) ->
+                            val ex = existingScopes[uid]
+                            ex == null ||
+                                ex.assignedClassSectionSubjects.toSet() != scope.assignedClassSectionSubjects.toSet() ||
+                                ex.classTeacherSections.toSet() != scope.classTeacherSections.toSet()
+                        }
+                        if (needsSync) {
+                            lastSyncedScopeSignature = sig
+                            phase7Repo.syncTeacherScopes(orgId, derived)
+                        } else {
+                            lastSyncedScopeSignature = sig
+                        }
+                    }
+                }
+        }
+    }
+
+    private fun evaluatePhase6Conflicts(snap: CloudPhase6Snapshot) {
+        val pendingEdits = offlinePrefs.loadPendingPhase6Edits(currentUserId, orgId)
+        if (pendingEdits.isEmpty()) return
+        val res = SubstitutionEngine.detectPhase6Conflicts(
+            pendingEdits = pendingEdits,
+            confirmedLeaves = snap.leaves,
+            confirmedSubstitutions = snap.substitutions,
+            hasConfirmedServerSnapshot = snap.hasConfirmedServerSnapshot,
+            currentUid = currentUserId
+        )
+        if (res.remainingPending.size != pendingEdits.size) {
+            offlinePrefs.replacePendingPhase6EditsForOrg(currentUserId, orgId, res.remainingPending)
+        }
+        if (res.detectedConflicts.isNotEmpty()) {
+            val merged = (_phase6Conflicts.value + res.detectedConflicts)
+                .distinctBy { "${it.kind}_${it.docId}_${it.winningSummary}_${it.yourSummary}" }
+            _phase6Conflicts.value = merged
+        }
     }
 
     private fun evaluateTimetableConflicts(snap: CloudTimetableSnapshot) {
@@ -1087,6 +1581,7 @@ class SchoolViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             offlinePrefs.clearPendingMarkEditsForOrg(currentUserId, orgId)
             offlinePrefs.clearPendingTimetableEditsForOrg(currentUserId, orgId)
+            offlinePrefs.clearPendingPhase6EditsForOrg(currentUserId, orgId)
             offlinePrefs.setLastSelectedOrgId(currentUserId, null)
             FirestoreProvider.resetLocalCacheAndReinit(appContext)
         }
@@ -1103,6 +1598,9 @@ class SchoolViewModel(
             _academicSnapshot.value = CloudSchoolAcademicSnapshot()
             _phase4Snapshot.value = CloudPhase4Snapshot()
             _timetableSnapshot.value = CloudTimetableSnapshot()
+            _phase6Snapshot.value = CloudPhase6Snapshot()
+            _phase7Snapshot.value = CloudPhase7Snapshot()
+            _multiSchoolPendingBundles.value = emptyList()
             _observerRestartTick.value += 1
             isResettingCache = false
             emitMessage("Your access was updated by an admin. Cached data for removed access has been cleared.")
@@ -1117,6 +1615,10 @@ class SchoolViewModel(
         _timetableConflicts.value = emptyList()
     }
 
+    fun dismissPhase6ConflictBanner() {
+        _phase6Conflicts.value = emptyList()
+    }
+
     fun retrySync() {
         if (!connectivityMonitor.isCurrentlyOnline()) {
             emitMessage("Still offline — changes are safely saved on this phone and will sync once online.")
@@ -1124,8 +1626,10 @@ class SchoolViewModel(
         }
         val retriedPhase4 = phase4Repo.retrySync()
         val retriedPhase5 = timetableRepo.retrySync()
+        val retriedPhase6 = phase6Repo.retrySync()
+        val retriedPhase7 = phase7Repo.retrySync()
         academicRepo.retrySync { msg ->
-            emitMessage(if (retriedPhase4 || retriedPhase5) "Retrying pending sync…" else msg)
+            emitMessage(if (retriedPhase4 || retriedPhase5 || retriedPhase6 || retriedPhase7) "Retrying pending sync…" else msg)
         }
     }
 
@@ -1133,6 +1637,8 @@ class SchoolViewModel(
         academicRepo.clearSyncError()
         phase4Repo.clearSyncError()
         timetableRepo.clearSyncError()
+        phase6Repo.clearSyncError()
+        phase7Repo.clearSyncError()
     }
 
     private fun handleListenerError(e: Throwable, sub: String) {
@@ -1723,9 +2229,9 @@ class SchoolViewModel(
         component: MarkComponent,
         rawInput: String
     ): MarkValidationResult {
-        if (!uiState.value.canEditMarkFor(student, subjectName)) {
-            emitMessage("You do not have permission to edit marks for ${student.className} • $subjectName.")
-            return MarkValidationResult.Invalid("Read-only access")
+        if (!uiState.value.canEditMarkFor(student, subjectName, component.key)) {
+            emitMessage("You do not have permission to edit ${component.shortLabel} marks for ${student.className}-${student.section} • $subjectName.")
+            return MarkValidationResult.Invalid("Access restricted")
         }
         val validation = ReportCalculations.validateMarkInput(rawInput, component.maxMarks)
         if (validation is MarkValidationResult.Valid) {
@@ -1903,7 +2409,17 @@ class SchoolViewModel(
             emitMessage("No valid marks to import.")
             return
         }
+        val state = uiState.value
         val rec = activeSchoolRecord() ?: return
+        val allowedEntries = preview.validMarks.filter { mark ->
+            val stu = studentDocIdByLongId[mark.studentId]?.second ?: return@filter false
+            state.canEditMarkFor(stu, mark.subjectName, mark.componentKey)
+        }
+        val skippedForAccess = preview.validMarks.size - allowedEntries.size
+        if (allowedEntries.isEmpty()) {
+            emitMessage("No imported marks are within your assigned class-section-subjects and open exams.")
+            return
+        }
         val infoMap = studentDocIdByLongId.mapValues {
             Triple(it.value.first, it.value.second.className, it.value.second.name)
         }
@@ -1911,7 +2427,7 @@ class SchoolViewModel(
             val res = academicRepo.saveMarksBatch(
                 orgId = orgId,
                 schoolDocId = rec.docId,
-                entries = preview.validMarks,
+                entries = allowedEntries,
                 studentInfoByLongId = infoMap,
                 existingMarksByDocId = existingMarkValuesByDocId,
                 onBatchItemEnqueued = { markDocId, stuDocId, stuName, clsName, subName, compKey, newVal, editedAtMs ->
@@ -1934,7 +2450,8 @@ class SchoolViewModel(
             )
             res.onSuccess { count ->
                 val issueSuffix = if (preview.issues.isNotEmpty()) " (${preview.issues.size} warning(s) skipped)" else ""
-                emitMessage("Imported $count mark(s) for ${preview.matchedStudentCount} student(s)$issueSuffix")
+                val accessSuffix = if (skippedForAccess > 0) " ($skippedForAccess outside your assigned scope skipped)" else ""
+                emitMessage("Imported $count mark(s)$issueSuffix$accessSuffix")
             }.onFailure { err ->
                 emitMessage(friendlyFirestoreErrorMessage(err, "Marks CSV import failed."))
             }
@@ -1945,11 +2462,11 @@ class SchoolViewModel(
     // CO-SCHOLASTIC & ATTENDANCE
     // -------------------------------------------------------------------------
     fun saveCoScholasticGrade(studentId: Long, termNo: Int, areaCode: String, grade: String) {
-        if (!uiState.value.canEdit(AppModule.CO_SCHOLASTIC)) {
-            emitMessage("You only have view access to co-scholastic records.")
+        val (stuDocId, student) = studentDocIdByLongId[studentId] ?: return
+        if (!uiState.value.canEditCoScholasticFor(student)) {
+            emitMessage("Only the Class Teacher of ${student.className}-${student.section} (or Admin) can edit co-scholastic grades.")
             return
         }
-        val (stuDocId, student) = studentDocIdByLongId[studentId] ?: return
         val rec = activeSchoolRecord(student.schoolId) ?: return
         val docId = OrgAcademicRepository.makeCoDocId(stuDocId, termNo, areaCode)
         viewModelScope.launch {
@@ -1968,8 +2485,9 @@ class SchoolViewModel(
     }
 
     fun saveTermInfo(info: TermInfoEntity, onSaved: () -> Unit = {}) {
-        if (!uiState.value.canEdit(AppModule.CO_SCHOLASTIC)) {
-            emitMessage("You only have view access to attendance & remarks.")
+        val (stuDocId, student) = studentDocIdByLongId[info.studentId] ?: return
+        if (!uiState.value.canEditCoScholasticFor(student)) {
+            emitMessage("Only the Class Teacher of ${student.className}-${student.section} (or Admin) can edit attendance, remarks, and promotion.")
             return
         }
         val err = ReportCalculations.validateAttendance(info.daysPresent, info.workingDays)
@@ -1977,7 +2495,6 @@ class SchoolViewModel(
             emitMessage(err)
             return
         }
-        val (stuDocId, student) = studentDocIdByLongId[info.studentId] ?: return
         val rec = activeSchoolRecord(student.schoolId) ?: return
         val docId = OrgAcademicRepository.makeTermInfoDocId(stuDocId, info.termNo)
         viewModelScope.launch {
@@ -2254,7 +2771,9 @@ class SchoolViewModel(
             return
         }
         val res = phase4Repo.saveTeacher(orgId, teacher, isUpdate)
-        res.onSuccess {
+        res.onSuccess { savedId ->
+            val updatedTeachers = uiState.value.teachers.filterNot { it.id == savedId } + teacher.copy(id = savedId)
+            syncTeacherScopesAndClassTeachers(updatedTeachers, uiState.value.classAssignments)
             emitMessage(if (isUpdate) "Updated teacher '${teacher.name.trim()}'" else "Added teacher '${teacher.name.trim()}'")
             onResult(true, null)
         }.onFailure { err ->
@@ -2365,8 +2884,11 @@ class SchoolViewModel(
             Phase4Repository.makeAssignmentDocId(assignment.schoolId, assignment.className, assignment.section)
         }
         val existsInCloud = state.classAssignments.any { it.id == docId }
-        phase4Repo.saveClassAssignment(orgId, assignment.copy(id = docId), existsInCloud)
+        val savedAssignment = assignment.copy(id = docId)
+        phase4Repo.saveClassAssignment(orgId, savedAssignment, existsInCloud)
             .onSuccess {
+                val updatedAssignments = state.classAssignments.filterNot { it.id == docId } + savedAssignment
+                syncTeacherScopesAndClassTeachers(state.teachers, updatedAssignments, onlySchoolId = assignment.schoolId)
                 emitMessage("Saved assignments for ${assignment.classSectionLabel}")
                 onResult(true, null)
             }
@@ -2552,6 +3074,13 @@ class SchoolViewModel(
                 marksBySubjectAndKey = marks,
                 passPercent = state.settings.passPercent
             )
+            val schDocId = state.schoolDocIdByLongId[stSchool.id].orEmpty()
+            val schCloudRec = state.schoolRecordsByDocId[schDocId]
+            val ctNameForPrint = if (schCloudRec?.printClassTeacherNameOnReports == true) {
+                state.classTeacherNameForSection(schDocId, st.className, st.section)
+            } else {
+                ""
+            }
             StudentReportBundle(
                 student = st,
                 school = stSchool,
@@ -2562,7 +3091,8 @@ class SchoolViewModel(
                 coScholasticT1 = state.coScholasticMapForStudent(st.id, 1),
                 coScholasticT2 = state.coScholasticMapForStudent(st.id, 2),
                 term1Info = state.termInfoForStudent(st.id, 1),
-                term2Info = state.termInfoForStudent(st.id, 2)
+                term2Info = state.termInfoForStudent(st.id, 2),
+                classTeacherName = ctNameForPrint
             )
         }
     }
@@ -3515,6 +4045,699 @@ class SchoolViewModel(
         }
     }
 
+    // =========================================================================
+    // PHASE 6: AUTO-GENERATE TIMETABLE, TEACHER LEAVE & SUBSTITUTIONS
+    // =========================================================================
+    fun startAutoGenerate(config: AutoGenerateConfig) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("Timetable view & edit access is required to auto-generate.")
+            return
+        }
+        if (config.schoolId.isBlank()) {
+            emitMessage("Please select a school first.")
+            return
+        }
+        autoGenerateJob?.cancel()
+        autoGenerateCancelFlag.set(false)
+        _autoGenerateResult.value = null
+        _autoGenerateProgress.value = AutoGenerateProgress(
+            isRunning = true,
+            statusText = "Preparing constraints…",
+            placedCount = 0,
+            totalDemandCount = 0,
+            restartAttempt = 0
+        )
+
+        autoGenerateJob = viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val res = AutoGenerateEngine.generateTimetable(
+                    config = config.copy(session = state.filter.session),
+                    existingCellsInSession = state.activeSessionTimetableCells,
+                    teachers = state.teachers,
+                    periodStructuresBySchool = state.effectivePeriodStructuresBySchool,
+                    classAssignments = state.classAssignments,
+                    subjectRules = state.subjectRules,
+                    onProgress = { progress ->
+                        _autoGenerateProgress.value = progress
+                    },
+                    isCancelled = { autoGenerateCancelFlag.get() }
+                )
+                _autoGenerateProgress.value = AutoGenerateProgress(isRunning = false)
+                _autoGenerateResult.value = res
+            } catch (e: CancellationException) {
+                _autoGenerateProgress.value = AutoGenerateProgress(isRunning = false)
+                throw e
+            } catch (e: Exception) {
+                _autoGenerateProgress.value = AutoGenerateProgress(isRunning = false)
+                emitMessage(e.message ?: "Auto-generate failed.")
+            }
+        }
+    }
+
+    fun cancelAutoGenerate() {
+        autoGenerateCancelFlag.set(true)
+        autoGenerateJob?.cancel()
+        _autoGenerateProgress.value = AutoGenerateProgress(isRunning = false)
+        emitMessage("Auto-generate cancelled.")
+    }
+
+    fun dismissAutoGenerateResult() {
+        _autoGenerateResult.value = null
+    }
+
+    fun applyAutoGenerateResult(result: AutoGenerateResult) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("Timetable view & edit access is required.")
+            return
+        }
+        val existingIds = state.timetableCells.map { it.id }.toSet()
+        val editorName = state.currentMember?.name?.ifBlank { orgRepo.currentUserName() } ?: orgRepo.currentUserName()
+        phase6Repo.commitAutoGeneratedCells(
+            orgId = orgId,
+            generatedCells = result.generatedCells,
+            cellsToDeleteIds = result.cellsToDeleteIds,
+            existingCellIdsInCloud = existingIds,
+            undoSnapshot = result.undoSnapshot,
+            editorName = editorName
+        ).onSuccess {
+            _autoGenerateResult.value = null
+            val unplacedNote = if (result.unplacedItems.isNotEmpty()) {
+                " (${result.unplacedItems.sumOf { it.missingPeriods }} unplaced)"
+            } else ""
+            emitMessage("Applied auto-generated timetable: ${result.newlyPlacedPeriods} cells written$unplacedNote. Undo is available.")
+        }.onFailure { err ->
+            emitMessage(friendlyFirestoreErrorMessage(err, "Failed to apply generated timetable."))
+        }
+    }
+
+    fun undoAutoGenerate(schoolDocId: String) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("Timetable view & edit access is required to undo.")
+            return
+        }
+        val snapshot = state.latestUndoSnapshotForSchool(schoolDocId)
+        if (snapshot == null) {
+            emitMessage("No auto-generate undo snapshot available for this school.")
+            return
+        }
+        val currentIds = state.timetableCells.map { it.id }.toSet()
+        val editorName = state.currentMember?.name?.ifBlank { orgRepo.currentUserName() } ?: orgRepo.currentUserName()
+        phase6Repo.restoreUndoSnapshot(
+            orgId = orgId,
+            snapshot = snapshot,
+            currentCellIdsInCloud = currentIds,
+            editorName = editorName
+        ).onSuccess {
+            emitMessage("Restored previous timetable (${snapshot.previousCells.size} cells restored).")
+        }.onFailure { err ->
+            emitMessage(friendlyFirestoreErrorMessage(err, "Failed to undo auto-generate."))
+        }
+    }
+
+    fun saveTeacherLeave(
+        existingLeave: TeacherLeaveRecord?,
+        teacherId: String,
+        teacherName: String,
+        startDate: String,
+        endDate: String,
+        reasonType: LeaveReason,
+        reasonNote: String,
+        halfDay: Boolean,
+        halfDaySlotIds: List<String>,
+        isSelfRequest: Boolean
+    ) {
+        val state = uiState.value
+        val canEdit = state.canEdit(AppModule.TIMETABLE)
+        val canView = state.canView(AppModule.TIMETABLE)
+        if (!canView) {
+            emitMessage("Timetable access is required.")
+            return
+        }
+        if (!canEdit && !isSelfRequest) {
+            emitMessage("Only Timetable editors can mark leave for other teachers.")
+            return
+        }
+        if (!Phase6DateUtils.isValidIsoDate(startDate) || !Phase6DateUtils.isValidIsoDate(endDate)) {
+            emitMessage("Please enter valid dates in YYYY-MM-DD format.")
+            return
+        }
+        if (endDate < startDate) {
+            emitMessage("End date cannot be before start date.")
+            return
+        }
+        val editorName = state.currentMember?.name?.ifBlank { orgRepo.currentUserName() } ?: orgRepo.currentUserName()
+        val nowMs = System.currentTimeMillis()
+        val status = when {
+            existingLeave != null -> existingLeave.status
+            isSelfRequest && !canEdit -> LeaveStatus.PENDING
+            else -> LeaveStatus.APPROVED
+        }
+        val leave = TeacherLeaveRecord(
+            id = existingLeave?.id.orEmpty(),
+            teacherId = teacherId,
+            teacherName = teacherName,
+            startDate = startDate.trim(),
+            endDate = endDate.trim(),
+            reasonType = reasonType,
+            reasonNote = reasonNote.trim(),
+            halfDay = halfDay,
+            halfDaySlotIds = if (halfDay) halfDaySlotIds else emptyList(),
+            status = status,
+            requestedByUid = existingLeave?.requestedByUid?.ifBlank { currentUserId } ?: currentUserId,
+            requestedByName = existingLeave?.requestedByName?.ifBlank { editorName } ?: editorName,
+            approvedByUid = if (status == LeaveStatus.APPROVED) (existingLeave?.approvedByUid?.ifBlank { currentUserId } ?: currentUserId) else "",
+            approvedByName = if (status == LeaveStatus.APPROVED) (existingLeave?.approvedByName?.ifBlank { editorName } ?: editorName) else "",
+            approvedAtMs = if (status == LeaveStatus.APPROVED) (existingLeave?.approvedAtMs?.takeIf { it > 0L } ?: nowMs) else 0L
+        )
+        val auditAction = when {
+            existingLeave != null -> "LEAVE_UPDATED"
+            status == LeaveStatus.PENDING -> "LEAVE_REQUESTED"
+            else -> "LEAVE_RECORDED"
+        }
+        phase6Repo.saveTeacherLeave(
+            orgId = orgId,
+            leave = leave,
+            existsInCloud = existingLeave != null,
+            editorName = editorName,
+            auditAction = auditAction,
+            clientEditedAtMs = nowMs
+        ).onSuccess { docId ->
+            offlinePrefs.upsertPendingPhase6Edit(
+                uid = currentUserId,
+                orgId = orgId,
+                edit = LocalPendingPhase6Edit(
+                    kind = "LEAVE",
+                    docId = docId,
+                    targetSummary = "Leave: $teacherName ($startDate..$endDate)",
+                    localValueSummary = "${leave.status.label} ($startDate..$endDate)",
+                    wasDeleted = false,
+                    clientEditedAtMs = nowMs
+                )
+            )
+            emitMessage(
+                when {
+                    existingLeave != null -> "Leave updated for $teacherName."
+                    status == LeaveStatus.PENDING -> "Leave request submitted for approval."
+                    else -> "Leave recorded for $teacherName."
+                }
+            )
+        }.onFailure { err ->
+            emitMessage(friendlyFirestoreErrorMessage(err, "Could not save leave."))
+        }
+    }
+
+    fun approveOrRejectLeave(leave: TeacherLeaveRecord, approve: Boolean) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("Timetable view & edit access is required to approve or reject leave.")
+            return
+        }
+        val editorName = state.currentMember?.name?.ifBlank { orgRepo.currentUserName() } ?: orgRepo.currentUserName()
+        val nowMs = System.currentTimeMillis()
+        val updated = leave.copy(
+            status = if (approve) LeaveStatus.APPROVED else LeaveStatus.REJECTED,
+            approvedByUid = currentUserId,
+            approvedByName = editorName,
+            approvedAtMs = nowMs
+        )
+        phase6Repo.saveTeacherLeave(
+            orgId = orgId,
+            leave = updated,
+            existsInCloud = true,
+            editorName = editorName,
+            auditAction = if (approve) "LEAVE_APPROVED" else "LEAVE_REJECTED",
+            clientEditedAtMs = nowMs
+        ).onSuccess { docId ->
+            offlinePrefs.upsertPendingPhase6Edit(
+                uid = currentUserId,
+                orgId = orgId,
+                edit = LocalPendingPhase6Edit(
+                    kind = "LEAVE",
+                    docId = docId,
+                    targetSummary = "Leave: ${leave.teacherName} (${leave.startDate}..${leave.endDate})",
+                    localValueSummary = "${updated.status.label} (${leave.startDate}..${leave.endDate})",
+                    wasDeleted = false,
+                    clientEditedAtMs = nowMs
+                )
+            )
+            emitMessage(if (approve) "Approved leave for ${leave.teacherName}." else "Rejected leave for ${leave.teacherName}.")
+        }.onFailure { err ->
+            emitMessage(friendlyFirestoreErrorMessage(err, "Failed to update leave status."))
+        }
+    }
+
+    fun cancelTeacherLeave(leave: TeacherLeaveRecord) {
+        val state = uiState.value
+        val canEdit = state.canEdit(AppModule.TIMETABLE)
+        val isOwnPending = leave.requestedByUid == currentUserId && leave.status == LeaveStatus.PENDING
+        if (!canEdit && !isOwnPending) {
+            emitMessage("You cannot cancel this leave.")
+            return
+        }
+        val editorName = state.currentMember?.name?.ifBlank { orgRepo.currentUserName() } ?: orgRepo.currentUserName()
+        val nowMs = System.currentTimeMillis()
+        val updated = leave.copy(
+            status = LeaveStatus.CANCELLED,
+            approvedByUid = if (canEdit) leave.approvedByUid else "",
+            approvedByName = if (canEdit) leave.approvedByName else "",
+            approvedAtMs = if (canEdit) leave.approvedAtMs else 0L
+        )
+        phase6Repo.saveTeacherLeave(
+            orgId = orgId,
+            leave = updated,
+            existsInCloud = true,
+            editorName = editorName,
+            auditAction = "LEAVE_CANCELLED",
+            clientEditedAtMs = nowMs
+        ).onSuccess { docId ->
+            offlinePrefs.upsertPendingPhase6Edit(
+                uid = currentUserId,
+                orgId = orgId,
+                edit = LocalPendingPhase6Edit(
+                    kind = "LEAVE",
+                    docId = docId,
+                    targetSummary = "Leave: ${leave.teacherName} (${leave.startDate}..${leave.endDate})",
+                    localValueSummary = "${updated.status.label} (${leave.startDate}..${leave.endDate})",
+                    wasDeleted = false,
+                    clientEditedAtMs = nowMs
+                )
+            )
+            emitMessage("Leave cancelled for ${leave.teacherName}.")
+        }.onFailure { err ->
+            emitMessage(friendlyFirestoreErrorMessage(err, "Failed to cancel leave."))
+        }
+    }
+
+    fun assignSubstitution(item: SubstitutionNeedItem, candidate: SubstituteCandidate) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("Timetable view & edit access is required to assign substitutions.")
+            return
+        }
+        val docId = SubstitutionRecord.makeSubstitutionDocId(
+            date = item.date,
+            schoolId = item.schoolId,
+            className = item.className,
+            section = item.section,
+            slotId = item.slotId
+        )
+        val exists = state.substitutions.any { it.id == docId }
+        val editorName = state.currentMember?.name?.ifBlank { orgRepo.currentUserName() } ?: orgRepo.currentUserName()
+        val nowMs = System.currentTimeMillis()
+        val record = SubstitutionRecord(
+            id = docId,
+            date = item.date,
+            day = item.day,
+            schoolId = item.schoolId,
+            session = item.session,
+            className = item.className,
+            section = item.section,
+            slotId = item.slotId,
+            slotLabel = item.slotLabel,
+            startMinutes = item.startMinutes,
+            endMinutes = item.endMinutes,
+            subjectName = item.subjectName,
+            absentTeacherId = item.absentTeacherId,
+            absentTeacherName = item.absentTeacherName,
+            leaveId = item.leaveId,
+            substituteTeacherId = candidate.teacher.id,
+            substituteTeacherName = candidate.teacher.name,
+            overrideUsed = candidate.overrideRequired,
+            overrideReason = if (candidate.overrideRequired) candidate.overrideWarningReason else ""
+        )
+        phase6Repo.saveSubstitution(
+            orgId = orgId,
+            record = record,
+            existsInCloud = exists,
+            editorName = editorName,
+            clientEditedAtMs = nowMs
+        ).onSuccess {
+            offlinePrefs.upsertPendingPhase6Edit(
+                uid = currentUserId,
+                orgId = orgId,
+                edit = LocalPendingPhase6Edit(
+                    kind = "SUB",
+                    docId = docId,
+                    targetSummary = "Sub: ${item.date} ${item.className}-${item.section} ${item.slotLabel}",
+                    localValueSummary = candidate.teacher.name,
+                    wasDeleted = false,
+                    clientEditedAtMs = nowMs
+                )
+            )
+            val tag = if (candidate.overrideRequired) " (Override)" else ""
+            emitMessage("Assigned ${candidate.teacher.name}$tag for ${item.className}-${item.section} (${item.slotLabel}).")
+        }.onFailure { err ->
+            emitMessage(friendlyFirestoreErrorMessage(err, "Failed to assign substitute."))
+        }
+    }
+
+    fun clearSubstitution(record: SubstitutionRecord) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("Timetable view & edit access is required.")
+            return
+        }
+        val nowMs = System.currentTimeMillis()
+        phase6Repo.deleteSubstitution(orgId, record).onSuccess {
+            offlinePrefs.upsertPendingPhase6Edit(
+                uid = currentUserId,
+                orgId = orgId,
+                edit = LocalPendingPhase6Edit(
+                    kind = "SUB",
+                    docId = record.id,
+                    targetSummary = "Sub: ${record.date} ${record.className}-${record.section} ${record.slotLabel}",
+                    localValueSummary = "(Cleared)",
+                    wasDeleted = true,
+                    clientEditedAtMs = nowMs
+                )
+            )
+            emitMessage("Cleared substitution for ${record.className}-${record.section} (${record.slotLabel}).")
+        }.onFailure { err ->
+            emitMessage(friendlyFirestoreErrorMessage(err, "Failed to clear substitution."))
+        }
+    }
+
+    fun generateSubstitutionSlipPdf(
+        schoolDocId: String,
+        date: String,
+        items: List<SubstitutionNeedItem>
+    ) {
+        val state = uiState.value
+        val schoolLongId = state.schoolDocIdByLongId.entries.firstOrNull { it.value == schoolDocId }?.key
+        val school = state.schools.firstOrNull { it.id == schoolLongId } ?: state.activeSchool
+        val scopedItems = if (schoolDocId.isNotBlank()) items.filter { it.schoolId == schoolDocId } else items
+        val bundle = SubstitutionSlipPrintBundle(
+            school = school,
+            session = state.filter.session,
+            date = date,
+            items = scopedItems
+        )
+        clearTimetablePdfPreview()
+        _timetablePdfState.value = TimetablePdfPreviewState(
+            isGenerating = true,
+            title = "Substitution Slip — ${school.name} ($date)",
+            statusLabel = "Generating A4 Portrait Substitution Slip…",
+            isLandscape = false
+        )
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val file = SubstitutionPdfGenerator.generateSubstitutionSlipPdf(appContext, bundle)
+                    val totalPages = PdfExportHelper.countPdfPages(file)
+                    val preview = PdfExportHelper.renderPdfPages(file, maxPagesToPreview = 10)
+                    Triple(file, totalPages, preview)
+                }
+            }.onSuccess { (file, totalPages, preview) ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    statusLabel = "Ready ($totalPages page(s), A4 Portrait)",
+                    generatedFile = file,
+                    totalPages = totalPages,
+                    previewPages = preview
+                )
+            }.onFailure { err ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    error = err.message ?: "Failed to generate Substitution Slip PDF"
+                )
+            }
+        }
+    }
+
+    // =========================================================================
+    // PHASE 7: TEACHER SCOPES SYNC, REPORT CARD LINKS, WORKLOAD & ATTENDANCE
+    // =========================================================================
+    private fun syncTeacherScopesAndClassTeachers(
+        teachers: List<TeacherProfile>,
+        assignments: List<ClassSectionAssignment>,
+        onlySchoolId: String? = null
+    ) {
+        val state = uiState.value
+        val canSyncScopes = state.isAdmin || state.canEdit(AppModule.TEACHERS) || state.canManageMembers()
+        if (canSyncScopes) {
+            val scopes = Phase7AccessEvaluator.buildTeacherScopes(teachers, assignments)
+            val removedUids = state.allTeacherScopes.keys - scopes.keys
+            phase7Repo.syncTeacherScopes(orgId, scopes, removedUids)
+        }
+        val targetSchoolIds = if (!onlySchoolId.isNullOrBlank()) {
+            listOf(onlySchoolId)
+        } else {
+            state.schoolRecordsByDocId.keys.toList()
+        }
+        for (schId in targetSchoolIds) {
+            if (schId in state.schoolRecordsByDocId) {
+                val namesMap = Phase7AccessEvaluator.buildClassTeacherNamesBySection(schId, teachers, assignments)
+                academicRepo.updateSchoolClassTeacherNames(orgId, schId, namesMap)
+            }
+        }
+    }
+
+    fun focusSchoolClassSection(schoolDocId: String, className: String, section: String) {
+        val state = uiState.value
+        val targetSchool = state.schoolRecordsByDocId[schoolDocId]
+        val schoolLongId = targetSchool?.stableId ?: state.activeSchool.id
+        _filter.value = _filter.value.copy(
+            schoolId = schoolLongId,
+            className = className,
+            section = section.trim().uppercase().ifBlank { "A" },
+            selectedStudentId = null
+        )
+    }
+
+    fun updateSchoolReportCardLinks(
+        schoolId: Long,
+        printClassTeacherNameOnReports: Boolean,
+        checkReportCardsReadyBeforeBatch: Boolean,
+        openExamsForTeachers: List<String>
+    ) {
+        if (!uiState.value.canEdit(AppModule.SETTINGS)) {
+            emitMessage("You do not have permission to change school report settings.")
+            return
+        }
+        val rec = activeSchoolRecord(schoolId) ?: return
+        academicRepo.updateSchoolReportCardLinks(
+            orgId = orgId,
+            schoolDocId = rec.docId,
+            schoolName = rec.name,
+            printClassTeacherNameOnReports = printClassTeacherNameOnReports,
+            checkReportCardsReadyBeforeBatch = checkReportCardsReadyBeforeBatch,
+            openExamsForTeachers = openExamsForTeachers
+        ).onSuccess {
+            emitMessage("Saved report card links & open exams for ${rec.name}")
+        }.onFailure { err ->
+            emitMessage(friendlyFirestoreErrorMessage(err, "Could not save school report settings."))
+        }
+    }
+
+    fun saveTeacherAttendance(
+        schoolDocId: String,
+        dateIso: String,
+        teacher: TeacherProfile,
+        status: TeacherAttendanceStatus,
+        note: String = "",
+        linkedLeaveId: String = ""
+    ) {
+        if (!uiState.value.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("Timetable edit access is required to mark teacher attendance.")
+            return
+        }
+        if (status == TeacherAttendanceStatus.UNMARKED) return
+        val docId = TeacherAttendanceRecord.makeDocId(dateIso, schoolDocId, teacher.id)
+        val exists = uiState.value.teacherAttendanceRecords.any { it.id == docId }
+        val record = TeacherAttendanceRecord(
+            id = docId,
+            date = dateIso,
+            schoolId = schoolDocId,
+            teacherId = teacher.id,
+            teacherName = teacher.name,
+            status = status,
+            note = note,
+            linkedLeaveId = linkedLeaveId
+        )
+        phase7Repo.saveTeacherAttendance(orgId, record, exists)
+            .onSuccess {
+                emitMessage("${teacher.name}: ${status.label} ($dateIso)")
+            }
+            .onFailure { err ->
+                emitMessage(friendlyFirestoreErrorMessage(err, "Could not save attendance."))
+            }
+    }
+
+    fun markTeacherAbsentAndCreateLeave(
+        schoolDocId: String,
+        dateIso: String,
+        teacher: TeacherProfile,
+        onReadyForSubstitutions: (String) -> Unit
+    ) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("Timetable edit access is required to create leave and manage substitutions.")
+            return
+        }
+        val actorName = state.currentMember?.name?.ifBlank { orgRepo.currentEditorName() }
+            ?: orgRepo.currentEditorName()
+        val leave = TeacherAttendanceEngine.buildApprovedLeaveFromAttendanceAbsence(
+            teacher = teacher,
+            dateIso = dateIso,
+            actorUid = currentUserId,
+            actorName = actorName
+        )
+        phase6Repo.saveTeacherLeave(
+            orgId = orgId,
+            leave = leave,
+            existsInCloud = false,
+            editorName = actorName,
+            auditAction = "TEACHER_LEAVE_CREATED_FROM_ATTENDANCE"
+        )
+            .onSuccess { leaveId ->
+                saveTeacherAttendance(
+                    schoolDocId = schoolDocId,
+                    dateIso = dateIso,
+                    teacher = teacher,
+                    status = TeacherAttendanceStatus.ABSENT,
+                    note = "Approved leave created from daily attendance",
+                    linkedLeaveId = leaveId
+                )
+                emitMessage("Created approved leave for ${teacher.name} on $dateIso")
+                onReadyForSubstitutions(dateIso)
+            }
+            .onFailure { err ->
+                emitMessage(friendlyFirestoreErrorMessage(err, "Could not create leave for ${teacher.name}."))
+            }
+    }
+
+    fun generateWorkloadReportPdf(
+        referenceDateIso: String,
+        periodMode: WorkloadReportPeriodMode,
+        schoolIdFilter: String?,
+        teacherIdFilter: String?
+    ) {
+        val state = uiState.value
+        val rows = state.computeWorkloadReport(
+            referenceDateIso = referenceDateIso,
+            schoolIdFilter = schoolIdFilter,
+            teacherIdFilter = teacherIdFilter
+        )
+        val headerSchool = if (!schoolIdFilter.isNullOrBlank()) {
+            state.schoolRecordsByDocId[schoolIdFilter]?.toSchoolEntity() ?: state.activeSchool
+        } else {
+            state.activeSchool.copy(
+                name = state.activeOrg?.name?.ifBlank { state.activeSchool.name } ?: state.activeSchool.name
+            )
+        }
+        val scopeTitle = if (!schoolIdFilter.isNullOrBlank()) {
+            state.schoolNameByDocId(schoolIdFilter)
+        } else {
+            "All Schools (${state.schools.size})"
+        }
+        val bundle = WorkloadReportPrintBundle(
+            headerSchool = headerSchool,
+            scopeTitle = scopeTitle,
+            session = state.filter.session,
+            referenceDateIso = referenceDateIso,
+            periodMode = periodMode,
+            rows = rows
+        )
+        _timetablePdfState.value = TimetablePdfPreviewState(
+            isGenerating = true,
+            title = "Workload Report • $scopeTitle",
+            statusLabel = "Generating A4 Landscape Workload Report PDF…",
+            isLandscape = true
+        )
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val file = WorkloadReportPdfGenerator.generateWorkloadPdf(appContext, bundle)
+                    val totalPages = PdfExportHelper.countPdfPages(file)
+                    val preview = PdfExportHelper.renderPdfPages(file, maxPagesToPreview = 10)
+                    Triple(file, totalPages, preview)
+                }
+            }.onSuccess { (file, totalPages, preview) ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    statusLabel = "Ready ($totalPages page(s), A4 Landscape)",
+                    generatedFile = file,
+                    totalPages = totalPages,
+                    previewPages = preview
+                )
+            }.onFailure { err ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    error = err.message ?: "Failed to generate Workload Report PDF"
+                )
+            }
+        }
+    }
+
+    fun exportWorkloadCsvToUri(
+        destinationUri: Uri,
+        referenceDateIso: String,
+        periodMode: WorkloadReportPeriodMode,
+        schoolIdFilter: String?,
+        teacherIdFilter: String?
+    ) {
+        val state = uiState.value
+        val rows = state.computeWorkloadReport(referenceDateIso, schoolIdFilter, teacherIdFilter)
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                val csv = WorkloadReportEngine.buildWorkloadCsv(rows, periodMode, referenceDateIso)
+                PdfExportHelper.writeTextToUri(appContext, csv, destinationUri)
+            }
+            emitMessage(if (ok) "Exported Workload Report CSV (${rows.size} teacher(s))" else "Could not export Workload CSV")
+        }
+    }
+
+    fun generateMonthlyTeacherAttendancePdf(
+        schoolDocId: String,
+        year: Int,
+        month1Based: Int,
+        monthLabel: String
+    ) {
+        val state = uiState.value
+        val school = state.schoolRecordsByDocId[schoolDocId]?.toSchoolEntity() ?: state.activeSchool
+        val rows = state.buildMonthlyTeacherAttendance(schoolDocId, year, month1Based)
+        val bundle = TeacherAttendanceMonthlyPrintBundle(
+            school = school,
+            session = state.filter.session,
+            monthLabel = monthLabel,
+            year = year,
+            month1Based = month1Based,
+            rows = rows
+        )
+        _timetablePdfState.value = TimetablePdfPreviewState(
+            isGenerating = true,
+            title = "Teacher Attendance • $monthLabel",
+            statusLabel = "Generating A4 Portrait Attendance Summary PDF…",
+            isLandscape = false
+        )
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val file = TeacherAttendancePdfGenerator.generateMonthlyAttendancePdf(appContext, bundle)
+                    val totalPages = PdfExportHelper.countPdfPages(file)
+                    val preview = PdfExportHelper.renderPdfPages(file, maxPagesToPreview = 10)
+                    Triple(file, totalPages, preview)
+                }
+            }.onSuccess { (file, totalPages, preview) ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    statusLabel = "Ready ($totalPages page(s), A4 Portrait)",
+                    generatedFile = file,
+                    totalPages = totalPages,
+                    previewPages = preview
+                )
+            }.onFailure { err ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    error = err.message ?: "Failed to generate Attendance Summary PDF"
+                )
+            }
+        }
+    }
+
     companion object {
         fun provideFactory(
             appContext: Application,
@@ -3524,6 +4747,8 @@ class SchoolViewModel(
             academicRepo: OrgAcademicRepository,
             phase4Repo: Phase4Repository,
             timetableRepo: TimetableRepository,
+            phase6Repo: Phase6Repository,
+            phase7Repo: Phase7Repository,
             localRepo: ReportCardRepository,
             connectivityMonitor: NetworkConnectivityMonitor,
             offlinePrefs: OfflinePrefsStore
@@ -3537,6 +4762,8 @@ class SchoolViewModel(
                     academicRepo = academicRepo,
                     phase4Repo = phase4Repo,
                     timetableRepo = timetableRepo,
+                    phase6Repo = phase6Repo,
+                    phase7Repo = phase7Repo,
                     localRepo = localRepo,
                     connectivityMonitor = connectivityMonitor,
                     offlinePrefs = offlinePrefs
@@ -3549,7 +4776,9 @@ class SchoolViewModel(
 private data class Phase4And5Bundle(
     val phase4: CloudPhase4Snapshot,
     val timetable: CloudTimetableSnapshot,
-    val timetableConflicts: List<TimetableConflictNotice>
+    val timetableConflicts: List<TimetableConflictNotice>,
+    val phase6: CloudPhase6Snapshot,
+    val phase6Conflicts: List<Phase6ConflictNotice>
 )
 
 private data class AdminAndPhase4Bundle(
@@ -3559,7 +4788,11 @@ private data class AdminAndPhase4Bundle(
     val auditLogs: List<CloudAuditLog>,
     val phase4: CloudPhase4Snapshot,
     val timetable: CloudTimetableSnapshot,
-    val timetableConflicts: List<TimetableConflictNotice>
+    val timetableConflicts: List<TimetableConflictNotice>,
+    val phase6: CloudPhase6Snapshot,
+    val phase6Conflicts: List<Phase6ConflictNotice>,
+    val phase7: CloudPhase7Snapshot,
+    val multiSchoolPendingBundles: List<SchoolAcademicBundleForPending>
 )
 
 private data class CloudCoreBundle(

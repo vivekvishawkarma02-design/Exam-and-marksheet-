@@ -15,6 +15,7 @@ import com.example.domain.MemberPermissions
 import com.example.domain.MemberStatus
 import com.example.domain.OrgMembershipRef
 import com.example.domain.OrgRole
+import com.example.domain.Phase7AccessEvaluator
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.IgnoreExtraProperties
@@ -356,7 +357,11 @@ data class CloudSchoolRecord(
     val active: Boolean,
     val classGroups: List<CloudClassGroupItem>,
     val classes: List<CloudSchoolClassItem>,
-    val createdAt: Timestamp? = null
+    val createdAt: Timestamp? = null,
+    val printClassTeacherNameOnReports: Boolean = false,
+    val checkReportCardsReadyBeforeBatch: Boolean = false,
+    val openExamsForTeachers: List<String> = Phase7AccessEvaluator.ALL_EXAM_KEYS,
+    val classTeacherNamesBySection: Map<String, String> = emptyMap()
 ) {
     fun toSchoolEntity(): SchoolEntity = SchoolEntity(
         id = stableId,

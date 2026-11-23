@@ -149,6 +149,66 @@ All Phase 4 data belongs to an organisation (and one or more of its schools), li
 
 ---
 
+## Phase 6: Auto-Generate Timetable, Teacher Leave & Daily Substitutions
+
+- **Access Control Decision (Existing 8-Module Matrix Preserved):** Phase 6 uses the existing **`Timetable`** module (`no access` / `view only` / `view and edit`) without adding a 9th module so existing organisation member records stay 100% compatible:
+  - **Auto-generate, Undo, Approve/Reject Leave, and Assign/Clear Substitutions** require **`Timetable: view and edit`**.
+  - **Linked Teachers with `Timetable: view only`** can view daily substitutions and **request or cancel their own `PENDING` leave**, enforced in both UI and Firestore Security Rules.
+  - **Members with `Timetable: no access`** cannot view or modify any leave, substitution, or undo data.
+- **Auto-Generate Timetable:**
+  - Generate for a **whole school (all classes & sections)** or a **single class & section** on a background coroutine (`Dispatchers.Default`) with live progress and a **Cancel** button.
+  - Strictly enforces all **Hard Rules** (cross-school real clock time overlap across all schools in the organisation, one subject per class slot, weekly off-days, daily period limits, and active teachers) and optimizes **Soft Goals** in order (spread subject across week / respect double periods, heavy/morning subjects in morning, preferred time of day, limit consecutive periods, balance daily teacher load).
+  - Never modifies **locked cells** (and optionally keeps existing unlocked cells). Supports **deterministic seeds** (same seed produces the same timetable; **Regenerate** uses a fresh seed), **partial results with an Unplaced report**, and **1-tap Undo auto-generate** backed by `timetableUndoSnapshots`.
+- **Teacher Leave & Approvals:**
+  - Record single-day, multi-day, or half-day (specific periods) leave (`Casual Leave`, `Sick Leave`, `Official Duty`, `Other`) under `organisations/{orgId}/teacherLeaves/{leaveId}` with audit logging and offline sync + concurrent-edit conflict alerts.
+- **Daily Substitutions & Printable Slip:**
+  - Pick any date (`YYYY-MM-DD`) to see every affected period across schools for teachers on **approved** leave.
+  - Ranks suggested substitutes by: **(1) teaches the same subject**, **(2) teaches that class already**, **(3) lowest substitution count this month**, **(4) lowest total load that day (regular + substitutions)**, excluding absent, busy (across all schools), off-day, inactive, or at-limit teachers (available via **Manual Override** with a clear `OVERRIDE` flag).
+  - Stored per date/school/class/section/slot under `organisations/{orgId}/substitutions/{subId}` without ever modifying the weekly timetable.
+  - Automatically re-flags periods as **Needs substitute** if an assigned substitute later becomes absent or inactive.
+  - Counts assigned substitutions in weekly and monthly teacher workloads, exports an offline **A4 Portrait Daily Substitution Slip PDF** (with Signature column), and supports WhatsApp/SMS-ready text sharing.
+
+---
+
+## Phase 7: Teacher Access ("My Day"), Marks Pending List, Workload Report, Teacher Attendance & Report Card Links
+
+All Phase 7 data lives under `organisations/{orgId}/`, works 100% offline with Phase 3 sync, and uses the existing Phase 2 **8-module per-member access matrix** (enforced in both the UI and `firestore.rules`):
+
+1. **Teacher Home ("My Day") & Restricted Entry**
+   - Any member linked to a Phase 4 teacher profile sees a **"My Day"** home card on the Dashboard displaying today's timetable (with real clock times, class-section, subject, and school), today's substitutions assigned to them, an interactive weekly timetable switcher (Mon–Sat), their Class Teacher section(s), and their own pending marks tasks.
+   - **Marks Entry Enforcement (UI + `firestore.rules`):** Teachers can enter and edit marks **only** for `(school, class, section, subject)` combinations assigned to them in Phase 4 (`organisations/{orgId}/teacherScopes/{uid}`) AND only for exams the admin has opened (`openExamsForTeachers` per school). Unassigned classes/sections/subjects are hidden in the UI and rejected by Firestore rules (verified against the student's actual `className` and `section` on the server). Every edit preserves the existing immutable `markEditLogs` audit trail. Admins and non-teacher members with `Marks: view & edit` keep full access.
+   - **Class Teacher Restriction (UI + `firestore.rules`):** Only the assigned Class Teacher of a section (or Admin / non-teacher with `Co-Scholastic: edit`) can edit co-scholastic grades, attendance, remarks, and promoted-to for students in that section. Subject teachers cannot.
+
+2. **Marks Pending List & WhatsApp/SMS Reminders**
+   - For each exam (`UT1`, `UT2`, `Half-Yearly`, `Annual`), lists incomplete class-section-subject sheets with `entered / total` students and responsible teacher, filterable by **School**, **Class**, **Exam**, and **Teacher**.
+   - Teachers see only their own pending tasks; Admins/non-restricted members see all pending items across schools, see a **Marks Pending by Exam** summary tile on the Dashboard, and can tap **"Remind"** to share a ready WhatsApp/SMS message (e.g., `"Mrs. Sharma: Class 3-A Maths UT1 marks are pending, 12 of 40 entered."`).
+
+3. **Workload Report (Per School & Across Schools + Offline A4 PDF / CSV)**
+   - Shows per-teacher periods/week broken down by class-section & subject, free periods/week, substitutions taken this week and this month, and total load (per school and combined across schools for multi-school teachers).
+   - Filter by School, Teacher, and Week/Month, and export offline as an **A4 Landscape PDF** (with school name & logo header) or **CSV**.
+
+4. **Teacher Attendance (Governed by `Timetable: view & edit`)**
+   - Daily attendance sheet per school (`Present`, `Half-Day`, `On Leave`, `Absent`) under `organisations/{orgId}/teacherAttendance/{docId}` — reusing the existing **`Timetable`** module (`view` to view, `edit` to mark) so no extra access module is needed.
+   - Approved leaves from Phase 6 automatically appear as **On Leave** (or **Half-Day**). Marking a teacher **Absent** offers a 1-tap **"Create Approved Leave & Open Substitutions"** button that creates the approved leave and opens Substitutions for that exact date.
+   - Includes a **Monthly Summary** tab and offline **A4 Portrait Monthly Attendance PDF** export.
+
+5. **Optional Report Card Links (Both OFF by Default, Per School)**
+   - Configured per school under **Settings -> Report Card Links & Open Exams** (`Settings: edit`):
+     - **Print Class Teacher's name on reports** (OFF by default): when ON, prints the assigned Class Teacher's name neatly beneath `"CLASS TEACHER'S SIGN"` on UT slips, Half-Yearly slips, and Annual Report Cards without altering existing layouts.
+     - **"Report cards ready" check before batch export** (OFF by default): when ON, warns before batch PDF or Class ZIP export whenever any student in the section is missing marks, attendance, co-scholastic grades, or remarks, with a detailed student list and an **Export Anyway** option.
+     - **Exams Open for Teacher Marks Entry:** toggle which exams (`UT1`, `UT2`, `Half-Yearly`, `Annual`) teachers can edit.
+
+---
+
+## How Each Role Uses the App
+
+- **Owner:** Creates the organisation (and first school), can add/edit multiple schools, manage all academic/timetable/attendance modules, approve members & set granular per-school/per-module access, configure report card links & open exams, export JSON backups, transfer ownership, or delete the organisation (requires a backup first).
+- **Admin:** Day-to-day head across assigned schools — manages members & invite codes, teachers, period structures, class-subject assignments (which automatically sync teacher scopes & Class Teacher names), timetables, auto-generate, leave approvals, daily substitutions, staff attendance, pending marks reminders, workload reports, marks history audit logs, and batch A4 report cards.
+- **Office Operator:** Handles daily administrative operations for their assigned school(s) based on the exact modules granted by the Admin (typically Students, Marks, Co-Scholastic, Reports, Timetable/Substitutions, and Staff Attendance). Keeps full marks & co-scholastic access across assigned schools even when an exam is closed for teachers.
+- **Teacher:** Signs in and lands on **"My Day"** showing today's periods, assigned substitutions, weekly timetable, Class Teacher section(s), and own pending marks. Enters marks **only** for their assigned class-section-subject combinations during open exams, enters co-scholastic/attendance/remarks **only** for their own Class Teacher section, and can submit or cancel their own `PENDING` leave requests.
+
+---
+
 ## Firebase Setup (`google-services.json`, Auth Providers & SHA Fingerprints)
 
 Keep private Firebase credentials out of public source control where possible:

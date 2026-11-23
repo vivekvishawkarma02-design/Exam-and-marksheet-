@@ -29,6 +29,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -52,10 +54,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -102,7 +104,8 @@ private enum class TimetableTab(val label: String, val tag: String) {
     CLASS("Class", "tt_tab_class"),
     TEACHER("Teacher", "tt_tab_teacher"),
     MASTER("Master", "tt_tab_master"),
-    FREE("Free", "tt_tab_free")
+    FREE("Free", "tt_tab_free"),
+    LEAVE_SUBS("Leave & Subs", "tt_tab_leave_subs")
 }
 
 internal data class CellEditTarget(
@@ -120,12 +123,32 @@ fun TimetableScreen(
     uiState: SchoolUiState,
     viewModel: SchoolViewModel,
     onBack: () -> Unit,
+    initialTabIndex: Int? = null,
+    initialSubsDate: String? = null,
+    onInitialJumpConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val canEdit = uiState.canEdit(AppModule.TIMETABLE)
     val pdfState by viewModel.timetablePdfState.collectAsStateWithLifecycle()
+    val autoGenProgress by viewModel.autoGenerateProgress.collectAsStateWithLifecycle()
+    val autoGenResult by viewModel.autoGenerateResult.collectAsStateWithLifecycle()
 
-    var activeTab by remember { mutableStateOf(TimetableTab.CLASS) }
+    var activeTab by remember {
+        mutableStateOf(
+            TimetableTab.entries.getOrNull(initialTabIndex ?: 0) ?: TimetableTab.CLASS
+        )
+    }
+    var pendingSubDate by remember { mutableStateOf(initialSubsDate) }
+
+    LaunchedEffect(initialTabIndex, initialSubsDate) {
+        if (initialTabIndex != null) {
+            activeTab = TimetableTab.entries.getOrNull(initialTabIndex) ?: TimetableTab.CLASS
+            if (!initialSubsDate.isNullOrBlank()) {
+                pendingSubDate = initialSubsDate
+            }
+            onInitialJumpConsumed()
+        }
+    }
 
     // School / Class / Section / Teacher selection scoped for Timetable
     val accessibleSchools = remember(uiState.activeSchools) { uiState.activeSchools }
@@ -208,6 +231,7 @@ fun TimetableScreen(
     var showClashReportDialog by remember { mutableStateOf(false) }
     var showConflictNoticeDialog by remember { mutableStateOf(false) }
     var showPrintHubDialog by remember { mutableStateOf(false) }
+    var showAutoGenerateConfigDialog by remember { mutableStateOf(false) }
 
     fun jumpToCell(cell: TimetableCell, openEditorImmediately: Boolean) {
         selectedSchoolDocId = cell.schoolId
@@ -377,15 +401,59 @@ fun TimetableScreen(
                     }
                 }
 
-                // 4 Timetable View Tabs
-                TabRow(selectedTabIndex = activeTab.ordinal) {
+                // 5 Timetable View Tabs (Scrollable for clean mobile fit)
+                ScrollableTabRow(
+                    selectedTabIndex = activeTab.ordinal,
+                    edgePadding = 8.dp
+                ) {
                     TimetableTab.entries.forEach { tab ->
+                        val tabLabel = if (tab == TimetableTab.LEAVE_SUBS && canEdit && uiState.pendingLeaveRequestCount > 0) {
+                            "${tab.label} (${uiState.pendingLeaveRequestCount})"
+                        } else {
+                            tab.label
+                        }
                         Tab(
                             selected = activeTab == tab,
                             onClick = { activeTab = tab },
-                            text = { Text(tab.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            text = { Text(tabLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             modifier = Modifier.testTag(tab.tag)
                         )
+                    }
+                }
+
+                // Phase 6 Auto-Generate & 1-Tap Undo Bar (shown for Timetable editors on Class & Master tabs)
+                if (canEdit && (activeTab == TimetableTab.CLASS || activeTab == TimetableTab.MASTER)) {
+                    val undoSnap = uiState.latestUndoSnapshotForSchool(selectedSchoolDocId)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = { showAutoGenerateConfigDialog = true },
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("tt_autogen_button")
+                        ) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Auto-generate", maxLines = 1)
+                        }
+                        if (undoSnap != null) {
+                            OutlinedButton(
+                                onClick = { viewModel.undoAutoGenerate(selectedSchoolDocId) },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("tt_undo_autogen_button")
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Undo", maxLines = 1)
+                            }
+                        }
                     }
                 }
             }
@@ -452,8 +520,56 @@ fun TimetableScreen(
                         onSelectSchoolDocId = { selectedSchoolDocId = it }
                     )
                 }
+
+                TimetableTab.LEAVE_SUBS -> {
+                    Phase6LeaveAndSubsTab(
+                        uiState = uiState,
+                        viewModel = viewModel,
+                        canEdit = canEdit,
+                        selectedSchoolDocId = selectedSchoolDocId,
+                        onSelectSchoolDocId = { selectedSchoolDocId = it },
+                        initialDateIso = pendingSubDate,
+                        onInitialDateConsumed = { pendingSubDate = null }
+                    )
+                }
             }
         }
+    }
+
+    // Phase 6 Auto-Generate Dialogs
+    if (showAutoGenerateConfigDialog && canEdit) {
+        val lockedCount = uiState.activeSessionTimetableCells.count {
+            it.schoolId == selectedSchoolDocId && it.locked
+        }
+        AutoGenerateConfigDialog(
+            schoolDocId = selectedSchoolDocId,
+            schoolName = uiState.schoolNameByDocId(selectedSchoolDocId),
+            selectedClassName = selectedClassName,
+            selectedSection = selectedSection,
+            session = uiState.filter.session,
+            lockedCellsCount = lockedCount,
+            onStart = { config ->
+                showAutoGenerateConfigDialog = false
+                viewModel.startAutoGenerate(config)
+            },
+            onDismiss = { showAutoGenerateConfigDialog = false }
+        )
+    }
+
+    if (autoGenProgress.isRunning) {
+        AutoGenerateProgressDialog(
+            progress = autoGenProgress,
+            onCancel = viewModel::cancelAutoGenerate
+        )
+    }
+
+    autoGenResult?.let { result ->
+        AutoGenerateResultDialog(
+            result = result,
+            onApply = { viewModel.applyAutoGenerateResult(result) },
+            onRegenerateNewSeed = { newCfg -> viewModel.startAutoGenerate(newCfg) },
+            onDismiss = viewModel::dismissAutoGenerateResult
+        )
     }
 
     // Cell Editor / Read-only Detail Dialog

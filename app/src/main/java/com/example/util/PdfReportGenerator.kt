@@ -37,7 +37,8 @@ data class StudentReportBundle(
     val coScholasticT1: Map<String, String>,
     val coScholasticT2: Map<String, String>,
     val term1Info: TermInfoEntity?,
-    val term2Info: TermInfoEntity?
+    val term2Info: TermInfoEntity?,
+    val classTeacherName: String = ""
 )
 
 /**
@@ -90,6 +91,50 @@ object PdfReportGenerator {
         val outFile = File(reportsDir, fileName)
         writePdfToFile(context, settings, reportType, bundles, slipLayoutMode, outFile, onProgress)
         return outFile
+    }
+
+    /**
+     * Phase 7 verification helper: renders the first page of a report (UT1/UT2/Half-Yearly/Annual)
+     * to a Bitmap using the exact same drawing routines as [generateReportPdf] for pixel-verified tests.
+     */
+    fun renderReportFirstPageBitmapForVerification(
+        settings: SchoolSettingsEntity,
+        reportType: ReportType,
+        bundle: StudentReportBundle
+    ): Bitmap {
+        val regular = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+        val bold = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        val logo = ImageUtils.decodeBase64ToBitmap(bundle.school.logoBase64)
+        return try {
+            if (reportType == ReportType.ANNUAL) {
+                val bmp = Bitmap.createBitmap(PORTRAIT_W, PORTRAIT_H, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(bmp)
+                canvas.drawColor(COLOR_WHITE)
+                drawAnnualPortraitCard(canvas, settings, bundle, logo, regular, bold)
+                bmp
+            } else {
+                val bmp = Bitmap.createBitmap(LANDSCAPE_W, LANDSCAPE_H, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(bmp)
+                canvas.drawColor(COLOR_WHITE)
+                val slipW = (LANDSCAPE_W - MARGIN_6MM * 2f - 14f) / 2f
+                drawA5LandscapeHalfSlip(
+                    canvas = canvas,
+                    left = MARGIN_6MM,
+                    top = MARGIN_6MM,
+                    width = slipW,
+                    height = LANDSCAPE_H - MARGIN_6MM * 2f,
+                    settings = settings,
+                    bundle = bundle,
+                    slipReportType = reportType,
+                    logo = logo,
+                    regular = regular,
+                    bold = bold
+                )
+                bmp
+            }
+        } finally {
+            logo?.recycle()
+        }
     }
 
     fun generateBatchClassZip(
@@ -709,14 +754,17 @@ object PdfReportGenerator {
         )
 
         // 7. THREE EQUALLY SPACED SIGNATURE BLOCKS AT BOTTOM
+        val ctSub = bundle.classTeacherName.trim()
         drawSignatureStrip(
             canvas = canvas,
             left = inL,
-            baselineY = bottom - 10f,
+            baselineY = if (ctSub.isNotEmpty()) bottom - 13f else bottom - 10f,
             width = inW,
             bold = bold,
+            regular = regular,
             textSize = 6.4f,
             labels = listOf("GUARDIAN'S SIGN", "CLASS TEACHER'S SIGN", "PRINCIPAL'S SIGN"),
+            subLabels = if (ctSub.isNotEmpty()) listOf("", ctSub, "") else emptyList(),
             lineHalfWidth = 46f
         )
     }
@@ -1034,14 +1082,17 @@ object PdfReportGenerator {
         drawPlainField(canvas, inL, f2Base, wProm, "PROMOTED TO CLASS : ", promotedTo, pInfoBold, pInfoVal)
         drawPlainField(canvas, inL + wProm + footerGap, f2Base, wDate, "DATE : ", dateText, pInfoBold, pInfoVal)
 
+        val annualCtSub = bundle.classTeacherName.trim()
         drawSignatureStrip(
             canvas = canvas,
             left = inL,
-            baselineY = bottom - 13f,
+            baselineY = if (annualCtSub.isNotEmpty()) bottom - 16f else bottom - 13f,
             width = inW,
             bold = bold,
+            regular = regular,
             textSize = 7.7f,
             labels = listOf("GUARDIAN'S SIGN", "CLASS TEACHER'S SIGN", "PRINCIPAL'S SIGN"),
+            subLabels = if (annualCtSub.isNotEmpty()) listOf("", annualCtSub, "") else emptyList(),
             lineHalfWidth = 58f
         )
     }
@@ -1143,8 +1194,10 @@ object PdfReportGenerator {
         baselineY: Float,
         width: Float,
         bold: Typeface,
+        regular: Typeface = bold,
         textSize: Float,
         labels: List<String>,
+        subLabels: List<String> = emptyList(),
         lineHalfWidth: Float
     ) {
         val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1152,11 +1205,16 @@ object PdfReportGenerator {
             strokeWidth = 0.75f
         }
         val labelPaint = makePaint(bold, textSize, COLOR_BAND, Paint.Align.CENTER)
+        val subPaint = makePaint(regular, (textSize - 0.7f).coerceAtLeast(5.4f), COLOR_SUBTEXT, Paint.Align.CENTER)
         val slotW = width / labels.size.toFloat()
         labels.forEachIndexed { idx, label ->
             val cx = left + slotW * idx + slotW / 2f
             canvas.drawLine(cx - lineHalfWidth, baselineY - 12f, cx + lineHalfWidth, baselineY - 12f, linePaint)
             drawTextPt(canvas, ellipsize(label, labelPaint, slotW - 6f), cx, baselineY, labelPaint)
+            val sub = subLabels.getOrNull(idx)?.trim().orEmpty()
+            if (sub.isNotEmpty()) {
+                drawTextPt(canvas, ellipsize(sub, subPaint, slotW - 6f), cx, baselineY + textSize + 1.5f, subPaint)
+            }
         }
     }
 

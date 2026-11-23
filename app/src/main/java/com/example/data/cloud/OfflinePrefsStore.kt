@@ -3,6 +3,7 @@ package com.example.data.cloud
 import android.content.Context
 import com.example.domain.AuthMethod
 import com.example.domain.LocalPendingMarkEdit
+import com.example.domain.LocalPendingPhase6Edit
 import com.example.domain.LocalPendingTimetableEdit
 import org.json.JSONArray
 import org.json.JSONObject
@@ -121,6 +122,32 @@ class OfflinePrefsStore(context: Context) {
         saveAllPendingTimetableEdits(uid, others)
     }
 
+    fun loadPendingPhase6Edits(uid: String, orgId: String): List<LocalPendingPhase6Edit> =
+        loadAllPendingPhase6Edits(uid).filter { it.first == orgId }.map { it.second }
+
+    fun upsertPendingPhase6Edit(uid: String, orgId: String, edit: LocalPendingPhase6Edit) {
+        val all = loadAllPendingPhase6Edits(uid)
+            .filterNot { it.first == orgId && it.second.kind == edit.kind && it.second.docId == edit.docId }
+            .toMutableList()
+        all.add(orgId to edit)
+        val bounded = if (all.size > 400) all.takeLast(400) else all
+        saveAllPendingPhase6Edits(uid, bounded)
+    }
+
+    fun replacePendingPhase6EditsForOrg(
+        uid: String,
+        orgId: String,
+        remainingForOrg: List<LocalPendingPhase6Edit>
+    ) {
+        val others = loadAllPendingPhase6Edits(uid).filterNot { it.first == orgId }
+        saveAllPendingPhase6Edits(uid, others + remainingForOrg.map { orgId to it })
+    }
+
+    fun clearPendingPhase6EditsForOrg(uid: String, orgId: String) {
+        val others = loadAllPendingPhase6Edits(uid).filterNot { it.first == orgId }
+        saveAllPendingPhase6Edits(uid, others)
+    }
+
     fun clearAll() {
         prefs.edit().clear().apply()
     }
@@ -235,10 +262,56 @@ class OfflinePrefsStore(context: Context) {
         prefs.edit().putString(keyPendingTimetable(uid), arr.toString()).apply()
     }
 
+    private fun loadAllPendingPhase6Edits(uid: String): List<Pair<String, LocalPendingPhase6Edit>> {
+        val raw = prefs.getString(keyPendingPhase6(uid), null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val docId = obj.optString("docId")
+                    val orgId = obj.optString("orgId")
+                    if (docId.isBlank() || orgId.isBlank()) continue
+                    add(
+                        orgId to LocalPendingPhase6Edit(
+                            kind = obj.optString("kind", "LEAVE"),
+                            docId = docId,
+                            targetSummary = obj.optString("targetSummary"),
+                            localValueSummary = obj.optString("localValueSummary"),
+                            wasDeleted = obj.optBoolean("wasDeleted", false),
+                            clientEditedAtMs = obj.optLong("clientEditedAtMs", 0L)
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveAllPendingPhase6Edits(uid: String, list: List<Pair<String, LocalPendingPhase6Edit>>) {
+        val arr = JSONArray()
+        list.forEach { (orgId, e) ->
+            arr.put(
+                JSONObject().apply {
+                    put("orgId", orgId)
+                    put("kind", e.kind)
+                    put("docId", e.docId)
+                    put("targetSummary", e.targetSummary)
+                    put("localValueSummary", e.localValueSummary)
+                    put("wasDeleted", e.wasDeleted)
+                    put("clientEditedAtMs", e.clientEditedAtMs)
+                }
+            )
+        }
+        prefs.edit().putString(keyPendingPhase6(uid), arr.toString()).apply()
+    }
+
     private fun keyLastOrg(uid: String) = "last_org_$uid"
     private fun keyAuthMethod(uid: String) = "auth_method_$uid"
     private fun keyPendingMarks(uid: String) = "pending_marks_$uid"
     private fun keyPendingTimetable(uid: String) = "pending_timetable_$uid"
+    private fun keyPendingPhase6(uid: String) = "pending_phase6_$uid"
 
     companion object {
         private const val PREFS_NAME = "school_report_offline_sync_prefs"

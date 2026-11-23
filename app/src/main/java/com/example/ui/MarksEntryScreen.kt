@@ -25,8 +25,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.AssignmentLate
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -82,24 +84,100 @@ fun MarksEntryScreen(
     uiState: SchoolUiState,
     viewModel: SchoolViewModel,
     onNavigateToStudents: () -> Unit,
+    onNavigateToPendingMarks: () -> Unit = {},
+    initialJumpExam: ExamType? = null,
+    initialJumpSubject: String? = null,
+    onJumpConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var selectedExam by remember { mutableStateOf(ExamType.HALF_YEARLY) }
+    var selectedExam by remember { mutableStateOf(initialJumpExam ?: ExamType.HALF_YEARLY) }
     var entryMode by remember { mutableStateOf(MarksEntryMode.CLASS_GRID) }
     var showMarksCsvDialog by remember { mutableStateOf(false) }
     var showMarksHistoryDialog by remember { mutableStateOf(false) }
     val canEditMarksModule = uiState.canEdit(AppModule.MARKS)
-    val activeClassName = uiState.effectiveClassName
-    val subjects = remember(uiState.activeSchool.id, activeClassName, uiState.subjects, uiState.schoolClasses) {
-        uiState.subjectsForClass(activeClassName)
+    val isTeacherRestricted = uiState.isTeacherRestricted
+
+    // Phase 7: For restricted teachers, hide unassigned classes, sections, and subjects in the UI
+    val allowedClasses = remember(
+        uiState.activeSchoolDocId,
+        uiState.activeSchoolClassNames,
+        uiState.currentMember,
+        uiState.ownTeacherScope,
+        uiState.classAssignments,
+        uiState.teachers
+    ) {
+        uiState.allowedClassesForMarks()
     }
-    var selectedSubject by remember { mutableStateOf(subjects.firstOrNull().orEmpty()) }
+    val activeClassName = if (isTeacherRestricted) {
+        allowedClasses.firstOrNull { it.equals(uiState.effectiveClassName, ignoreCase = true) }
+            ?: allowedClasses.firstOrNull().orEmpty()
+    } else {
+        uiState.effectiveClassName
+    }
+    LaunchedEffect(isTeacherRestricted, allowedClasses, uiState.effectiveClassName) {
+        if (isTeacherRestricted && allowedClasses.isNotEmpty() &&
+            allowedClasses.none { it.equals(uiState.effectiveClassName, ignoreCase = true) }
+        ) {
+            viewModel.selectClass(allowedClasses.first())
+        }
+    }
+
+    val allowedSections = remember(
+        uiState.activeSchoolDocId,
+        activeClassName,
+        uiState.availableSections,
+        uiState.currentMember,
+        uiState.ownTeacherScope,
+        uiState.classAssignments,
+        uiState.teachers
+    ) {
+        if (activeClassName.isBlank()) emptyList()
+        else uiState.allowedSectionsForMarks(activeClassName)
+    }
+    LaunchedEffect(isTeacherRestricted, allowedSections, uiState.filter.section) {
+        if (isTeacherRestricted && allowedSections.isNotEmpty() &&
+            allowedSections.none { it.equals(uiState.filter.section, ignoreCase = true) }
+        ) {
+            viewModel.selectSection(allowedSections.first())
+        }
+    }
+
+    val subjects = remember(
+        uiState.activeSchool.id,
+        uiState.activeSchoolDocId,
+        activeClassName,
+        uiState.filter.section,
+        uiState.subjects,
+        uiState.schoolClasses,
+        uiState.currentMember,
+        uiState.ownTeacherScope,
+        uiState.classAssignments,
+        uiState.teachers
+    ) {
+        if (activeClassName.isBlank()) emptyList()
+        else uiState.allowedSubjectsForMarks(activeClassName, uiState.filter.section)
+    }
+    var selectedSubject by remember { mutableStateOf(initialJumpSubject ?: subjects.firstOrNull().orEmpty()) }
+
+    LaunchedEffect(initialJumpExam, initialJumpSubject, subjects) {
+        if (initialJumpExam != null) {
+            selectedExam = initialJumpExam
+        }
+        if (!initialJumpSubject.isNullOrBlank() && subjects.any { it.equals(initialJumpSubject, ignoreCase = true) }) {
+            selectedSubject = subjects.first { it.equals(initialJumpSubject, ignoreCase = true) }
+            onJumpConsumed()
+        } else if (initialJumpExam != null && initialJumpSubject == null) {
+            onJumpConsumed()
+        }
+    }
 
     LaunchedEffect(subjects) {
         if (selectedSubject !in subjects) {
             selectedSubject = subjects.firstOrNull().orEmpty()
         }
     }
+
+    val isSelectedExamOpen = uiState.isExamOpenForCurrentSchool(selectedExam)
 
     val activeComponents = remember(selectedExam) {
         MarkComponent.componentsForExam(selectedExam)
@@ -153,6 +231,18 @@ fun MarksEntryScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
+                        TextButton(
+                            onClick = onNavigateToPendingMarks,
+                            modifier = Modifier.testTag("marks_pending_shortcut_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AssignmentLate,
+                                contentDescription = "Pending marks",
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Pending", fontWeight = FontWeight.Bold)
+                        }
                         if (uiState.isAdmin) {
                             TextButton(
                                 onClick = { showMarksHistoryDialog = true },
@@ -199,14 +289,47 @@ fun MarksEntryScreen(
                     }
                 }
 
-                SessionClassSectionBar(
-                    uiState = uiState,
-                    onSessionSelected = viewModel::selectSession,
-                    onClassSelected = viewModel::selectClass,
-                    onSectionSelected = viewModel::selectSection
-                )
+                if (isTeacherRestricted) {
+                    // Teacher-scoped pickers: ONLY assigned classes & sections are shown
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CompactDropdownSelector(
+                            label = "Session",
+                            selectedValue = uiState.filter.session,
+                            options = uiState.settings.sessionsList(),
+                            onSelect = viewModel::selectSession,
+                            modifier = Modifier.weight(1.2f),
+                            testTag = "picker_session"
+                        )
+                        CompactDropdownSelector(
+                            label = "My Classes (${allowedClasses.size})",
+                            selectedValue = activeClassName.ifBlank { "None" },
+                            options = allowedClasses.ifEmpty { listOf("None") },
+                            onSelect = { picked -> if (picked != "None") viewModel.selectClass(picked) },
+                            modifier = Modifier.weight(1f),
+                            testTag = "picker_class"
+                        )
+                        CompactDropdownSelector(
+                            label = "Sec",
+                            selectedValue = uiState.filter.section,
+                            options = allowedSections.ifEmpty { listOf(uiState.filter.section) },
+                            onSelect = viewModel::selectSection,
+                            modifier = Modifier.weight(0.75f),
+                            testTag = "picker_section"
+                        )
+                    }
+                } else {
+                    SessionClassSectionBar(
+                        uiState = uiState,
+                        onSessionSelected = viewModel::selectSession,
+                        onClassSelected = viewModel::selectClass,
+                        onSectionSelected = viewModel::selectSection
+                    )
+                }
 
-                // Exam Chips Row
+                // Exam Chips Row (with Open/Closed lock indicator for restricted teachers)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -214,15 +337,48 @@ fun MarksEntryScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     ExamType.entries.forEach { exam ->
+                        val openForMe = uiState.isExamOpenForCurrentSchool(exam)
                         FilterChip(
                             selected = selectedExam == exam,
                             onClick = { selectedExam = exam },
-                            label = { Text(exam.label, style = MaterialTheme.typography.labelLarge) },
+                            leadingIcon = if (isTeacherRestricted && !openForMe) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = "Closed by admin",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            } else null,
+                            label = {
+                                Text(
+                                    text = if (isTeacherRestricted && !openForMe) "${exam.label} (Closed)" else exam.label,
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = MaterialTheme.colorScheme.primary,
                                 selectedLabelColor = MaterialTheme.colorScheme.onPrimary
                             ),
                             modifier = Modifier.testTag("exam_chip_${exam.name}")
+                        )
+                    }
+                }
+
+                if (isTeacherRestricted && !isSelectedExamOpen) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = AbsentAmberContainer,
+                        border = BorderStroke(1.dp, AbsentAmber.copy(alpha = 0.45f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("marks_exam_closed_banner")
+                    ) {
+                        Text(
+                            text = "${selectedExam.label} is currently closed for teacher marks entry by the school admin (view-only).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
                         )
                     }
                 }
@@ -287,7 +443,20 @@ fun MarksEntryScreen(
             }
         }
 
-        if (students.isEmpty()) {
+        if (isTeacherRestricted && (allowedClasses.isEmpty() || subjects.isEmpty())) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                EmptyStatePanel(
+                    icon = Icons.Default.Lock,
+                    title = "No assigned subjects in ${uiState.activeSchool.name}",
+                    message = "You can only enter marks for class-section-subject combinations assigned to you in Teachers & Assignments. Ask your school admin to link your teacher profile and assign your subjects."
+                )
+            }
+        } else if (students.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -298,8 +467,8 @@ fun MarksEntryScreen(
                     icon = Icons.Default.EditNote,
                     title = "No students to enter marks for",
                     message = "Add students in Class $activeClassName-${uiState.filter.section} first.",
-                    actionLabel = "Go to Students",
-                    onAction = onNavigateToStudents
+                    actionLabel = if (uiState.canView(AppModule.STUDENTS)) "Go to Students" else null,
+                    onAction = if (uiState.canView(AppModule.STUDENTS)) onNavigateToStudents else null
                 )
             }
         } else if (entryMode == MarksEntryMode.CLASS_GRID) {
@@ -488,7 +657,6 @@ private fun ClassMarksGrid(
                         }
                     }
 
-                    val canEditThisRow = uiState.canEditMarkFor(student, subjectName)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -496,12 +664,13 @@ private fun ClassMarksGrid(
                         components.forEach { comp ->
                             val cellKey = "${student.id}_${subjectName}_${comp.key}"
                             val stored = stMarks[subjectName to comp.key].orEmpty()
+                            val canEditThisComp = uiState.canEditMarkFor(student, subjectName, comp.key)
                             MarkInputCell(
                                 label = "${comp.shortLabel} (${comp.maxMarks})",
                                 storedValue = stored,
                                 invalidDraft = invalidDrafts[cellKey],
                                 errorText = cellErrors[cellKey],
-                                readOnly = !canEditThisRow,
+                                readOnly = !canEditThisComp,
                                 onCommit = { text -> onSaveCell(student, comp, text) },
                                 modifier = Modifier.weight(1f),
                                 testTag = "mark_cell_${student.id}_${comp.key}"
@@ -618,7 +787,6 @@ private fun SingleStudentMarksList(
                         )
                     }
 
-                    val canEditThisSubject = uiState.canEditMarkFor(student, subject)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -626,12 +794,13 @@ private fun SingleStudentMarksList(
                         components.forEach { comp ->
                             val cellKey = "${student.id}_${subject}_${comp.key}"
                             val stored = stMarks[subject to comp.key].orEmpty()
+                            val canEditThisComp = uiState.canEditMarkFor(student, subject, comp.key)
                             MarkInputCell(
                                 label = "${comp.shortLabel} (${comp.maxMarks})",
                                 storedValue = stored,
                                 invalidDraft = invalidDrafts[cellKey],
                                 errorText = cellErrors[cellKey],
-                                readOnly = !canEditThisSubject,
+                                readOnly = !canEditThisComp,
                                 onCommit = { text -> onSaveCell(subject, comp, text) },
                                 modifier = Modifier.weight(1f),
                                 testTag = "solo_cell_${subject}_${comp.key}"

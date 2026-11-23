@@ -53,12 +53,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.TermInfoEntity
-import com.example.domain.AppModule
 import com.example.domain.AttendanceSummary
 import com.example.domain.CoScholasticArea
 import com.example.domain.DefaultSchoolTemplate
+import com.example.domain.Phase7AccessEvaluator
 import com.example.domain.ReportCalculations
+import com.example.ui.theme.AbsentAmber
+import com.example.ui.theme.AbsentAmberContainer
 import com.example.ui.theme.FailRed
+import com.example.ui.theme.PassGreen
+import com.example.ui.theme.PassGreenContainer
 
 @Composable
 fun CoScholasticScreen(
@@ -72,7 +76,15 @@ fun CoScholasticScreen(
     var selectedTerm by remember { mutableIntStateOf(1) }
     val students = uiState.filteredStudents
     val student = uiState.selectedStudent
-    val canEditCoScholastic = uiState.canEdit(AppModule.CO_SCHOLASTIC)
+    val isTeacherRestricted = uiState.isTeacherRestricted
+    val myClassTeacherSections = remember(uiState.activeSchoolDocId, uiState.ownTeacherScope, uiState.classAssignments, uiState.teachers) {
+        Phase7AccessEvaluator.classTeacherSectionsForSchool(uiState.effectiveOwnTeacherScope, uiState.activeSchoolDocId)
+    }
+    val canEditCoScholastic = if (student != null) {
+        uiState.canEditCoScholasticFor(student)
+    } else {
+        uiState.canEditCoScholasticForSection(uiState.effectiveClassName, uiState.filter.section)
+    }
 
     var daysPresentText by remember { mutableStateOf("") }
     var workingDaysText by remember { mutableStateOf("") }
@@ -159,6 +171,53 @@ fun CoScholasticScreen(
                             ),
                             modifier = Modifier.testTag("term_chip_$termNo")
                         )
+                    }
+                }
+
+                if (isTeacherRestricted) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (canEditCoScholastic) PassGreenContainer else AbsentAmberContainer,
+                        border = BorderStroke(
+                            1.dp,
+                            if (canEditCoScholastic) PassGreen.copy(alpha = 0.4f) else AbsentAmber.copy(alpha = 0.45f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("coscholastic_teacher_scope_banner")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = if (canEditCoScholastic) {
+                                    "Class Teacher access: You can edit Co-Scholastic grades, attendance, remarks, and promotion for Class ${uiState.effectiveClassName}-${uiState.filter.section}."
+                                } else {
+                                    "View-only: Only the assigned Class Teacher of Class ${uiState.effectiveClassName}-${uiState.filter.section} (or Admin) can edit co-scholastic grades, attendance, remarks, and promoted-to."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (canEditCoScholastic) PassGreen else MaterialTheme.colorScheme.onSurface
+                            )
+                            if (myClassTeacherSections.isNotEmpty() && !canEditCoScholastic) {
+                                Row(
+                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    myClassTeacherSections.forEach { (cls, sec) ->
+                                        FilterChip(
+                                            selected = false,
+                                            onClick = {
+                                                viewModel.selectClass(cls)
+                                                viewModel.selectSection(sec)
+                                            },
+                                            label = { Text("Jump to my section: $cls-$sec") },
+                                            modifier = Modifier.testTag("coscholastic_jump_ct_${cls}_$sec")
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

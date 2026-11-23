@@ -101,11 +101,103 @@ jobs:
 
           echo "Verified temporary debug keystore exists."
 
-      - name: Build debug APK
+      - name: Ensure Android SDK 36.1 and build-tools are installed
         shell: bash
         run: |
           set -euo pipefail
-          gradle :app:assembleDebug --stacktrace --no-daemon
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "${SDKMANAGER}" ]]; then
+            SDKMANAGER="$(command -v sdkmanager || true)"
+          fi
+          if [[ -n "${SDKMANAGER}" && -x "${SDKMANAGER}" ]]; then
+            yes | "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --licenses >/dev/null 2>&1 || true
+            if [[ ! -d "${SDK_ROOT}/platforms/android-36.1" || ! -d "${SDK_ROOT}/build-tools/36.0.0" ]]; then
+              "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" "platforms;android-36.1" "build-tools;36.0.0"
+            else
+              echo "Android SDK platform android-36.1 and build-tools 36.0.0 already present."
+            fi
+          else
+            echo "::warning::sdkmanager not found under ${SDK_ROOT}; relying on pre-installed Android SDK."
+          fi
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
+          gradle :app:assembleDebug --stacktrace --no-daemon --console=plain 2>&1 | tee build.log
+          BUILD_EXIT_CODE=$?
+          set -e
+
+          if [[ "${BUILD_EXIT_CODE}" -ne 0 ]]; then
+            python3 - <<'PY'
+          import os, re
+
+          def gh_escape(s: str) -> str:
+              return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+          with open("build.log", "r", encoding="utf-8", errors="replace") as f:
+              lines = [line.rstrip("\r\n") for line in f]
+
+          e_lines = [line for line in lines if line.startswith("e: ")]
+
+          what_went_wrong = []
+          in_www = False
+          for line in lines:
+              if line.startswith("* What went wrong:"):
+                  in_www = True
+                  what_went_wrong.append(line)
+                  continue
+              if in_www:
+                  if line.startswith("* Try:") or line.startswith("* Exception is:") or line.startswith("BUILD FAILED"):
+                      break
+                  what_went_wrong.append(line)
+          while what_went_wrong and not what_went_wrong[-1].strip():
+              what_went_wrong.pop()
+
+          max_annotations = 10
+          emitted = 0
+
+          if what_went_wrong and e_lines:
+              e_cap = max_annotations - 1
+              for line in e_lines[:e_cap]:
+                  print(f"::error::{gh_escape(line)}")
+                  emitted += 1
+              print(f"::error::{gh_escape(chr(10).join(what_went_wrong))}")
+              emitted += 1
+          elif e_lines:
+              for line in e_lines[:max_annotations]:
+                  print(f"::error::{gh_escape(line)}")
+                  emitted += 1
+          elif what_went_wrong:
+              print(f"::error::{gh_escape(chr(10).join(what_went_wrong))}")
+              emitted += 1
+          else:
+              fallback = [l for l in lines if re.search(r"(FAILURE:|Execution failed|Caused by:)", l)]
+              for line in fallback[:max_annotations]:
+                  print(f"::error::{gh_escape(line)}")
+                  emitted += 1
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as sf:
+                  sf.write("## Gradle Build Failure Details\n\n")
+                  if what_went_wrong:
+                      sf.write("```text\n" + "\n".join(what_went_wrong) + "\n```\n\n")
+                  if e_lines:
+                      sf.write("### First Compiler Errors\n```text\n" + "\n".join(e_lines[:10]) + "\n```\n")
+          PY
+            exit "${BUILD_EXIT_CODE}"
+          fi
+
+      - name: Upload build log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
 
       - name: Verify debug APK
         shell: bash

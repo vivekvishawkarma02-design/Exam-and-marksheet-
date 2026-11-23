@@ -119,7 +119,9 @@ class Phase4Repository(
     // 1. REAL-TIME OBSERVERS (Only active when member can view 'teachers')
     // =========================================================================
     fun observePhase4Data(orgId: String, member: MemberAccessProfile): Flow<CloudPhase4Snapshot> {
-        if (!OrgAccessEvaluator.canViewModule(member, AppModule.TEACHERS)) {
+        val canReadPhase4 = OrgAccessEvaluator.canViewModule(member, AppModule.TEACHERS) ||
+            OrgAccessEvaluator.canEditModule(member, AppModule.TIMETABLE)
+        if (!canReadPhase4) {
             return flowOf(CloudPhase4Snapshot())
         }
         val orgRef = db.collection("organisations").document(orgId)
@@ -363,6 +365,13 @@ class Phase4Repository(
                 val fullPayload = baseFields + ("createdAt" to FieldValue.serverTimestamp())
                 val task = ref.set(fullPayload)
                 attachSyncListeners(task, OperationType.CREATE, path) { ref.set(fullPayload) }
+            }
+            // Mirror non-sensitive slot layout for Timetable viewers (timetable: view, teachers: none)
+            val layoutRef = db.collection("organisations").document(orgId)
+                .collection("timetableLayouts").document(schoolId)
+            val fullLayoutPayload = baseFields + ("createdAt" to FieldValue.serverTimestamp())
+            layoutRef.update(baseFields).addOnFailureListener {
+                layoutRef.set(fullLayoutPayload)
             }
             orgRepo.logAuditNonBlocking(
                 orgId = orgId,

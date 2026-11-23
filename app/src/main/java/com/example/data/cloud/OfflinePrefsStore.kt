@@ -3,6 +3,7 @@ package com.example.data.cloud
 import android.content.Context
 import com.example.domain.AuthMethod
 import com.example.domain.LocalPendingMarkEdit
+import com.example.domain.LocalPendingTimetableEdit
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -94,6 +95,32 @@ class OfflinePrefsStore(context: Context) {
         saveAllPendingMarkEdits(uid, others)
     }
 
+    fun loadPendingTimetableEdits(uid: String, orgId: String): List<LocalPendingTimetableEdit> =
+        loadAllPendingTimetableEdits(uid).filter { it.orgId == orgId }
+
+    fun upsertPendingTimetableEdit(uid: String, edit: LocalPendingTimetableEdit) {
+        val all = loadAllPendingTimetableEdits(uid)
+            .filterNot { it.orgId == edit.orgId && it.cellId == edit.cellId }
+            .toMutableList()
+        all.add(edit)
+        val bounded = if (all.size > 400) all.takeLast(400) else all
+        saveAllPendingTimetableEdits(uid, bounded)
+    }
+
+    fun replacePendingTimetableEditsForOrg(
+        uid: String,
+        orgId: String,
+        remainingForOrg: List<LocalPendingTimetableEdit>
+    ) {
+        val others = loadAllPendingTimetableEdits(uid).filterNot { it.orgId == orgId }
+        saveAllPendingTimetableEdits(uid, others + remainingForOrg)
+    }
+
+    fun clearPendingTimetableEditsForOrg(uid: String, orgId: String) {
+        val others = loadAllPendingTimetableEdits(uid).filterNot { it.orgId == orgId }
+        saveAllPendingTimetableEdits(uid, others)
+    }
+
     fun clearAll() {
         prefs.edit().clear().apply()
     }
@@ -149,9 +176,69 @@ class OfflinePrefsStore(context: Context) {
         prefs.edit().putString(keyPendingMarks(uid), arr.toString()).apply()
     }
 
+    private fun loadAllPendingTimetableEdits(uid: String): List<LocalPendingTimetableEdit> {
+        val raw = prefs.getString(keyPendingTimetable(uid), null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val cellId = obj.optString("cellId")
+                    if (cellId.isBlank()) continue
+                    add(
+                        LocalPendingTimetableEdit(
+                            orgId = obj.optString("orgId"),
+                            cellId = cellId,
+                            schoolId = obj.optString("schoolId"),
+                            session = obj.optString("session"),
+                            className = obj.optString("className"),
+                            section = obj.optString("section"),
+                            dayWire = obj.optString("dayWire"),
+                            slotId = obj.optString("slotId"),
+                            localSubjectName = obj.optString("localSubjectName"),
+                            localTeacherId = obj.optString("localTeacherId"),
+                            localTeacherName = obj.optString("localTeacherName"),
+                            localLocked = obj.optBoolean("localLocked", false),
+                            wasCleared = obj.optBoolean("wasCleared", false),
+                            clientEditedAtMs = obj.optLong("clientEditedAtMs", 0L)
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveAllPendingTimetableEdits(uid: String, list: List<LocalPendingTimetableEdit>) {
+        val arr = JSONArray()
+        list.forEach { e ->
+            arr.put(
+                JSONObject().apply {
+                    put("orgId", e.orgId)
+                    put("cellId", e.cellId)
+                    put("schoolId", e.schoolId)
+                    put("session", e.session)
+                    put("className", e.className)
+                    put("section", e.section)
+                    put("dayWire", e.dayWire)
+                    put("slotId", e.slotId)
+                    put("localSubjectName", e.localSubjectName)
+                    put("localTeacherId", e.localTeacherId)
+                    put("localTeacherName", e.localTeacherName)
+                    put("localLocked", e.localLocked)
+                    put("wasCleared", e.wasCleared)
+                    put("clientEditedAtMs", e.clientEditedAtMs)
+                }
+            )
+        }
+        prefs.edit().putString(keyPendingTimetable(uid), arr.toString()).apply()
+    }
+
     private fun keyLastOrg(uid: String) = "last_org_$uid"
     private fun keyAuthMethod(uid: String) = "auth_method_$uid"
     private fun keyPendingMarks(uid: String) = "pending_marks_$uid"
+    private fun keyPendingTimetable(uid: String) = "pending_timetable_$uid"
 
     companion object {
         private const val PREFS_NAME = "school_report_offline_sync_prefs"

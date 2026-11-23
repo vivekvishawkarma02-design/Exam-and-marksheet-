@@ -4,6 +4,39 @@ A native Android application (**Kotlin**, **Jetpack Compose**, **Material 3**, *
 
 ---
 
+## Phase 5 Capabilities (Timetable: Manual Edit, Conflict Check, Clash Report & Offline A4 PDF Print)
+
+All Phase 5 timetable data belongs to an organisation, lives in Cloud Firestore (`organisations/{orgId}/timetableCells/{deterministicId}` + `organisations/{orgId}/timetableLayouts/{schoolId}`), works 100% offline with Phase 3 sync, and is strictly controlled by the existing **"Timetable"** module (`No access` / `View only` / `View & edit`) in both UI and `firestore.rules`.
+
+1. **Deterministic Timetable Cells & Offline Sync**
+   - One timetable per school and session using deterministic document IDs (`tt_<school>_<session>_<class>_<section>_<day>_<slot>`) so cells can never be duplicated even when two phones edit offline.
+   - Grid rows automatically follow each school's Phase 4 period structure (days as columns, periods as rows, assembly / short breaks / lunch rendered as fixed shaded non-editable rows).
+   - Latest-edit-wins notice alerts editors if an offline cell edit was replaced by a newer edit from another device upon sync.
+
+2. **Manual Cell Editing, Hard Conflicts & Soft Warnings**
+   - **Class Timetable Editor:** Tap any teaching slot to pick a subject (from the class's subjects) and a teacher (ordered: Phase 4 class-subject assigned first, then others who teach the subject, then others — each with a live **Free / Busy / Off Day / Limit / Inactive** indicator). Supports **Clear cell**, **Copy cell to other days**, **Lock / Unlock**, and live weekly subject summary chips (e.g., `Maths 4/6`).
+   - **Hard Conflict Checks (block saving with a clear message):**
+     - Cross-school teacher double-booking checked across **all schools of the organisation using real clock times** (naming the teacher, day, time, and conflicting class & school).
+     - Class double-booking in the same or overlapping slot.
+     - Teacher scheduled on their weekly off day.
+     - Teacher exceeding `maxPeriodsPerDay` across all schools.
+     - Inactive teacher.
+   - **Soft Warnings (allow saving, display amber warning):**
+     - Same subject placed twice in one day (suppressed when Phase 4 `allowDoublePeriod` is enabled and the two periods are adjacent).
+     - Teacher exceeding `maxConsecutivePeriods` (gap `<= 20 min` continues streak; lunch break `>= 25 min` or a free period resets it).
+     - Subject weekly count exceeding Phase 4 assigned periods/week.
+     - Subject placed against Phase 4 `preferredTimeOfDay` (`Morning < 12:00`, `Afternoon >= 12:00`).
+   - **Post-Sync Clash Report:** Re-runs all hard checks automatically after every sync without silently overwriting any cell; displays a live Clash Report badge and list with 1-tap **Jump & Fix** directly into the conflicting cell.
+
+3. **Four Timetable Views (Mobile-First 2D Scroll, Zoom & Sticky Headers)**
+   - **Class Timetable**, **Teacher Timetable** (all schools combined with school name in every cell, total periods/week, and free periods), **Master Timetable** (entire school: rows = class-section, columns = day × period), and **Free Periods** (pick day & period slot to see all free active teachers across schools using real clock times + periods today).
+   - Pinch-to-zoom and `- / + / 100%` zoom buttons, synchronized 2D scrolling, sticky top header row, sticky first column, and `>= 48 dp` touch targets.
+
+4. **100% Offline A4 PDF Printing & Batch ZIP Export**
+   - Clean, print-safe dark-navy/slate A4 vector PDFs matching the Report Card aesthetic (prints crisply in B&W): **Class Timetable** (Landscape or Portrait A4, includes Class Teacher if set), **Teacher Timetable** (all schools combined, A4 Landscape), **Master Timetable** (A4 Landscape, automatically splits by Class Group with repeated headers and fixed readable row heights), plus **Batch All Classes** and **Batch All Teachers** (combined PDF + optional ZIP of individual PDFs) with live preview, Print, Save, and Share.
+
+---
+
 ## Phase 4 Capabilities (Teachers, Period Structure, Class-Subject-Teacher Assignments & Subject Rules)
 
 All Phase 4 data belongs to an organisation (and one or more of its schools), lives in Cloud Firestore under `organisations/{orgId}/`, works 100% offline with Phase 3 sync (including pending-write counting on the live Status Chip), and is strictly controlled by the **"Teachers and assignments"** module (`No access` / `View only` / `View & edit`) in both UI and `firestore.rules`.

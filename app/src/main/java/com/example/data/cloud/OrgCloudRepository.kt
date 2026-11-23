@@ -61,7 +61,7 @@ class OrgCloudRepository(
 
     fun currentEditorName(): String = currentUserName()
 
-    private fun currentUserName(): String =
+    fun currentUserName(): String =
         auth.currentUser?.displayName?.trim()?.ifEmpty { null }
             ?: auth.currentUser?.email?.substringBefore("@")?.ifEmpty { null }
             ?: "User"
@@ -1134,6 +1134,8 @@ class OrgCloudRepository(
             deleteCollectionInChunks(orgRef.collection("periodStructures"))
             deleteCollectionInChunks(orgRef.collection("classAssignments"))
             deleteCollectionInChunks(orgRef.collection("subjectRules"))
+            deleteCollectionInChunks(orgRef.collection("timetableCells"))
+            deleteCollectionInChunks(orgRef.collection("timetableLayouts"))
 
             // Delete non-owner members first
             val membersSnap = orgRef.collection("members").get().await()

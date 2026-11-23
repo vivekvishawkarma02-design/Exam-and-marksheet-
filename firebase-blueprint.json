@@ -307,6 +307,29 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["schoolId", "subjectName", "preferredTimeOfDay", "allowDoublePeriod", "maxOncePerDay", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "TimetableCell": {
+      "title": "TimetableCell",
+      "description": "Single scheduled timetable cell with deterministic ID (school + session + class + section + day + slot) controlled by the Timetable module.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "day": { "type": "string", "enum": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] },
+        "slotId": { "type": "string" },
+        "subjectName": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "locked": { "type": "boolean" },
+        "updatedByUid": { "type": "string" },
+        "updatedByName": { "type": "string" },
+        "clientEditedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "session", "className", "section", "day", "slotId", "subjectName", "teacherId", "teacherName", "locked", "updatedByUid", "updatedByName", "clientEditedAtMs", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -377,6 +400,14 @@
     "/organisations/{orgId}/subjectRules/{ruleId}": {
       "schema": { "$ref": "#/entities/SubjectRule" },
       "description": "Optional per-school subject rules stored for timetable scheduling in Phases 5 and 6."
+    },
+    "/organisations/{orgId}/timetableCells/{cellId}": {
+      "schema": { "$ref": "#/entities/TimetableCell" },
+      "description": "Timetable cells keyed deterministically by school, session, class, section, day, and slot; controlled by the Timetable module."
+    },
+    "/organisations/{orgId}/timetableLayouts/{schoolId}": {
+      "schema": { "$ref": "#/entities/PeriodStructure" },
+      "description": "Mirrored per-school slot layout readable by Timetable viewers so view-only members render exact school timings."
     }
   }
 }

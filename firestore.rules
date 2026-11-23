@@ -400,7 +400,7 @@ service cloud.firestore {
         data.actorUid == request.auth.uid &&
         data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
         data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
-        data.targetType in ['mark', 'student', 'member', 'access', 'school', 'organisation', 'migration', 'invite', 'teacher', 'periodStructure', 'assignment', 'subjectRule'] &&
+        data.targetType in ['mark', 'student', 'member', 'access', 'school', 'organisation', 'migration', 'invite', 'teacher', 'periodStructure', 'assignment', 'subjectRule', 'timetable'] &&
         data.targetId is string && data.targetId.size() <= 128 &&
         data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 300 &&
         (!('schoolId' in data) || (data.schoolId is string && data.schoolId.size() <= 128)) &&
@@ -468,6 +468,34 @@ service cloud.firestore {
         data.allowDoublePeriod is bool &&
         data.maxOncePerDay is bool &&
         data.updatedByUid == request.auth.uid &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidTimetableCell(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'className', 'section', 'day', 'slotId',
+          'subjectName', 'teacherId', 'teacherName', 'locked',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'className', 'section', 'day', 'slotId',
+          'subjectName', 'teacherId', 'teacherName', 'locked',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+        data.day in ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'] &&
+        data.slotId is string && data.slotId.size() >= 1 && data.slotId.size() <= 64 &&
+        data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 80 &&
+        data.teacherId is string && data.teacherId.size() <= 128 &&
+        data.teacherName is string && data.teacherName.size() <= 120 &&
+        data.locked is bool &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
         isValidTimestamp(data.createdAt) &&
         isValidTimestamp(data.updatedAt);
     }
@@ -914,7 +942,7 @@ service cloud.firestore {
       // Controlled strictly by the 'teachers' ("Teachers and assignments") module
       // -----------------------------------------------------------------------
       match /teachers/{teacherId} {
-        allow get, list: if isSignedIn() && hasModuleView(orgId, 'teachers');
+        allow get, list: if isSignedIn() && (hasModuleView(orgId, 'teachers') || hasModuleEdit(orgId, 'timetable'));
 
         allow create: if isSignedIn() &&
           isValidId(teacherId) &&
@@ -952,7 +980,7 @@ service cloud.firestore {
       }
 
       match /periodStructures/{schoolId} {
-        allow get, list: if isSignedIn() && hasModuleView(orgId, 'teachers');
+        allow get, list: if isSignedIn() && (hasModuleView(orgId, 'teachers') || hasModuleEdit(orgId, 'timetable'));
 
         allow create: if isSignedIn() &&
           isValidId(schoolId) &&
@@ -975,7 +1003,7 @@ service cloud.firestore {
       }
 
       match /classAssignments/{assignmentId} {
-        allow get, list: if isSignedIn() && hasModuleView(orgId, 'teachers');
+        allow get, list: if isSignedIn() && (hasModuleView(orgId, 'teachers') || hasModuleEdit(orgId, 'timetable'));
 
         allow create: if isSignedIn() &&
           isValidId(assignmentId) &&
@@ -998,7 +1026,7 @@ service cloud.firestore {
       }
 
       match /subjectRules/{ruleId} {
-        allow get, list: if isSignedIn() && hasModuleView(orgId, 'teachers');
+        allow get, list: if isSignedIn() && (hasModuleView(orgId, 'teachers') || hasModuleEdit(orgId, 'timetable'));
 
         allow create: if isSignedIn() &&
           isValidId(ruleId) &&
@@ -1019,6 +1047,61 @@ service cloud.firestore {
           isValidId(ruleId) &&
           hasModuleEdit(orgId, 'teachers') &&
           canAccessSchool(orgId, existing().schoolId);
+      }
+
+      // -----------------------------------------------------------------------
+      // 3g. PHASE 5: TIMETABLE CELLS & LAYOUT MIRROR
+      // Controlled strictly by the 'timetable' ("Timetable") module
+      // -----------------------------------------------------------------------
+      match /timetableCells/{cellId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'timetable');
+
+        allow create: if isSignedIn() &&
+          isValidId(cellId) &&
+          isValidTimetableCell(incoming()) &&
+          hasModuleEdit(orgId, 'timetable') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(cellId) &&
+          isValidTimetableCell(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().session == existing().session &&
+          incoming().className == existing().className &&
+          incoming().section == existing().section &&
+          incoming().day == existing().day &&
+          incoming().slotId == existing().slotId &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'timetable') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(cellId) &&
+          hasModuleEdit(orgId, 'timetable') &&
+          canAccessSchool(orgId, existing().schoolId);
+      }
+
+      match /timetableLayouts/{schoolId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'timetable');
+
+        allow create: if isSignedIn() &&
+          isValidId(schoolId) &&
+          isValidPeriodStructure(incoming(), schoolId) &&
+          (hasModuleEdit(orgId, 'teachers') || hasModuleEdit(orgId, 'timetable')) &&
+          canAccessSchool(orgId, schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(schoolId) &&
+          isValidPeriodStructure(incoming(), schoolId) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().createdAt == existing().createdAt &&
+          (hasModuleEdit(orgId, 'teachers') || hasModuleEdit(orgId, 'timetable')) &&
+          canAccessSchool(orgId, schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(schoolId) &&
+          (hasModuleEdit(orgId, 'teachers') || hasModuleEdit(orgId, 'timetable')) &&
+          canAccessSchool(orgId, schoolId);
       }
     }
   }

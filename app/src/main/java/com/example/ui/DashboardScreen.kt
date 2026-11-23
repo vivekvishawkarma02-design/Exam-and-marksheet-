@@ -101,6 +101,7 @@ fun DashboardScreen(
     onOpenStudentReport: (StudentEntity) -> Unit,
     onNavigateToMembers: () -> Unit = {},
     onNavigateToTeachers: () -> Unit = {},
+    onNavigateToTimetable: () -> Unit = {},
     onEditOwnTeacherProfile: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -118,10 +119,21 @@ fun DashboardScreen(
     val canViewCoScholastic = uiState.canView(AppModule.CO_SCHOLASTIC)
     val canViewReports = uiState.canView(AppModule.REPORTS)
     val canViewTeachers = uiState.canView(AppModule.TEACHERS)
+    val canViewTimetable = uiState.canView(AppModule.TIMETABLE)
     val canViewSettings = uiState.canView(AppModule.SETTINGS)
     val canEditSettings = uiState.canEdit(AppModule.SETTINGS)
     val canViewMembers = uiState.canView(AppModule.MEMBERS) || uiState.isAdmin
     val canViewAcademicDirectory = canViewStudents || canViewMarks || canViewReports
+
+    val timetableClashCount = remember(
+        canViewTimetable,
+        uiState.activeSessionTimetableCells,
+        uiState.teachers,
+        uiState.effectivePeriodStructuresBySchool,
+        uiState.schoolNamesByDocId
+    ) {
+        if (canViewTimetable) uiState.timetableClashes().size else 0
+    }
 
     val allSessionSummaries = remember(
         uiState.schools,
@@ -242,6 +254,23 @@ fun DashboardScreen(
                     accent = secondaryColor,
                     testTag = "tile_teachers_assignments",
                     onClick = onNavigateToTeachers
+                )
+            )
+        }
+        if (canViewTimetable) {
+            val ttSub = when {
+                timetableClashCount > 0 -> "$timetableClashCount clash(es) to fix"
+                uiState.canEdit(AppModule.TIMETABLE) -> "Edit, clashes & A4 PDF"
+                else -> "View schedules & PDF"
+            }
+            add(
+                QuickActionSpec(
+                    title = "Timetable",
+                    subtitle = ttSub,
+                    icon = Icons.Default.CalendarMonth,
+                    accent = if (timetableClashCount > 0) FailRed else primaryColor,
+                    testTag = "tile_timetable",
+                    onClick = onNavigateToTimetable
                 )
             )
         }
@@ -656,28 +685,44 @@ fun DashboardScreen(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.CalendarMonth,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Timetable Access Enabled",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CalendarMonth,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(28.dp)
                             )
-                            Text(
-                                text = "Your role currently has view access to Timetable. Full timetable scheduling will be activated in the upcoming phases. Ask your admin if you need access to Students, Marks, or Reports.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Timetable Access Enabled",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = if (uiState.canEdit(AppModule.TIMETABLE)) {
+                                        "View and edit class, teacher, and master timetables, check conflicts, and export offline A4 PDFs."
+                                    } else {
+                                        "View class, teacher, and master timetables, check free teachers, and print offline A4 PDFs."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Button(
+                            onClick = onNavigateToTimetable,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("open_timetable_card_button")
+                        ) {
+                            Text("Open Timetable")
                         }
                     }
                 }

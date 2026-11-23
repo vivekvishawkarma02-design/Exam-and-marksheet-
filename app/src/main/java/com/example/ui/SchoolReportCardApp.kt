@@ -70,6 +70,7 @@ import com.example.data.cloud.OfflinePrefsStore
 import com.example.data.cloud.OrgAcademicRepository
 import com.example.data.cloud.OrgCloudRepository
 import com.example.data.cloud.Phase4Repository
+import com.example.data.cloud.TimetableRepository
 import com.example.data.cloud.authStateFlow
 import com.example.domain.AppModule
 import com.google.firebase.Firebase
@@ -87,6 +88,7 @@ object AppRoutes {
     const val ROUTE_SCHOOLS = "schools"
     const val ROUTE_TEACHER_PROFILE = "teacher_profile"
     const val ROUTE_TEACHERS = "teachers_and_assignments"
+    const val ROUTE_TIMETABLE = "timetable"
 }
 
 private enum class OnboardingSubScreen {
@@ -198,6 +200,7 @@ private fun AuthenticatedSessionHost(
     }
     val academicRepo = remember(orgRepo) { OrgAcademicRepository(orgRepo) }
     val phase4Repo = remember(orgRepo) { Phase4Repository(orgRepo) }
+    val timetableRepo = remember(orgRepo) { TimetableRepository(orgRepo) }
     val localRepo = remember(appContext) { ReportCardRepository(AppDatabase.getInstance(appContext).reportCardDao()) }
 
     val sessionViewModel: OrgSessionViewModel = viewModel(
@@ -330,6 +333,7 @@ private fun AuthenticatedSessionHost(
                     orgRepo = orgRepo,
                     academicRepo = academicRepo,
                     phase4Repo = phase4Repo,
+                    timetableRepo = timetableRepo,
                     localRepo = localRepo,
                     connectivityMonitor = connectivityMonitor,
                     offlinePrefs = offlinePrefs
@@ -516,7 +520,8 @@ private fun OrganisationWorkspace(
     val isSubScreen = currentRoute == AppRoutes.ROUTE_COSCHOLASTIC ||
         currentRoute == AppRoutes.ROUTE_SCHOOLS ||
         currentRoute == AppRoutes.ROUTE_TEACHER_PROFILE ||
-        currentRoute == AppRoutes.ROUTE_TEACHERS
+        currentRoute == AppRoutes.ROUTE_TEACHERS ||
+        currentRoute == AppRoutes.ROUTE_TIMETABLE
 
     fun navigateTopLevel(route: String) {
         navController.navigate(route) {
@@ -660,6 +665,11 @@ private fun OrganisationWorkspace(
                                             navController.navigate(AppRoutes.ROUTE_TEACHERS) { launchSingleTop = true }
                                         }
                                     },
+                                    onNavigateToTimetable = {
+                                        if (uiState.canView(AppModule.TIMETABLE)) {
+                                            navController.navigate(AppRoutes.ROUTE_TIMETABLE) { launchSingleTop = true }
+                                        }
+                                    },
                                     onEditOwnTeacherProfile = {
                                         navController.navigate(AppRoutes.ROUTE_TEACHER_PROFILE) { launchSingleTop = true }
                                     },
@@ -790,6 +800,20 @@ private fun OrganisationWorkspace(
                             composable(AppRoutes.ROUTE_TEACHERS) {
                                 if (uiState.canView(AppModule.TEACHERS)) {
                                     TeachersAndAssignmentsScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_TIMETABLE) {
+                                if (uiState.canView(AppModule.TIMETABLE)) {
+                                    TimetableScreen(
                                         uiState = uiState,
                                         viewModel = viewModel,
                                         onBack = { navController.popBackStack() }

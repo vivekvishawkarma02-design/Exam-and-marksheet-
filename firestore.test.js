@@ -999,5 +999,146 @@ test("Phase 4: Teachers and assignments module enforces edit, view-only, no-acce
   await assertFails(teacherDb.collection("organisations").doc(ORG_ID).collection("periodStructures").get());
 });
 
+test("Phase 5: Timetable module enforces edit, view-only, no-access, school-scope writes, and cross-org isolation", async () => {
+  await seedOrgWithOwnerAndSchools();
+  const TT_EDITOR_UID = "tt_editor_u1";
+  const TT_VIEWER_UID = "tt_viewer_u2";
+  const TT_NONE_UID = "tt_none_u3";
+
+  const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+  const editorDb = testEnv.authenticatedContext(TT_EDITOR_UID).firestore();
+  const viewerDb = testEnv.authenticatedContext(TT_VIEWER_UID).firestore();
+  const noneDb = testEnv.authenticatedContext(TT_NONE_UID).firestore();
+  const outsiderDb = testEnv.authenticatedContext(OTHER_ORG_UID).firestore();
+  const ts = pastDate(2000);
+
+  // Seed 3 non-admin members with timetable: edit (scoped to SCHOOL_1 only), view, and none
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("members").doc(TT_EDITOR_UID).set(
+      makeMemberPayload(TT_EDITOR_UID, {
+        role: "OFFICE_OPERATOR",
+        allSchools: false,
+        schools: [SCHOOL_1],
+        permissions: { ...teacherPermissions("view"), timetable: "edit", teachers: "none" },
+      })
+    )
+  );
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("members").doc(TT_VIEWER_UID).set(
+      makeMemberPayload(TT_VIEWER_UID, {
+        role: "TEACHER",
+        allSchools: false,
+        schools: [SCHOOL_1],
+        permissions: { ...teacherPermissions("view"), timetable: "view", teachers: "none" },
+      })
+    )
+  );
+  await assertSucceeds(
+    ownerDb.collection("organisations").doc(ORG_ID).collection("members").doc(TT_NONE_UID).set(
+      makeMemberPayload(TT_NONE_UID, {
+        role: "OTHER",
+        allSchools: true,
+        schools: [],
+        permissions: { ...teacherPermissions("view"), timetable: "none", teachers: "none" },
+      })
+    )
+  );
+
+  const cellId = "tt_sch_primary_01_2026_2027_5th_A_MON_MON_slot_2";
+  const cellPayload = {
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    className: "5th",
+    section: "A",
+    day: "MON",
+    slotId: "MON_slot_2",
+    subjectName: "MATHEMATICS",
+    teacherId: "tchr_verma",
+    teacherName: "Mr. Verma",
+    locked: false,
+    updatedByUid: TT_EDITOR_UID,
+    updatedByName: "Office Editor",
+    clientEditedAtMs: Date.now() - 1000,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+
+  const layoutPayload = {
+    schoolId: SCHOOL_1,
+    workingDays: ["MON", "TUE", "WED", "THU", "FRI", "SAT"],
+    slotsByDay: {
+      MON: [
+        { id: "MON_slot_1", type: "ASSEMBLY", label: "Morning Assembly", startMinutes: 480, endMinutes: 495 },
+        { id: "MON_slot_2", type: "PERIOD", label: "Period 1", startMinutes: 495, endMinutes: 535 },
+      ],
+    },
+    updatedByUid: TT_EDITOR_UID,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+
+  // 1. Editor (timetable: "edit", assigned SCHOOL_1) CAN create, update, lock, and delete cells in SCHOOL_1
+  const orgEditor = editorDb.collection("organisations").doc(ORG_ID);
+  await assertSucceeds(orgEditor.collection("timetableCells").doc(cellId).set(cellPayload));
+  await assertSucceeds(orgEditor.collection("timetableLayouts").doc(SCHOOL_1).set(layoutPayload));
+  await assertSucceeds(
+    orgEditor.collection("timetableCells").doc(cellId).update({
+      locked: true,
+      updatedByUid: TT_EDITOR_UID,
+      clientEditedAtMs: Date.now(),
+      updatedAt: pastDate(500),
+    })
+  );
+
+  // Editor CANNOT write a cell for SCHOOL_2 (not assigned to SCHOOL_2)
+  await assertFails(
+    orgEditor.collection("timetableCells").doc("tt_sch2_cell").set({
+      ...cellPayload,
+      schoolId: SCHOOL_2,
+    })
+  );
+
+  // 2. View-only member (timetable: "view") CAN read timetableCells and timetableLayouts, CANNOT create/update/delete
+  const orgViewer = viewerDb.collection("organisations").doc(ORG_ID);
+  await assertSucceeds(orgViewer.collection("timetableCells").get());
+  await assertSucceeds(orgViewer.collection("timetableLayouts").get());
+  await assertFails(
+    orgViewer.collection("timetableCells").doc(cellId).update({
+      subjectName: "HINDI",
+      updatedByUid: TT_VIEWER_UID,
+      updatedAt: pastDate(400),
+    })
+  );
+  await assertFails(
+    orgViewer.collection("timetableCells").doc("tt_viewer_new").set({
+      ...cellPayload,
+      updatedByUid: TT_VIEWER_UID,
+    })
+  );
+  await assertFails(orgViewer.collection("timetableCells").doc(cellId).delete());
+
+  // 3. No-access member (timetable: "none") CANNOT read, list, or write timetableCells or timetableLayouts
+  const orgNone = noneDb.collection("organisations").doc(ORG_ID);
+  await assertFails(orgNone.collection("timetableCells").get());
+  await assertFails(orgNone.collection("timetableCells").doc(cellId).get());
+  await assertFails(orgNone.collection("timetableLayouts").get());
+  await assertFails(
+    orgNone.collection("timetableCells").doc("tt_none_new").set({
+      ...cellPayload,
+      updatedByUid: TT_NONE_UID,
+    })
+  );
+
+  // 4. Cross-organisation outsider CANNOT read or touch timetableCells or timetableLayouts
+  const orgOutsider = outsiderDb.collection("organisations").doc(ORG_ID);
+  await assertFails(orgOutsider.collection("timetableCells").get());
+  await assertFails(orgOutsider.collection("timetableLayouts").get());
+  await assertFails(orgOutsider.collection("timetableCells").doc(cellId).delete());
+
+  // 5. Editor can delete (clear) their own school's cell
+  await assertSucceeds(orgEditor.collection("timetableCells").doc(cellId).delete());
+});
+
+
 
 

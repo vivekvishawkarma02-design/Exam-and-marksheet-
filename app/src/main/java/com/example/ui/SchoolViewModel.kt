@@ -36,6 +36,7 @@ import com.example.data.cloud.CloudSchoolAcademicSnapshot
 import com.example.data.cloud.CloudSchoolClassItem
 import com.example.data.cloud.CloudSchoolRecord
 import com.example.data.cloud.CloudSchoolsSnapshot
+import com.example.data.cloud.CloudTimetableSnapshot
 import com.example.data.cloud.FirestoreProvider
 import com.example.data.cloud.MigrationProgress
 import com.example.data.cloud.NetworkConnectivityMonitor
@@ -44,13 +45,16 @@ import com.example.data.cloud.OrgAcademicRepository
 import com.example.data.cloud.OrgCloudRepository
 import com.example.data.cloud.Phase4Repository
 import com.example.data.cloud.StableDocId
+import com.example.data.cloud.TimetableRepository
 import com.example.domain.AppModule
 import com.example.domain.AssignmentWarning
 import com.example.domain.AttendanceSummary
 import com.example.domain.ClassSectionAssignment
+import com.example.domain.DayOfWeekCode
 import com.example.domain.DefaultSchoolTemplate
 import com.example.domain.DefaultSubjects
 import com.example.domain.LocalPendingMarkEdit
+import com.example.domain.LocalPendingTimetableEdit
 import com.example.domain.MarkComponent
 import com.example.domain.MarkConflictNotice
 import com.example.domain.MarkValidationResult
@@ -73,13 +77,23 @@ import com.example.domain.SyncStatus
 import com.example.domain.SyncUiState
 import com.example.domain.TeacherProfile
 import com.example.domain.TeacherWorkloadSummary
+import com.example.domain.TimetableCell
+import com.example.domain.TimetableConflictNotice
+import com.example.domain.TimetableEngine
+import com.example.domain.TimetableHardConflict
 import com.example.util.BackupAndCsvManager
+import com.example.util.ClassTimetablePrintBundle
 import com.example.util.MarksCsvIssue
+import com.example.util.MasterClassSectionRow
+import com.example.util.MasterTimetablePrintBundle
 import com.example.util.OperationType
 import com.example.util.ParsedBackupResult
 import com.example.util.PdfExportHelper
 import com.example.util.PdfReportGenerator
 import com.example.util.StudentReportBundle
+import com.example.util.TeacherTimetablePrintBundle
+import com.example.util.TimetablePdfGenerator
+import com.example.util.TimetablePrintOrientation
 import com.example.util.friendlyFirestoreErrorMessage
 import com.example.util.handleFirestoreError
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -124,6 +138,20 @@ data class PdfPreviewState(
     val previewPages: List<Bitmap> = emptyList(),
     val reportType: ReportType = ReportType.ANNUAL,
     val batchScope: Boolean = false,
+    val error: String? = null
+)
+
+data class TimetablePdfPreviewState(
+    val isGenerating: Boolean = false,
+    val title: String = "",
+    val statusLabel: String = "",
+    val progressCurrent: Int = 0,
+    val progressTotal: Int = 0,
+    val generatedFile: File? = null,
+    val generatedZipFile: File? = null,
+    val totalPages: Int = 0,
+    val previewPages: List<Bitmap> = emptyList(),
+    val isLandscape: Boolean = true,
     val error: String? = null
 )
 
@@ -185,7 +213,11 @@ data class SchoolUiState(
     val teachers: List<TeacherProfile> = emptyList(),
     val periodStructuresBySchool: Map<String, SchoolPeriodStructure> = emptyMap(),
     val classAssignments: List<ClassSectionAssignment> = emptyList(),
-    val subjectRules: List<SubjectRule> = emptyList()
+    val subjectRules: List<SubjectRule> = emptyList(),
+    // Phase 5: Timetable cells, mirrored layouts, and latest-edit-wins cell conflicts
+    val timetableCells: List<TimetableCell> = emptyList(),
+    val timetableLayoutsBySchool: Map<String, SchoolPeriodStructure> = emptyMap(),
+    val timetableConflicts: List<TimetableConflictNotice> = emptyList()
 ) {
     val activeSchoolDocId: String
         get() = schoolDocIdByLongId[activeSchool.id].orEmpty()
@@ -196,8 +228,49 @@ data class SchoolUiState(
     fun schoolNameByDocId(schoolDocId: String): String =
         schoolNamesByDocId[schoolDocId] ?: schoolDocId
 
+    val effectivePeriodStructuresBySchool: Map<String, SchoolPeriodStructure>
+        get() = timetableLayoutsBySchool + periodStructuresBySchool
+
     fun periodStructureForSchool(schoolDocId: String): SchoolPeriodStructure =
-        periodStructuresBySchool[schoolDocId] ?: Phase4Validator.buildDefaultPeriodStructure(schoolDocId)
+        effectivePeriodStructuresBySchool[schoolDocId] ?: Phase4Validator.buildDefaultPeriodStructure(schoolDocId)
+
+    val activeSessionTimetableCells: List<TimetableCell>
+        get() = timetableCells.filter { it.session.equals(filter.session, ignoreCase = true) }
+
+    fun timetableClashes(): List<TimetableHardConflict> = TimetableEngine.detectAllClashes(
+        cellsInSession = activeSessionTimetableCells,
+        teachers = teachers,
+        periodStructuresBySchool = effectivePeriodStructuresBySchool,
+        schoolNamesById = schoolNamesByDocId
+    )
+
+    fun availableTimetableTeachers(): List<TeacherProfile> {
+        val byId = linkedMapOf<String, TeacherProfile>()
+        teachers.forEach { byId[it.id] = it }
+        timetableCells.forEach { cell ->
+            if (cell.teacherId.isNotBlank() && cell.teacherId !in byId) {
+                byId[cell.teacherId] = TeacherProfile(
+                    id = cell.teacherId,
+                    name = cell.teacherName.ifBlank { cell.teacherId },
+                    schoolIds = listOf(cell.schoolId),
+                    active = true
+                )
+            }
+        }
+        return byId.values.sortedBy { it.name.lowercase() }
+    }
+
+    fun sectionsForSchoolClass(schoolId: Long, className: String): List<String> {
+        val schoolDocId = schoolDocIdByLongId[schoolId].orEmpty()
+        val found = linkedSetOf("A")
+        allStudents.filter { it.schoolId == schoolId && it.className.equals(className, ignoreCase = true) }
+            .forEach { if (it.section.isNotBlank()) found.add(it.section.uppercase()) }
+        classAssignments.filter { it.schoolId == schoolDocId && it.className.equals(className, ignoreCase = true) }
+            .forEach { if (it.section.isNotBlank()) found.add(it.section.uppercase()) }
+        activeSessionTimetableCells.filter { it.schoolId == schoolDocId && it.className.equals(className, ignoreCase = true) }
+            .forEach { if (it.section.isNotBlank()) found.add(it.section.uppercase()) }
+        return found.sorted()
+    }
 
     val allConfiguredSubjectsAcrossOrg: List<String>
         get() = subjects.map { it.name }.distinct().sortedBy { it.lowercase() }
@@ -493,6 +566,7 @@ class SchoolViewModel(
     private val orgRepo: OrgCloudRepository,
     private val academicRepo: OrgAcademicRepository,
     private val phase4Repo: Phase4Repository,
+    private val timetableRepo: TimetableRepository,
     private val localRepo: ReportCardRepository,
     private val connectivityMonitor: NetworkConnectivityMonitor,
     private val offlinePrefs: OfflinePrefsStore
@@ -503,10 +577,14 @@ class SchoolViewModel(
     private val _isInitialized = MutableStateFlow(false)
     private val _membershipRevoked = MutableStateFlow(false)
     private val _markConflicts = MutableStateFlow<List<MarkConflictNotice>>(emptyList())
+    private val _timetableConflicts = MutableStateFlow<List<TimetableConflictNotice>>(emptyList())
     private val _observerRestartTick = MutableStateFlow(0)
 
     private val _pdfState = MutableStateFlow(PdfPreviewState())
     val pdfState: StateFlow<PdfPreviewState> = _pdfState.asStateFlow()
+
+    private val _timetablePdfState = MutableStateFlow(TimetablePdfPreviewState())
+    val timetablePdfState: StateFlow<TimetablePdfPreviewState> = _timetablePdfState.asStateFlow()
 
     private val _snackbar = MutableSharedFlow<String>(extraBufferCapacity = 12)
     val snackbar: SharedFlow<String> = _snackbar.asSharedFlow()
@@ -531,6 +609,7 @@ class SchoolViewModel(
     private val _schoolsSnapshot = MutableStateFlow(CloudSchoolsSnapshot())
     private val _academicSnapshot = MutableStateFlow(CloudSchoolAcademicSnapshot())
     private val _phase4Snapshot = MutableStateFlow(CloudPhase4Snapshot())
+    private val _timetableSnapshot = MutableStateFlow(CloudTimetableSnapshot())
     private val _orgMembers = MutableStateFlow<List<CloudMember>>(emptyList())
     private val _joinRequests = MutableStateFlow<List<CloudJoinRequest>>(emptyList())
     private val _inviteCodes = MutableStateFlow<List<CloudInviteCode>>(emptyList())
@@ -561,8 +640,17 @@ class SchoolViewModel(
 
     private val combinedSyncErrorFlow = combine(
         academicRepo.syncError,
-        phase4Repo.syncError
-    ) { acadErr, p4Err -> acadErr ?: p4Err }
+        phase4Repo.syncError,
+        timetableRepo.syncError
+    ) { acadErr, p4Err, ttErr -> acadErr ?: p4Err ?: ttErr }
+
+    private val phase4And5Flow = combine(
+        _phase4Snapshot,
+        _timetableSnapshot,
+        _timetableConflicts
+    ) { p4, tt, ttConflicts ->
+        Phase4And5Bundle(p4, tt, ttConflicts)
+    }
 
     private val syncExtrasFlow = combine(
         combinedSyncErrorFlow,
@@ -579,9 +667,9 @@ class SchoolViewModel(
         _joinRequests,
         _inviteCodes,
         _auditLogs,
-        _phase4Snapshot
-    ) { members, reqs, invites, logs, p4 ->
-        AdminAndPhase4Bundle(members, reqs, invites, logs, p4)
+        phase4And5Flow
+    ) { members, reqs, invites, logs, p45 ->
+        AdminAndPhase4Bundle(members, reqs, invites, logs, p45.phase4, p45.timetable, p45.timetableConflicts)
     }
 
     val uiState: StateFlow<SchoolUiState> = combine(
@@ -617,7 +705,8 @@ class SchoolViewModel(
         val termInfos = core.academicSnap.termInfos.map { it.entity }
         val totalPendingCount = core.schoolsSnap.pendingWriteCount +
             core.academicSnap.pendingWriteCount +
-            admin.phase4.pendingWriteCount
+            admin.phase4.pendingWriteCount +
+            admin.timetable.pendingWriteCount
 
         val syncUi = OfflineSyncEngine.computeSyncUiState(
             isOnline = core.isOnline,
@@ -660,7 +749,10 @@ class SchoolViewModel(
             teachers = admin.phase4.teachers,
             periodStructuresBySchool = admin.phase4.periodStructuresBySchool,
             classAssignments = admin.phase4.classAssignments,
-            subjectRules = admin.phase4.subjectRules
+            subjectRules = admin.phase4.subjectRules,
+            timetableCells = admin.timetable.cells,
+            timetableLayoutsBySchool = admin.timetable.layoutsBySchool,
+            timetableConflicts = admin.timetableConflicts
         )
     }.stateIn(
         scope = viewModelScope,
@@ -876,14 +968,18 @@ class SchoolViewModel(
         }
 
         // 8. Phase 4: Teachers, Period Structures, Class Assignments & Subject Rules
-        // Strictly gated by AppModule.TEACHERS ("Teachers and assignments")
+        // Active for AppModule.TEACHERS viewers/editors OR AppModule.TIMETABLE editors (for conflict checks)
         viewModelScope.launch {
             combine(_observerRestartTick, _ownMember.map { it?.toAccessProfile() }) { tick, profile ->
                 tick to profile
             }
                 .distinctUntilChanged()
                 .flatMapLatest { (_, profile) ->
-                    if (profile == null || !OrgAccessEvaluator.canViewModule(profile, AppModule.TEACHERS)) {
+                    val canReadPhase4 = profile != null && (
+                        OrgAccessEvaluator.canViewModule(profile, AppModule.TEACHERS) ||
+                            OrgAccessEvaluator.canEditModule(profile, AppModule.TIMETABLE)
+                        )
+                    if (!canReadPhase4) {
                         flowOf(CloudPhase4Snapshot())
                     } else {
                         phase4Repo.observePhase4Data(orgId, profile)
@@ -901,6 +997,53 @@ class SchoolViewModel(
                 .collect { snap ->
                     _phase4Snapshot.value = snap
                 }
+        }
+
+        // 9. Phase 5: Timetable Cells & Layout Mirror (strictly gated by AppModule.TIMETABLE)
+        viewModelScope.launch {
+            combine(_observerRestartTick, _ownMember.map { it?.toAccessProfile() }) { tick, profile ->
+                tick to profile
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { (_, profile) ->
+                    if (profile == null || !OrgAccessEvaluator.canViewModule(profile, AppModule.TIMETABLE)) {
+                        flowOf(CloudTimetableSnapshot())
+                    } else {
+                        timetableRepo.observeTimetable(orgId, profile)
+                            .catch { e ->
+                                val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
+                                if (cause != null) {
+                                    handleFirestoreError(cause, OperationType.LIST, "organisations/$orgId/timetableCells")
+                                    emit(CloudTimetableSnapshot())
+                                    return@catch
+                                }
+                                if (e is CancellationException) throw e
+                            }
+                    }
+                }
+                .collect { snap ->
+                    _timetableSnapshot.value = snap
+                    evaluateTimetableConflicts(snap)
+                }
+        }
+    }
+
+    private fun evaluateTimetableConflicts(snap: CloudTimetableSnapshot) {
+        val pendingEdits = offlinePrefs.loadPendingTimetableEdits(currentUserId, orgId)
+        if (pendingEdits.isEmpty()) return
+        val res = TimetableEngine.detectTimetableCellConflicts(
+            pendingEdits = pendingEdits,
+            confirmedServerCells = snap.cells,
+            hasAnyConfirmedSnapshot = snap.hasConfirmedServerSnapshot,
+            currentUid = currentUserId
+        )
+        if (res.remainingPending.size != pendingEdits.size) {
+            offlinePrefs.replacePendingTimetableEditsForOrg(currentUserId, orgId, res.remainingPending)
+        }
+        if (res.detectedConflicts.isNotEmpty()) {
+            val merged = (_timetableConflicts.value + res.detectedConflicts)
+                .distinctBy { "${it.cellId}_${it.winningSummary}_${it.yourSummary}" }
+            _timetableConflicts.value = merged
         }
     }
 
@@ -943,6 +1086,7 @@ class SchoolViewModel(
         _membershipRevoked.value = true
         viewModelScope.launch(Dispatchers.IO) {
             offlinePrefs.clearPendingMarkEditsForOrg(currentUserId, orgId)
+            offlinePrefs.clearPendingTimetableEditsForOrg(currentUserId, orgId)
             offlinePrefs.setLastSelectedOrgId(currentUserId, null)
             FirestoreProvider.resetLocalCacheAndReinit(appContext)
         }
@@ -958,6 +1102,7 @@ class SchoolViewModel(
             _schoolsSnapshot.value = CloudSchoolsSnapshot()
             _academicSnapshot.value = CloudSchoolAcademicSnapshot()
             _phase4Snapshot.value = CloudPhase4Snapshot()
+            _timetableSnapshot.value = CloudTimetableSnapshot()
             _observerRestartTick.value += 1
             isResettingCache = false
             emitMessage("Your access was updated by an admin. Cached data for removed access has been cleared.")
@@ -968,20 +1113,26 @@ class SchoolViewModel(
         _markConflicts.value = emptyList()
     }
 
+    fun dismissTimetableConflictBanner() {
+        _timetableConflicts.value = emptyList()
+    }
+
     fun retrySync() {
         if (!connectivityMonitor.isCurrentlyOnline()) {
             emitMessage("Still offline — changes are safely saved on this phone and will sync once online.")
             return
         }
         val retriedPhase4 = phase4Repo.retrySync()
+        val retriedPhase5 = timetableRepo.retrySync()
         academicRepo.retrySync { msg ->
-            emitMessage(if (retriedPhase4) "Retrying pending sync…" else msg)
+            emitMessage(if (retriedPhase4 || retriedPhase5) "Retrying pending sync…" else msg)
         }
     }
 
     fun clearSyncError() {
         academicRepo.clearSyncError()
         phase4Repo.clearSyncError()
+        timetableRepo.clearSyncError()
     }
 
     private fun handleListenerError(e: Throwable, sub: String) {
@@ -2707,6 +2858,663 @@ class SchoolViewModel(
         }
     }
 
+    // -------------------------------------------------------------------------
+    // PHASE 5: TIMETABLE MANUAL EDITING, COPY, LOCK/CLEAR & OFFLINE PDF EXPORT
+    // -------------------------------------------------------------------------
+    fun saveTimetableCell(
+        schoolDocId: String,
+        className: String,
+        section: String,
+        day: DayOfWeekCode,
+        slotId: String,
+        subjectName: String,
+        teacherId: String,
+        locked: Boolean,
+        onSaved: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("You have view-only access to Timetable.")
+            onSaved(false, "View-only access.")
+            return
+        }
+        val session = state.filter.session
+        val cleanSection = section.trim().uppercase().ifBlank { "A" }
+        val cellId = TimetableEngine.makeCellDocId(schoolDocId, session, className, cleanSection, day, slotId)
+        val existingCell = state.timetableCells.firstOrNull { it.id == cellId }
+        if (existingCell?.locked == true && locked) {
+            // Allow saving if only content changed AFTER unlocking, block accidental overwrite if still locked & content differs
+            val contentChanged = !existingCell.subjectName.equals(subjectName.trim(), ignoreCase = true) ||
+                existingCell.teacherId != teacherId
+            if (contentChanged) {
+                val msg = "This cell is locked. Unlock it first to change the subject or teacher."
+                emitMessage(msg)
+                onSaved(false, msg)
+                return
+            }
+        }
+        val teacher = state.availableTimetableTeachers().firstOrNull { it.id == teacherId }
+        val teacherName = teacher?.name.orEmpty()
+        val editorName = state.currentMember?.name?.ifBlank { orgRepo.currentUserName() } ?: orgRepo.currentUserName()
+        val nowMs = System.currentTimeMillis()
+
+        val candidate = TimetableCell(
+            id = cellId,
+            schoolId = schoolDocId,
+            session = session,
+            className = className.trim(),
+            section = cleanSection,
+            day = day,
+            slotId = slotId,
+            subjectName = subjectName.trim(),
+            teacherId = teacherId.trim(),
+            teacherName = teacherName,
+            locked = locked,
+            updatedByUid = currentUserId,
+            updatedByName = editorName,
+            clientEditedAtMs = nowMs
+        )
+
+        val validation = TimetableEngine.validateCellPlacement(
+            candidate = candidate,
+            existingCellsInSession = state.activeSessionTimetableCells,
+            teachers = state.teachers,
+            periodStructuresBySchool = state.effectivePeriodStructuresBySchool,
+            classAssignments = state.classAssignments,
+            subjectRules = state.subjectRules,
+            schoolNamesById = state.schoolNamesByDocId,
+            allowReplaceSameCellId = true
+        )
+        if (!validation.canSave) {
+            val errMsg = validation.hardConflicts.first().message
+            emitMessage(errMsg)
+            onSaved(false, errMsg)
+            return
+        }
+
+        offlinePrefs.upsertPendingTimetableEdit(
+            uid = currentUserId,
+            edit = LocalPendingTimetableEdit(
+                orgId = orgId,
+                cellId = cellId,
+                schoolId = schoolDocId,
+                session = session,
+                className = candidate.className,
+                section = cleanSection,
+                dayWire = day.wireValue,
+                slotId = slotId,
+                localSubjectName = candidate.subjectName,
+                localTeacherId = candidate.teacherId,
+                localTeacherName = candidate.teacherName,
+                localLocked = locked,
+                wasCleared = false,
+                clientEditedAtMs = nowMs
+            )
+        )
+
+        timetableRepo.saveCell(
+            orgId = orgId,
+            cell = candidate,
+            existsInCloud = existingCell != null,
+            editorName = editorName,
+            clientEditedAtMs = nowMs
+        ).onSuccess {
+            // Ensure school period layout is mirrored for view-only Timetable users
+            val struct = state.periodStructuresBySchool[schoolDocId]
+            if (struct != null && schoolDocId !in state.timetableLayoutsBySchool) {
+                timetableRepo.mirrorSchoolLayoutNonBlocking(orgId, struct, existsInLayoutCollection = false)
+            }
+            val warnSuffix = if (validation.softWarnings.isNotEmpty()) {
+                " (${validation.softWarnings.size} soft warning(s))"
+            } else ""
+            emitMessage("Saved ${candidate.subjectName} for ${candidate.classSectionLabel}$warnSuffix")
+            onSaved(true, null)
+        }.onFailure { err ->
+            val msg = friendlyFirestoreErrorMessage(err, "Could not save timetable cell.")
+            emitMessage(msg)
+            onSaved(false, msg)
+        }
+    }
+
+    fun toggleTimetableCellLock(cell: TimetableCell) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("You have view-only access to Timetable.")
+            return
+        }
+        val newLocked = !cell.locked
+        val editorName = state.currentMember?.name?.ifBlank { orgRepo.currentUserName() } ?: orgRepo.currentUserName()
+        val nowMs = System.currentTimeMillis()
+        offlinePrefs.upsertPendingTimetableEdit(
+            uid = currentUserId,
+            edit = LocalPendingTimetableEdit(
+                orgId = orgId,
+                cellId = cell.id,
+                schoolId = cell.schoolId,
+                session = cell.session,
+                className = cell.className,
+                section = cell.section,
+                dayWire = cell.day.wireValue,
+                slotId = cell.slotId,
+                localSubjectName = cell.subjectName,
+                localTeacherId = cell.teacherId,
+                localTeacherName = cell.teacherName,
+                localLocked = newLocked,
+                wasCleared = false,
+                clientEditedAtMs = nowMs
+            )
+        )
+        timetableRepo.toggleCellLock(orgId, cell, newLocked, editorName, nowMs)
+            .onSuccess { emitMessage(if (newLocked) "Cell locked" else "Cell unlocked") }
+            .onFailure { emitMessage(friendlyFirestoreErrorMessage(it, "Could not update lock.")) }
+    }
+
+    fun clearTimetableCell(cell: TimetableCell, onCleared: () -> Unit = {}) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("You have view-only access to Timetable.")
+            return
+        }
+        if (cell.locked) {
+            emitMessage("Unlock this cell first before clearing it.")
+            return
+        }
+        offlinePrefs.upsertPendingTimetableEdit(
+            uid = currentUserId,
+            edit = LocalPendingTimetableEdit(
+                orgId = orgId,
+                cellId = cell.id,
+                schoolId = cell.schoolId,
+                session = cell.session,
+                className = cell.className,
+                section = cell.section,
+                dayWire = cell.day.wireValue,
+                slotId = cell.slotId,
+                localSubjectName = "",
+                localTeacherId = "",
+                localTeacherName = "",
+                localLocked = false,
+                wasCleared = true,
+                clientEditedAtMs = System.currentTimeMillis()
+            )
+        )
+        timetableRepo.clearCell(orgId, cell)
+            .onSuccess {
+                emitMessage("Cleared ${cell.classSectionLabel} ${cell.day.shortLabel}")
+                onCleared()
+            }
+            .onFailure { emitMessage(friendlyFirestoreErrorMessage(it, "Could not clear cell.")) }
+    }
+
+    fun copyTimetableCellToDays(
+        sourceSchoolDocId: String,
+        className: String,
+        section: String,
+        rowIndex: Int,
+        subjectName: String,
+        teacherId: String,
+        targetDays: Collection<DayOfWeekCode>,
+        onCompleted: (Int, List<String>) -> Unit = { _, _ -> }
+    ) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.TIMETABLE)) {
+            emitMessage("You have view-only access to Timetable.")
+            return
+        }
+        val structure = state.periodStructureForSchool(sourceSchoolDocId)
+        val gridRows = TimetableEngine.buildGridRows(structure)
+        val targetRow = gridRows.getOrNull(rowIndex)
+        if (targetRow == null || !targetRow.isEditablePeriodRow) {
+            emitMessage("Invalid period row for copying.")
+            return
+        }
+        val session = state.filter.session
+        val cleanSection = section.trim().uppercase().ifBlank { "A" }
+        val teacher = state.availableTimetableTeachers().firstOrNull { it.id == teacherId }
+        val teacherName = teacher?.name.orEmpty()
+        val editorName = state.currentMember?.name?.ifBlank { orgRepo.currentUserName() } ?: orgRepo.currentUserName()
+
+        val workingCells = state.activeSessionTimetableCells.toMutableList()
+        var copiedCount = 0
+        val blockedReasons = mutableListOf<String>()
+
+        for (day in targetDays.distinct().sortedBy { it.sortOrder }) {
+            val targetSlot = targetRow.slotByDay[day]
+            if (targetSlot == null || !targetSlot.type.countsAsTeachingPeriod) {
+                blockedReasons.add("${day.shortLabel}: no matching teaching period slot.")
+                continue
+            }
+            val cellId = TimetableEngine.makeCellDocId(sourceSchoolDocId, session, className, cleanSection, day, targetSlot.id)
+            val existing = workingCells.firstOrNull { it.id == cellId }
+            if (existing?.locked == true) {
+                blockedReasons.add("${day.shortLabel}: target cell is locked.")
+                continue
+            }
+            val nowMs = System.currentTimeMillis()
+            val candidate = TimetableCell(
+                id = cellId,
+                schoolId = sourceSchoolDocId,
+                session = session,
+                className = className.trim(),
+                section = cleanSection,
+                day = day,
+                slotId = targetSlot.id,
+                subjectName = subjectName.trim(),
+                teacherId = teacherId.trim(),
+                teacherName = teacherName,
+                locked = false,
+                updatedByUid = currentUserId,
+                updatedByName = editorName,
+                clientEditedAtMs = nowMs
+            )
+            val check = TimetableEngine.validateCellPlacement(
+                candidate = candidate,
+                existingCellsInSession = workingCells,
+                teachers = state.teachers,
+                periodStructuresBySchool = state.effectivePeriodStructuresBySchool,
+                classAssignments = state.classAssignments,
+                subjectRules = state.subjectRules,
+                schoolNamesById = state.schoolNamesByDocId,
+                allowReplaceSameCellId = true
+            )
+            if (!check.canSave) {
+                blockedReasons.add("${day.shortLabel}: ${check.hardConflicts.first().message}")
+                continue
+            }
+            offlinePrefs.upsertPendingTimetableEdit(
+                uid = currentUserId,
+                edit = LocalPendingTimetableEdit(
+                    orgId = orgId,
+                    cellId = cellId,
+                    schoolId = sourceSchoolDocId,
+                    session = session,
+                    className = candidate.className,
+                    section = cleanSection,
+                    dayWire = day.wireValue,
+                    slotId = targetSlot.id,
+                    localSubjectName = candidate.subjectName,
+                    localTeacherId = candidate.teacherId,
+                    localTeacherName = candidate.teacherName,
+                    localLocked = false,
+                    wasCleared = false,
+                    clientEditedAtMs = nowMs
+                )
+            )
+            val res = timetableRepo.saveCell(orgId, candidate, existsInCloud = existing != null, editorName = editorName, clientEditedAtMs = nowMs)
+            if (res.isSuccess) {
+                workingCells.removeAll { it.id == cellId }
+                workingCells.add(candidate)
+                copiedCount++
+            } else {
+                blockedReasons.add("${day.shortLabel}: could not save.")
+            }
+        }
+
+        val summary = buildString {
+            append("Copied to $copiedCount day(s)")
+            if (blockedReasons.isNotEmpty()) append(" • ${blockedReasons.size} skipped")
+        }
+        emitMessage(summary)
+        onCompleted(copiedCount, blockedReasons)
+    }
+
+    // --- Timetable Offline PDF & Batch ZIP Export ---
+    fun clearTimetablePdfPreview() {
+        _timetablePdfState.value.previewPages.forEach { if (!it.isRecycled) it.recycle() }
+        _timetablePdfState.value = TimetablePdfPreviewState()
+    }
+
+    private fun buildClassPrintBundle(
+        state: SchoolUiState,
+        schoolDocId: String,
+        className: String,
+        section: String
+    ): ClassTimetablePrintBundle? {
+        val schoolLongId = state.schoolDocIdByLongId.entries.firstOrNull { it.value == schoolDocId }?.key ?: state.activeSchool.id
+        val school = state.schools.firstOrNull { it.id == schoolLongId } ?: state.activeSchool
+        val session = state.filter.session
+        val cleanSec = section.trim().uppercase().ifBlank { "A" }
+        val assignment = state.classAssignments.firstOrNull {
+            it.schoolId == schoolDocId &&
+                it.className.equals(className, ignoreCase = true) &&
+                it.section.equals(cleanSec, ignoreCase = true)
+        }
+        val classTeacherName = assignment?.classTeacherId?.takeIf { it.isNotBlank() }?.let { ctId ->
+            state.availableTimetableTeachers().firstOrNull { it.id == ctId }?.name.orEmpty()
+        }.orEmpty()
+        val cells = state.activeSessionTimetableCells.filter {
+            it.schoolId == schoolDocId &&
+                it.className.equals(className, ignoreCase = true) &&
+                it.section.equals(cleanSec, ignoreCase = true)
+        }
+        val subjects = state.subjectsForClass(className, school.id)
+        val progress = TimetableEngine.buildClassSubjectProgress(
+            schoolId = schoolDocId,
+            session = session,
+            className = className,
+            section = cleanSec,
+            classSubjects = subjects,
+            cellsInSession = state.activeSessionTimetableCells,
+            classAssignments = state.classAssignments
+        )
+        return ClassTimetablePrintBundle(
+            school = school,
+            session = session,
+            className = className,
+            section = cleanSec,
+            classTeacherName = classTeacherName,
+            periodStructure = state.periodStructureForSchool(schoolDocId),
+            cells = cells,
+            subjectProgress = progress
+        )
+    }
+
+    fun generateClassTimetablePdf(
+        schoolDocId: String,
+        className: String,
+        section: String,
+        orientation: TimetablePrintOrientation
+    ) {
+        val state = uiState.value
+        val bundle = buildClassPrintBundle(state, schoolDocId, className, section) ?: return
+        clearTimetablePdfPreview()
+        _timetablePdfState.value = TimetablePdfPreviewState(
+            isGenerating = true,
+            title = "Class $className-$section Timetable",
+            statusLabel = "Generating A4 ${orientation.label}…",
+            isLandscape = orientation == TimetablePrintOrientation.LANDSCAPE
+        )
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val file = TimetablePdfGenerator.generateClassTimetablePdf(appContext, listOf(bundle), orientation)
+                    val totalPages = PdfExportHelper.countPdfPages(file)
+                    val preview = PdfExportHelper.renderPdfPages(file, maxPagesToPreview = 10)
+                    Triple(file, totalPages, preview)
+                }
+            }.onSuccess { (file, totalPages, preview) ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    statusLabel = "Ready ($totalPages page)",
+                    generatedFile = file,
+                    totalPages = totalPages,
+                    previewPages = preview
+                )
+            }.onFailure { err ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    error = err.message ?: "Failed to generate PDF"
+                )
+            }
+        }
+    }
+
+    fun generateBatchAllClassesTimetable(
+        schoolDocId: String,
+        orientation: TimetablePrintOrientation,
+        includeZip: Boolean
+    ) {
+        val state = uiState.value
+        val schoolLongId = state.schoolDocIdByLongId.entries.firstOrNull { it.value == schoolDocId }?.key ?: state.activeSchool.id
+        val classes = state.classesForSchool(schoolLongId)
+        val bundles = classes.flatMap { cls ->
+            state.sectionsForSchoolClass(schoolLongId, cls.name).mapNotNull { sec ->
+                buildClassPrintBundle(state, schoolDocId, cls.name, sec)
+            }
+        }
+        if (bundles.isEmpty()) {
+            emitMessage("No classes found to export.")
+            return
+        }
+        clearTimetablePdfPreview()
+        _timetablePdfState.value = TimetablePdfPreviewState(
+            isGenerating = true,
+            title = "All Classes (${bundles.size}) — ${state.schoolNameByDocId(schoolDocId)}",
+            statusLabel = "Generating ${bundles.size} class timetable(s)…",
+            progressTotal = bundles.size,
+            isLandscape = orientation == TimetablePrintOrientation.LANDSCAPE
+        )
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val pdfFile = TimetablePdfGenerator.generateClassTimetablePdf(
+                        context = appContext,
+                        bundles = bundles,
+                        orientation = orientation
+                    ) { cur, tot ->
+                        _timetablePdfState.value = _timetablePdfState.value.copy(progressCurrent = cur, progressTotal = tot)
+                    }
+                    val zipFile = if (includeZip) {
+                        TimetablePdfGenerator.generateBatchClassesZip(appContext, bundles, orientation)
+                    } else null
+                    val totalPages = PdfExportHelper.countPdfPages(pdfFile)
+                    val preview = PdfExportHelper.renderPdfPages(pdfFile, maxPagesToPreview = 12)
+                    listOf(pdfFile, zipFile, totalPages, preview)
+                }
+            }.onSuccess { res ->
+                val pdfFile = res[0] as File
+                val zipFile = res[1] as File?
+                val totalPages = res[2] as Int
+                @Suppress("UNCHECKED_CAST")
+                val preview = res[3] as List<Bitmap>
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    statusLabel = "Ready ($totalPages page(s)${if (zipFile != null) " + ZIP" else ""})",
+                    generatedFile = pdfFile,
+                    generatedZipFile = zipFile,
+                    totalPages = totalPages,
+                    previewPages = preview
+                )
+            }.onFailure { err ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    error = err.message ?: "Batch export failed"
+                )
+            }
+        }
+    }
+
+    private fun buildTeacherPrintBundle(state: SchoolUiState, teacherId: String): TeacherTimetablePrintBundle? {
+        val teacher = state.availableTimetableTeachers().firstOrNull { it.id == teacherId } ?: return null
+        val summary = TimetableEngine.buildTeacherTimetable(
+            teacherId = teacher.id,
+            fallbackTeacherName = teacher.name,
+            teacherProfile = state.teachers.firstOrNull { it.id == teacher.id },
+            session = state.filter.session,
+            cellsInSession = state.activeSessionTimetableCells,
+            periodStructuresBySchool = state.effectivePeriodStructuresBySchool,
+            schoolNamesById = state.schoolNamesByDocId
+        )
+        val primarySchoolDocId = teacher.schoolIds.firstOrNull()?.takeIf { it.isNotBlank() }
+            ?: state.activeSchoolDocId
+        val primarySchoolLongId = state.schoolDocIdByLongId.entries.firstOrNull { it.value == primarySchoolDocId }?.key
+            ?: state.activeSchool.id
+        val primarySchool = state.schools.firstOrNull { it.id == primarySchoolLongId } ?: state.activeSchool
+        return TeacherTimetablePrintBundle(
+            primarySchool = primarySchool,
+            session = state.filter.session,
+            summary = summary,
+            periodStructureForRows = state.periodStructureForSchool(primarySchoolDocId)
+        )
+    }
+
+    fun generateTeacherTimetablePdf(teacherId: String) {
+        val state = uiState.value
+        val bundle = buildTeacherPrintBundle(state, teacherId) ?: return
+        clearTimetablePdfPreview()
+        _timetablePdfState.value = TimetablePdfPreviewState(
+            isGenerating = true,
+            title = "Teacher Timetable — ${bundle.summary.teacherName}",
+            statusLabel = "Generating A4 Landscape…",
+            isLandscape = true
+        )
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val file = TimetablePdfGenerator.generateTeacherTimetablePdf(appContext, listOf(bundle))
+                    val totalPages = PdfExportHelper.countPdfPages(file)
+                    val preview = PdfExportHelper.renderPdfPages(file, maxPagesToPreview = 6)
+                    Triple(file, totalPages, preview)
+                }
+            }.onSuccess { (file, totalPages, preview) ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    statusLabel = "Ready ($totalPages page)",
+                    generatedFile = file,
+                    totalPages = totalPages,
+                    previewPages = preview
+                )
+            }.onFailure { err ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    error = err.message ?: "Failed to generate Teacher PDF"
+                )
+            }
+        }
+    }
+
+    fun generateBatchAllTeachersTimetable(includeZip: Boolean) {
+        val state = uiState.value
+        val bundles = state.availableTimetableTeachers()
+            .filter { it.active }
+            .mapNotNull { buildTeacherPrintBundle(state, it.id) }
+        if (bundles.isEmpty()) {
+            emitMessage("No active teachers available to export.")
+            return
+        }
+        clearTimetablePdfPreview()
+        _timetablePdfState.value = TimetablePdfPreviewState(
+            isGenerating = true,
+            title = "All Teachers (${bundles.size}) — Timetables",
+            statusLabel = "Generating ${bundles.size} teacher timetable(s)…",
+            progressTotal = bundles.size,
+            isLandscape = true
+        )
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val pdfFile = TimetablePdfGenerator.generateTeacherTimetablePdf(appContext, bundles) { cur, tot ->
+                        _timetablePdfState.value = _timetablePdfState.value.copy(progressCurrent = cur, progressTotal = tot)
+                    }
+                    val zipFile = if (includeZip) {
+                        TimetablePdfGenerator.generateBatchTeachersZip(appContext, bundles)
+                    } else null
+                    val totalPages = PdfExportHelper.countPdfPages(pdfFile)
+                    val preview = PdfExportHelper.renderPdfPages(pdfFile, maxPagesToPreview = 12)
+                    listOf(pdfFile, zipFile, totalPages, preview)
+                }
+            }.onSuccess { res ->
+                val pdfFile = res[0] as File
+                val zipFile = res[1] as File?
+                val totalPages = res[2] as Int
+                @Suppress("UNCHECKED_CAST")
+                val preview = res[3] as List<Bitmap>
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    statusLabel = "Ready ($totalPages page(s)${if (zipFile != null) " + ZIP" else ""})",
+                    generatedFile = pdfFile,
+                    generatedZipFile = zipFile,
+                    totalPages = totalPages,
+                    previewPages = preview
+                )
+            }.onFailure { err ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    error = err.message ?: "Batch teacher export failed"
+                )
+            }
+        }
+    }
+
+    fun generateMasterTimetablePdf(schoolDocId: String) {
+        val state = uiState.value
+        val schoolLongId = state.schoolDocIdByLongId.entries.firstOrNull { it.value == schoolDocId }?.key ?: state.activeSchool.id
+        val school = state.schools.firstOrNull { it.id == schoolLongId } ?: state.activeSchool
+        val groupsById = state.classGroupsForSchool(school.id).associateBy { it.id }
+        val classes = state.classesForSchool(school.id)
+        val teachersById = state.availableTimetableTeachers().associateBy { it.id }
+
+        val rows = classes.flatMap { cls ->
+            val grpName = groupsById[cls.classGroupId]?.name ?: "Classes"
+            state.sectionsForSchoolClass(school.id, cls.name).map { sec ->
+                val assignment = state.classAssignments.firstOrNull {
+                    it.schoolId == schoolDocId &&
+                        it.className.equals(cls.name, ignoreCase = true) &&
+                        it.section.equals(sec, ignoreCase = true)
+                }
+                val ctShort = assignment?.classTeacherId?.takeIf { it.isNotBlank() }?.let { id ->
+                    TimetableEngine.shortTeacherName(teachersById[id]?.name.orEmpty())
+                }.orEmpty()
+                val cellMap = state.activeSessionTimetableCells
+                    .filter {
+                        it.schoolId == schoolDocId &&
+                            it.className.equals(cls.name, ignoreCase = true) &&
+                            it.section.equals(sec, ignoreCase = true)
+                    }
+                    .associateBy { it.day to it.slotId }
+                MasterClassSectionRow(
+                    classGroupName = grpName,
+                    className = cls.name,
+                    section = sec,
+                    classTeacherShort = ctShort,
+                    cellsByDayAndSlot = cellMap
+                )
+            }
+        }
+        val bundle = MasterTimetablePrintBundle(
+            school = school,
+            session = state.filter.session,
+            periodStructure = state.periodStructureForSchool(schoolDocId),
+            rows = rows
+        )
+        clearTimetablePdfPreview()
+        _timetablePdfState.value = TimetablePdfPreviewState(
+            isGenerating = true,
+            title = "Master Timetable — ${school.name}",
+            statusLabel = "Generating A4 Landscape Master Timetable…",
+            isLandscape = true
+        )
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val file = TimetablePdfGenerator.generateMasterTimetablePdf(appContext, bundle)
+                    val totalPages = PdfExportHelper.countPdfPages(file)
+                    val preview = PdfExportHelper.renderPdfPages(file, maxPagesToPreview = 10)
+                    Triple(file, totalPages, preview)
+                }
+            }.onSuccess { (file, totalPages, preview) ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    statusLabel = "Ready ($totalPages page(s), A4 Landscape)",
+                    generatedFile = file,
+                    totalPages = totalPages,
+                    previewPages = preview
+                )
+            }.onFailure { err ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    error = err.message ?: "Failed to generate Master PDF"
+                )
+            }
+        }
+    }
+
+    fun saveTimetablePdfToUri(destinationUri: Uri) {
+        val file = _timetablePdfState.value.generatedFile ?: return
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) { PdfExportHelper.copyFileToUri(appContext, file, destinationUri) }
+            emitMessage(if (ok) "Timetable PDF saved successfully" else "Could not save timetable PDF")
+        }
+    }
+
+    fun saveTimetableZipToUri(destinationUri: Uri) {
+        val file = _timetablePdfState.value.generatedZipFile ?: return
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) { PdfExportHelper.copyFileToUri(appContext, file, destinationUri) }
+            emitMessage(if (ok) "Timetable ZIP saved successfully" else "Could not save timetable ZIP")
+        }
+    }
+
     companion object {
         fun provideFactory(
             appContext: Application,
@@ -2715,6 +3523,7 @@ class SchoolViewModel(
             orgRepo: OrgCloudRepository,
             academicRepo: OrgAcademicRepository,
             phase4Repo: Phase4Repository,
+            timetableRepo: TimetableRepository,
             localRepo: ReportCardRepository,
             connectivityMonitor: NetworkConnectivityMonitor,
             offlinePrefs: OfflinePrefsStore
@@ -2727,6 +3536,7 @@ class SchoolViewModel(
                     orgRepo = orgRepo,
                     academicRepo = academicRepo,
                     phase4Repo = phase4Repo,
+                    timetableRepo = timetableRepo,
                     localRepo = localRepo,
                     connectivityMonitor = connectivityMonitor,
                     offlinePrefs = offlinePrefs
@@ -2736,12 +3546,20 @@ class SchoolViewModel(
     }
 }
 
+private data class Phase4And5Bundle(
+    val phase4: CloudPhase4Snapshot,
+    val timetable: CloudTimetableSnapshot,
+    val timetableConflicts: List<TimetableConflictNotice>
+)
+
 private data class AdminAndPhase4Bundle(
     val members: List<CloudMember>,
     val joinRequests: List<CloudJoinRequest>,
     val inviteCodes: List<CloudInviteCode>,
     val auditLogs: List<CloudAuditLog>,
-    val phase4: CloudPhase4Snapshot
+    val phase4: CloudPhase4Snapshot,
+    val timetable: CloudTimetableSnapshot,
+    val timetableConflicts: List<TimetableConflictNotice>
 )
 
 private data class CloudCoreBundle(

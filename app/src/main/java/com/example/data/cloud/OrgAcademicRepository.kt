@@ -199,6 +199,8 @@ class OrgAcademicRepository(
         val stableSchoolId = StableDocId.toLong(schoolDocId)
 
         val canReadStudents = OrgAccessEvaluator.canViewModule(member, AppModule.STUDENTS) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.STUDENT_REGISTER) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.FEES) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.MARKS) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.CO_SCHOLASTIC) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.REPORTS) ||
@@ -652,6 +654,19 @@ class OrgAcademicRepository(
             val ref = db.collection("organisations").document(orgId)
                 .collection("schools").document(schoolDocId)
                 .collection("students").document(docId)
+            val normalizedStatus = if (student.status.equals("LEFT", ignoreCase = true)) "LEFT" else "ACTIVE"
+            val extendedFields = mapOf(
+                "secondMobile" to student.secondMobile.trim().take(40),
+                "admissionDate" to student.admissionDate.trim().take(40),
+                "previousSchool" to student.previousSchool.trim().take(160),
+                "siblingGroupId" to student.siblingGroupId.trim().take(80),
+                "usesTransport" to student.usesTransport,
+                "transportRouteName" to student.transportRouteName.trim().take(120),
+                "transportMonthlyAmount" to student.transportMonthlyAmount.coerceIn(0, 500_000).toLong(),
+                "status" to normalizedStatus,
+                "leftDate" to (if (normalizedStatus == "LEFT") student.leftDate.trim().take(40) else ""),
+                "leftReason" to (if (normalizedStatus == "LEFT") student.leftReason.trim().take(300) else "")
+            )
             if (existingDocId.isNullOrBlank()) {
                 val payload = mapOf(
                     "schoolId" to schoolDocId,
@@ -671,7 +686,7 @@ class OrgAcademicRepository(
                     "sample" to student.isSample,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
-                )
+                ) + extendedFields
                 val task = ref.set(payload)
                 attachSyncListeners(task, OperationType.CREATE, path) { ref.set(payload) }
             } else {
@@ -691,7 +706,7 @@ class OrgAcademicRepository(
                     "rollNo" to student.rollNo.coerceIn(1, 9999).toLong(),
                     "sample" to student.isSample,
                     "updatedAt" to FieldValue.serverTimestamp()
-                )
+                ) + extendedFields
                 val task = ref.update(payload)
                 attachSyncListeners(task, OperationType.UPDATE, path) { ref.update(payload) }
             }
@@ -1547,6 +1562,8 @@ class OrgAcademicRepository(
         val classDocId = doc.getString("classId").orEmpty()
         val stableStudentId = StableDocId.toLong(doc.id)
         val stableClassId = if (classDocId.isNotBlank()) StableDocId.toLong("${schoolDocId}_cls_$classDocId") else 0L
+        val rawStatus = doc.getString("status").orEmpty().uppercase()
+        val parsedStatus = if (rawStatus == "LEFT") "LEFT" else "ACTIVE"
         return CloudStudentRecord(
             docId = doc.id,
             schoolDocId = schoolDocId,
@@ -1566,7 +1583,17 @@ class OrgAcademicRepository(
                 className = doc.getString("className").orEmpty(),
                 section = doc.getString("section").orEmpty().ifBlank { "A" },
                 rollNo = (doc.getLong("rollNo") ?: 1L).toInt(),
-                isSample = doc.getBoolean("sample") ?: false
+                isSample = doc.getBoolean("sample") ?: false,
+                secondMobile = doc.getString("secondMobile").orEmpty(),
+                admissionDate = doc.getString("admissionDate").orEmpty(),
+                previousSchool = doc.getString("previousSchool").orEmpty(),
+                siblingGroupId = doc.getString("siblingGroupId").orEmpty(),
+                usesTransport = doc.getBoolean("usesTransport") ?: false,
+                transportRouteName = doc.getString("transportRouteName").orEmpty(),
+                transportMonthlyAmount = (doc.getLong("transportMonthlyAmount") ?: 0L).toInt().coerceAtLeast(0),
+                status = parsedStatus,
+                leftDate = doc.getString("leftDate").orEmpty(),
+                leftReason = doc.getString("leftReason").orEmpty()
             ),
             createdAt = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
         )

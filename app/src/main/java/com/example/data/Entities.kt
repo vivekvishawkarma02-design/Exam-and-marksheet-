@@ -152,8 +152,22 @@ data class StudentEntity(
     val className: String,
     val section: String,
     val rollNo: Int,
-    val isSample: Boolean = false
-)
+    val isSample: Boolean = false,
+    // Phase 9: Extended Student Register & Transport fields (defaults preserve full backward compatibility)
+    val secondMobile: String = "",
+    val admissionDate: String = "",
+    val previousSchool: String = "",
+    val siblingGroupId: String = "",
+    val usesTransport: Boolean = false,
+    val transportRouteName: String = "",
+    val transportMonthlyAmount: Int = 0,
+    val status: String = "ACTIVE", // "ACTIVE" or "LEFT"
+    val leftDate: String = "",
+    val leftReason: String = ""
+) {
+    val isActiveStatus: Boolean
+        get() = !status.equals("LEFT", ignoreCase = true)
+}
 
 @Entity(
     tableName = "marks",

@@ -46,10 +46,12 @@ import com.example.data.cloud.OrgCloudRepository
 import com.example.data.cloud.CloudPhase6Snapshot
 import com.example.data.cloud.CloudPhase7Snapshot
 import com.example.data.cloud.CloudPhase8Snapshot
+import com.example.data.cloud.CloudPhase9Snapshot
 import com.example.data.cloud.Phase4Repository
 import com.example.data.cloud.Phase6Repository
 import com.example.data.cloud.Phase7Repository
 import com.example.data.cloud.Phase8Repository
+import com.example.data.cloud.Phase9Repository
 import com.example.data.cloud.StableDocId
 import com.example.data.cloud.TermAttendanceRecalcItem
 import com.example.data.cloud.TimetableRepository
@@ -139,6 +141,15 @@ import com.example.domain.StudentAttendanceStatus
 import com.example.domain.StudentRangeAttendanceSummaryRow
 import com.example.domain.StudentTermAttendanceComputation
 import com.example.domain.WorkingDayExceptionEntry
+import com.example.domain.FeeAuditLogRecord
+import com.example.domain.FeeCollectionEngine
+import com.example.domain.FeeMessageSentLog
+import com.example.domain.FeeReceiptRecord
+import com.example.domain.FeeStructureConfig
+import com.example.domain.Phase9AccessEvaluator
+import com.example.domain.SchoolNoticeRecord
+import com.example.domain.StudentFeeAccountSummary
+import com.example.domain.StudentFeeOverride
 import com.example.util.BackupAndCsvManager
 import com.example.util.ClassTimetablePrintBundle
 import com.example.util.DailyAttendancePdfBundle
@@ -307,8 +318,72 @@ data class SchoolUiState(
     val studentAttendanceEditLogs: List<StudentAttendanceEditLog> = emptyList(),
     val attendanceConflictNotices: List<AttendanceConflictNotice> = emptyList(),
     val termInfoManualOverrideByStudentTerm: Map<Pair<Long, Int>, Boolean?> = emptyMap(),
-    val studentDocIdByLongId: Map<Long, String> = emptyMap()
+    val studentDocIdByLongId: Map<Long, String> = emptyMap(),
+    // Phase 9: Student Register & Fee Management
+    val feeStructures: List<FeeStructureConfig> = emptyList(),
+    val studentFeeOverrides: List<StudentFeeOverride> = emptyList(),
+    val feeReceipts: List<FeeReceiptRecord> = emptyList(),
+    val feeMessageSentLogs: List<FeeMessageSentLog> = emptyList(),
+    val schoolNotices: List<SchoolNoticeRecord> = emptyList(),
+    val feeAuditLogs: List<FeeAuditLogRecord> = emptyList(),
+    val deviceNodeCode: String = "A1"
 ) {
+    val canViewFees: Boolean
+        get() = activeOrg == null || Phase9AccessEvaluator.canViewFees(accessProfile)
+
+    val canEditFees: Boolean
+        get() = activeOrg == null || Phase9AccessEvaluator.canEditFees(accessProfile)
+
+    val canViewStudentRegister: Boolean
+        get() = activeOrg == null || Phase9AccessEvaluator.canViewStudentRegister(accessProfile)
+
+    val canEditStudentRegister: Boolean
+        get() = activeOrg == null || Phase9AccessEvaluator.canEditStudentRegister(accessProfile)
+
+    fun feeStructureForSchool(
+        schoolDocId: String = activeSchoolDocId,
+        session: String = filter.session
+    ): FeeStructureConfig {
+        val saved = feeStructures.firstOrNull {
+            it.schoolId == schoolDocId && it.session.equals(session, ignoreCase = true)
+        }
+        if (saved != null) return saved
+        val schLongId = schoolRecordsByDocId[schoolDocId]?.stableId ?: activeSchool.id
+        val clsNames = classesForSchool(schLongId).map { it.name }
+        return FeeStructureConfig.buildDefault(schoolDocId, session, clsNames)
+    }
+
+    fun feeOverrideForStudent(
+        studentDocId: String,
+        schoolDocId: String = activeSchoolDocId,
+        session: String = filter.session
+    ): StudentFeeOverride? = studentFeeOverrides.firstOrNull {
+        it.schoolId == schoolDocId &&
+            it.session.equals(session, ignoreCase = true) &&
+            it.studentId == studentDocId
+    }
+
+    fun feeReceiptsForSchoolSession(
+        schoolDocId: String = activeSchoolDocId,
+        session: String = filter.session
+    ): List<FeeReceiptRecord> = feeReceipts.filter {
+        it.schoolId == schoolDocId && it.session.equals(session, ignoreCase = true)
+    }
+
+    fun computeStudentFeeAccount(student: StudentEntity): StudentFeeAccountSummary {
+        val schDocId = schoolDocIdByLongId[student.schoolId] ?: activeSchoolDocId
+        val stuDocId = studentDocIdFor(student.id)
+        val struct = feeStructureForSchool(schDocId, student.session)
+        val override = feeOverrideForStudent(stuDocId, schDocId, student.session)
+        return FeeCollectionEngine.computeStudentFeeAccount(
+            structure = struct,
+            student = student,
+            studentDocId = stuDocId,
+            override = override,
+            receiptsForStudent = feeReceipts
+        )
+    }
+
     val activeSchoolDocId: String
         get() = schoolDocIdByLongId[activeSchool.id].orEmpty()
 
@@ -1166,22 +1241,23 @@ data class SchoolUiState(
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SchoolViewModel(
-    private val appContext: Application,
+    internal val appContext: Application,
     val orgId: String,
-    private val currentUserId: String,
-    private val orgRepo: OrgCloudRepository,
-    private val academicRepo: OrgAcademicRepository,
+    internal val currentUserId: String,
+    internal val orgRepo: OrgCloudRepository,
+    internal val academicRepo: OrgAcademicRepository,
     private val phase4Repo: Phase4Repository,
     private val timetableRepo: TimetableRepository,
     private val phase6Repo: Phase6Repository,
     private val phase7Repo: Phase7Repository,
     private val phase8Repo: Phase8Repository,
     private val localRepo: ReportCardRepository,
-    private val connectivityMonitor: NetworkConnectivityMonitor,
-    private val offlinePrefs: OfflinePrefsStore
+    internal val connectivityMonitor: NetworkConnectivityMonitor,
+    internal val offlinePrefs: OfflinePrefsStore,
+    internal val phase9Repo: Phase9Repository = Phase9Repository(orgRepo)
 ) : ViewModel() {
 
-    private val _filter = MutableStateFlow(FilterSelection())
+    internal val _filter = MutableStateFlow(FilterSelection())
     private val _lastUndo = MutableStateFlow<MarkUndoSnapshot?>(null)
     private val _isInitialized = MutableStateFlow(false)
     private val _membershipRevoked = MutableStateFlow(false)
@@ -1193,7 +1269,7 @@ class SchoolViewModel(
     private val _pdfState = MutableStateFlow(PdfPreviewState())
     val pdfState: StateFlow<PdfPreviewState> = _pdfState.asStateFlow()
 
-    private val _timetablePdfState = MutableStateFlow(TimetablePdfPreviewState())
+    internal val _timetablePdfState = MutableStateFlow(TimetablePdfPreviewState())
     val timetablePdfState: StateFlow<TimetablePdfPreviewState> = _timetablePdfState.asStateFlow()
 
     private val _autoGenerateProgress = MutableStateFlow(AutoGenerateProgress())
@@ -1232,6 +1308,7 @@ class SchoolViewModel(
     private val _phase6Snapshot = MutableStateFlow(CloudPhase6Snapshot())
     private val _phase7Snapshot = MutableStateFlow(CloudPhase7Snapshot())
     private val _phase8Snapshot = MutableStateFlow(CloudPhase8Snapshot())
+    private val _phase9Snapshot = MutableStateFlow(CloudPhase9Snapshot())
     private val _attendanceConflicts = MutableStateFlow<List<AttendanceConflictNotice>>(emptyList())
     private val _multiSchoolPendingBundles = MutableStateFlow<List<SchoolAcademicBundleForPending>>(emptyList())
     private val _orgMembers = MutableStateFlow<List<CloudMember>>(emptyList())
@@ -1241,8 +1318,8 @@ class SchoolViewModel(
     private val _isOnline = MutableStateFlow(connectivityMonitor.isCurrentlyOnline())
 
     // In-memory lookups from stable Long IDs back to Firestore doc IDs
-    private var schoolRecordsByLongId: Map<Long, CloudSchoolRecord> = emptyMap()
-    private var studentDocIdByLongId: Map<Long, Pair<String, StudentEntity>> = emptyMap()
+    internal var schoolRecordsByLongId: Map<Long, CloudSchoolRecord> = emptyMap()
+    internal var studentDocIdByLongId: Map<Long, Pair<String, StudentEntity>> = emptyMap()
     private var existingMarkValuesByDocId: Map<String, String> = emptyMap()
     private var existingMarkDocIds: Set<String> = emptySet()
     private var existingCoDocIds: Set<String> = emptySet()
@@ -1265,8 +1342,9 @@ class SchoolViewModel(
 
     private val combinedSyncErrorFlow = combine(
         combine(academicRepo.syncError, phase4Repo.syncError, timetableRepo.syncError) { a, b, c -> a ?: b ?: c },
-        combine(phase6Repo.syncError, phase7Repo.syncError, phase8Repo.syncError) { d, e, f -> d ?: e ?: f }
-    ) { left, right -> left ?: right }
+        combine(phase6Repo.syncError, phase7Repo.syncError, phase8Repo.syncError) { d, e, f -> d ?: e ?: f },
+        phase9Repo.syncError
+    ) { left, right, p9Err -> left ?: right ?: p9Err }
 
     private val phase4To6Flow = combine(
         _phase4Snapshot,
@@ -1278,14 +1356,21 @@ class SchoolViewModel(
         Phase4And5Bundle(p4, tt, ttConflicts, p6, p6Conflicts)
     }
 
+    private val phase8And9Flow = combine(
+        _phase8Snapshot,
+        _attendanceConflicts,
+        _phase9Snapshot
+    ) { p8, attConflicts, p9 ->
+        Triple(p8, attConflicts, p9)
+    }
+
     private val phase4To8Flow = combine(
         phase4To6Flow,
         _phase7Snapshot,
         _multiSchoolPendingBundles,
-        _phase8Snapshot,
-        _attendanceConflicts
-    ) { p46, p7, pendingBundles, p8, attConflicts ->
-        Phase7And8Bundle(p46, p7, pendingBundles, p8, attConflicts)
+        phase8And9Flow
+    ) { p46, p7, pendingBundles, (p8, attConflicts, p9) ->
+        Phase7And8Bundle(p46, p7, pendingBundles, p8, attConflicts, p9)
     }
 
     private val syncExtrasFlow = combine(
@@ -1318,7 +1403,8 @@ class SchoolViewModel(
             phase7 = p78.phase7,
             multiSchoolPendingBundles = p78.multiSchoolPendingBundles,
             phase8 = p78.phase8,
-            attendanceConflicts = p78.attendanceConflicts
+            attendanceConflicts = p78.attendanceConflicts,
+            phase9 = p78.phase9
         )
     }
 
@@ -1359,7 +1445,8 @@ class SchoolViewModel(
             admin.timetable.pendingWriteCount +
             admin.phase6.pendingWriteCount +
             admin.phase7.pendingWriteCount +
-            admin.phase8.pendingWriteCount
+            admin.phase8.pendingWriteCount +
+            admin.phase9.pendingWriteCount
 
         val syncUi = OfflineSyncEngine.computeSyncUiState(
             isOnline = core.isOnline,
@@ -1423,7 +1510,14 @@ class SchoolViewModel(
             termInfoManualOverrideByStudentTerm = core.academicSnap.termInfos.associate {
                 (it.entity.studentId to it.entity.termNo) to it.attendanceManualOverride
             },
-            studentDocIdByLongId = core.academicSnap.students.associate { it.entity.id to it.docId }
+            studentDocIdByLongId = core.academicSnap.students.associate { it.entity.id to it.docId },
+            feeStructures = admin.phase9.feeStructures,
+            studentFeeOverrides = admin.phase9.studentFeeOverrides,
+            feeReceipts = admin.phase9.feeReceipts,
+            feeMessageSentLogs = admin.phase9.messageSentLogs,
+            schoolNotices = admin.phase9.schoolNotices,
+            feeAuditLogs = admin.phase9.feeAuditLogs,
+            deviceNodeCode = offlinePrefs.getOrCreateDeviceNodeCode(currentUserId)
         )
     }.stateIn(
         scope = viewModelScope,
@@ -1860,6 +1954,36 @@ class SchoolViewModel(
                 _attendanceConflicts.value = notices
             }
         }
+
+        // 16. Phase 9: Fee structures, overrides, receipts, sent logs, notices & audit logs
+        viewModelScope.launch {
+            combine(
+                _observerRestartTick,
+                _ownMember.map { it?.toAccessProfile() }
+            ) { tick, profile ->
+                tick to profile
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { (_, profile) ->
+                    if (profile == null || !OrgAccessEvaluator.isActive(profile)) {
+                        flowOf(CloudPhase9Snapshot())
+                    } else {
+                        phase9Repo.observePhase9Data(orgId, profile, currentUserId)
+                            .catch { e ->
+                                val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
+                                if (cause != null) {
+                                    handleFirestoreError(cause, OperationType.LIST, "organisations/$orgId/feeReceipts")
+                                    emit(CloudPhase9Snapshot())
+                                    return@catch
+                                }
+                                if (e is CancellationException) throw e
+                            }
+                    }
+                }
+                .collect { snap ->
+                    _phase9Snapshot.value = snap
+                }
+        }
     }
 
     private fun evaluatePhase6Conflicts(snap: CloudPhase6Snapshot) {
@@ -1989,8 +2113,15 @@ class SchoolViewModel(
         val retriedPhase6 = phase6Repo.retrySync()
         val retriedPhase7 = phase7Repo.retrySync()
         val retriedPhase8 = phase8Repo.retrySync()
+        val retriedPhase9 = phase9Repo.retrySync()
         academicRepo.retrySync { msg ->
-            emitMessage(if (retriedPhase4 || retriedPhase5 || retriedPhase6 || retriedPhase7 || retriedPhase8) "Retrying pending sync…" else msg)
+            emitMessage(
+                if (retriedPhase4 || retriedPhase5 || retriedPhase6 || retriedPhase7 || retriedPhase8 || retriedPhase9) {
+                    "Retrying pending sync…"
+                } else {
+                    msg
+                }
+            )
         }
     }
 
@@ -2001,6 +2132,7 @@ class SchoolViewModel(
         phase6Repo.clearSyncError()
         phase7Repo.clearSyncError()
         phase8Repo.clearSyncError()
+        phase9Repo.clearSyncError()
     }
 
     private fun handleListenerError(e: Throwable, sub: String) {
@@ -2012,11 +2144,11 @@ class SchoolViewModel(
         if (e is CancellationException) throw e
     }
 
-    private fun emitMessage(message: String) {
+    internal fun emitMessage(message: String) {
         _snackbar.tryEmit(message)
     }
 
-    private fun activeSchoolRecord(schoolId: Long = uiState.value.activeSchool.id): CloudSchoolRecord? =
+    internal fun activeSchoolRecord(schoolId: Long = uiState.value.activeSchool.id): CloudSchoolRecord? =
         schoolRecordsByLongId[schoolId]
 
     // -------------------------------------------------------------------------
@@ -2457,7 +2589,7 @@ class SchoolViewModel(
     }
 
     fun saveStudent(student: StudentEntity, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
-        if (!uiState.value.canEdit(AppModule.STUDENTS)) {
+        if (!uiState.value.canEdit(AppModule.STUDENTS) && !uiState.value.canEditStudentRegister) {
             onResult(false, "You only have view access to students.")
             return
         }
@@ -2505,7 +2637,7 @@ class SchoolViewModel(
     }
 
     fun deleteStudent(student: StudentEntity) {
-        if (!uiState.value.canEdit(AppModule.STUDENTS)) {
+        if (!uiState.value.canEdit(AppModule.STUDENTS) && !uiState.value.canEditStudentRegister) {
             emitMessage("You do not have permission to delete students.")
             return
         }
@@ -2524,7 +2656,7 @@ class SchoolViewModel(
     }
 
     fun importStudentsFromCsvUri(uri: Uri) {
-        if (!uiState.value.canEdit(AppModule.STUDENTS)) {
+        if (!uiState.value.canEdit(AppModule.STUDENTS) && !uiState.value.canEditStudentRegister) {
             emitMessage("You do not have permission to import students.")
             return
         }
@@ -5643,7 +5775,8 @@ private data class Phase7And8Bundle(
     val phase7: CloudPhase7Snapshot,
     val multiSchoolPendingBundles: List<SchoolAcademicBundleForPending>,
     val phase8: CloudPhase8Snapshot,
-    val attendanceConflicts: List<AttendanceConflictNotice>
+    val attendanceConflicts: List<AttendanceConflictNotice>,
+    val phase9: CloudPhase9Snapshot
 )
 
 private data class AdminAndPhase4Bundle(
@@ -5659,7 +5792,8 @@ private data class AdminAndPhase4Bundle(
     val phase7: CloudPhase7Snapshot,
     val multiSchoolPendingBundles: List<SchoolAcademicBundleForPending>,
     val phase8: CloudPhase8Snapshot,
-    val attendanceConflicts: List<AttendanceConflictNotice>
+    val attendanceConflicts: List<AttendanceConflictNotice>,
+    val phase9: CloudPhase9Snapshot
 )
 
 private data class CloudCoreBundle(

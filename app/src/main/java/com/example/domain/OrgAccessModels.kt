@@ -38,6 +38,8 @@ enum class AppModule(val key: String, val label: String, val description: String
     TIMETABLE("timetable", "Timetable", "Class and teacher timetables (full scheduling in later phases)"),
     TEACHERS("teachers", "Teachers and assignments", "Teachers, period structure, class-subject assignments, and subject rules"),
     ATTENDANCE("attendance", "Attendance", "Daily student attendance, school calendar, and attendance reports"),
+    FEES("fees", "Fees", "Fee structure, fee collection, receipts, dues, reports, and send queue"),
+    STUDENT_REGISTER("studentRegister", "Student Register", "Extended student register, transport, sibling links, left status, and ID cards"),
     SETTINGS("settings", "Settings", "Organisation settings, sessions, schools, and backups"),
     MEMBERS("members", "Members", "Member directory, join requests, roles, and access control");
 
@@ -72,6 +74,8 @@ data class MemberPermissions(
     val timetable: AccessLevel = AccessLevel.NONE,
     val teachers: AccessLevel = AccessLevel.NONE,
     val attendance: AccessLevel = AccessLevel.NONE,
+    val fees: AccessLevel = AccessLevel.NONE,
+    val studentRegister: AccessLevel = AccessLevel.NONE,
     val settings: AccessLevel = AccessLevel.NONE,
     val members: AccessLevel = AccessLevel.NONE
 ) {
@@ -83,6 +87,8 @@ data class MemberPermissions(
         AppModule.TIMETABLE -> timetable
         AppModule.TEACHERS -> teachers
         AppModule.ATTENDANCE -> attendance
+        AppModule.FEES -> fees
+        AppModule.STUDENT_REGISTER -> studentRegister
         AppModule.SETTINGS -> settings
         AppModule.MEMBERS -> members
     }
@@ -95,6 +101,8 @@ data class MemberPermissions(
         AppModule.TIMETABLE -> copy(timetable = level)
         AppModule.TEACHERS -> copy(teachers = level)
         AppModule.ATTENDANCE -> copy(attendance = level)
+        AppModule.FEES -> copy(fees = level)
+        AppModule.STUDENT_REGISTER -> copy(studentRegister = level)
         AppModule.SETTINGS -> copy(settings = level)
         AppModule.MEMBERS -> copy(members = level)
     }
@@ -107,6 +115,8 @@ data class MemberPermissions(
         AppModule.TIMETABLE.key to timetable.wireValue,
         AppModule.TEACHERS.key to teachers.wireValue,
         AppModule.ATTENDANCE.key to attendance.wireValue,
+        AppModule.FEES.key to fees.wireValue,
+        AppModule.STUDENT_REGISTER.key to studentRegister.wireValue,
         AppModule.SETTINGS.key to settings.wireValue,
         AppModule.MEMBERS.key to members.wireValue
     )
@@ -121,6 +131,8 @@ data class MemberPermissions(
                 timetable = AccessLevel.EDIT,
                 teachers = AccessLevel.EDIT,
                 attendance = AccessLevel.EDIT,
+                fees = AccessLevel.EDIT,
+                studentRegister = AccessLevel.EDIT,
                 settings = AccessLevel.EDIT,
                 members = AccessLevel.EDIT
             )
@@ -132,6 +144,8 @@ data class MemberPermissions(
                 timetable = AccessLevel.VIEW,
                 teachers = AccessLevel.NONE,
                 attendance = AccessLevel.EDIT,
+                fees = AccessLevel.EDIT,
+                studentRegister = AccessLevel.EDIT,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -143,6 +157,8 @@ data class MemberPermissions(
                 timetable = AccessLevel.VIEW,
                 teachers = AccessLevel.NONE,
                 attendance = AccessLevel.NONE,
+                fees = AccessLevel.NONE,
+                studentRegister = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -154,6 +170,8 @@ data class MemberPermissions(
                 timetable = AccessLevel.VIEW,
                 teachers = AccessLevel.NONE,
                 attendance = AccessLevel.NONE,
+                fees = AccessLevel.NONE,
+                studentRegister = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -169,6 +187,8 @@ data class MemberPermissions(
                 timetable = AccessLevel.fromRaw(raw[AppModule.TIMETABLE.key] as? String),
                 teachers = AccessLevel.fromRaw(raw[AppModule.TEACHERS.key] as? String),
                 attendance = AccessLevel.fromRaw(raw[AppModule.ATTENDANCE.key] as? String),
+                fees = AccessLevel.fromRaw(raw[AppModule.FEES.key] as? String),
+                studentRegister = AccessLevel.fromRaw(raw[AppModule.STUDENT_REGISTER.key] as? String),
                 settings = AccessLevel.fromRaw(raw[AppModule.SETTINGS.key] as? String),
                 members = AccessLevel.fromRaw(raw[AppModule.MEMBERS.key] as? String)
             )

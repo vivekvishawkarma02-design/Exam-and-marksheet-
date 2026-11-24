@@ -148,6 +148,27 @@ class OfflinePrefsStore(context: Context) {
         saveAllPendingPhase6Edits(uid, others)
     }
 
+    fun getOrCreateDeviceNodeCode(uid: String): String {
+        val key = "device_node_code_${uid.ifBlank { "default" }}"
+        val existing = prefs.getString(key, null)?.takeIf { it.isNotBlank() }
+        if (existing != null) return existing
+        var installationUuid = prefs.getString("device_installation_uuid", null)
+        if (installationUuid.isNullOrBlank()) {
+            installationUuid = java.util.UUID.randomUUID().toString()
+            prefs.edit().putString("device_installation_uuid", installationUuid).apply()
+        }
+        val code = com.example.domain.FeeCollectionEngine.deriveDeviceNodeCode(installationUuid, uid)
+        prefs.edit().putString(key, code).apply()
+        return code
+    }
+
+    fun getLastReceiptSequence(orgId: String, schoolId: String, session: String, deviceNodeCode: String): Int =
+        prefs.getInt(keyReceiptSeq(orgId, schoolId, session, deviceNodeCode), 0).coerceAtLeast(0)
+
+    fun setLastReceiptSequence(orgId: String, schoolId: String, session: String, deviceNodeCode: String, seq: Int) {
+        prefs.edit().putInt(keyReceiptSeq(orgId, schoolId, session, deviceNodeCode), seq.coerceAtLeast(0)).apply()
+    }
+
     fun clearAll() {
         prefs.edit().clear().apply()
     }
@@ -312,6 +333,8 @@ class OfflinePrefsStore(context: Context) {
     private fun keyPendingMarks(uid: String) = "pending_marks_$uid"
     private fun keyPendingTimetable(uid: String) = "pending_timetable_$uid"
     private fun keyPendingPhase6(uid: String) = "pending_phase6_$uid"
+    private fun keyReceiptSeq(orgId: String, schoolId: String, session: String, node: String) =
+        "rcp_seq_${orgId}_${schoolId}_${session}_$node"
 
     companion object {
         private const val PREFS_NAME = "school_report_offline_sync_prefs"

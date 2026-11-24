@@ -40,8 +40,12 @@ service cloud.firestore {
 
     function isValidPermissionsMap(perms) {
       return perms is map &&
-        (perms.size() == 8 || (perms.size() == 9 && 'attendance' in perms && perms.attendance in ['none', 'view', 'edit'])) &&
+        perms.size() >= 8 && perms.size() <= 11 &&
         perms.keys().hasAll(['students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members']) &&
+        perms.keys().hasOnly([
+          'students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members',
+          'attendance', 'fees', 'studentRegister'
+        ]) &&
         perms.students in ['none', 'view', 'edit'] &&
         perms.marks in ['none', 'view', 'edit'] &&
         perms.coScholastic in ['none', 'view', 'edit'] &&
@@ -49,7 +53,10 @@ service cloud.firestore {
         perms.timetable in ['none', 'view', 'edit'] &&
         perms.teachers in ['none', 'view', 'edit'] &&
         perms.settings in ['none', 'view', 'edit'] &&
-        perms.members in ['none', 'view', 'edit'];
+        perms.members in ['none', 'view', 'edit'] &&
+        (!('attendance' in perms) || perms.attendance in ['none', 'view', 'edit']) &&
+        (!('fees' in perms) || perms.fees in ['none', 'view', 'edit']) &&
+        (!('studentRegister' in perms) || perms.studentRegister in ['none', 'view', 'edit']);
     }
 
     function isValidStringList(listVal, maxLen) {
@@ -420,7 +427,10 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'schoolId', 'classId', 'session', 'admNo', 'name', 'fatherName', 'motherName',
-          'dob', 'mobile', 'address', 'photoBase64', 'className', 'section', 'rollNo',
+          'dob', 'mobile', 'secondMobile', 'address', 'photoBase64', 'className', 'section', 'rollNo',
+          'admissionDate', 'previousSchool', 'siblingGroupId',
+          'usesTransport', 'transportRouteName', 'transportMonthlyAmount',
+          'status', 'leftDate', 'leftReason',
           'sample', 'createdAt', 'updatedAt'
         ]) &&
         data.schoolId == schoolId &&
@@ -432,11 +442,21 @@ service cloud.firestore {
         data.motherName is string && data.motherName.size() <= 120 &&
         data.dob is string && data.dob.size() <= 40 &&
         data.mobile is string && data.mobile.size() <= 40 &&
+        (!('secondMobile' in data) || (data.secondMobile is string && data.secondMobile.size() <= 40)) &&
         data.address is string && data.address.size() <= 300 &&
         data.photoBase64 is string && data.photoBase64.size() <= 220000 &&
         data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
         data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
         data.rollNo is int && data.rollNo >= 1 && data.rollNo <= 9999 &&
+        (!('admissionDate' in data) || (data.admissionDate is string && data.admissionDate.size() <= 40)) &&
+        (!('previousSchool' in data) || (data.previousSchool is string && data.previousSchool.size() <= 160)) &&
+        (!('siblingGroupId' in data) || (data.siblingGroupId is string && data.siblingGroupId.size() <= 80)) &&
+        (!('usesTransport' in data) || data.usesTransport is bool) &&
+        (!('transportRouteName' in data) || (data.transportRouteName is string && data.transportRouteName.size() <= 120)) &&
+        (!('transportMonthlyAmount' in data) || (data.transportMonthlyAmount is int && data.transportMonthlyAmount >= 0 && data.transportMonthlyAmount <= 500000)) &&
+        (!('status' in data) || data.status in ['ACTIVE', 'LEFT']) &&
+        (!('leftDate' in data) || (data.leftDate is string && data.leftDate.size() <= 40)) &&
+        (!('leftReason' in data) || (data.leftReason is string && data.leftReason.size() <= 300)) &&
         data.sample is bool &&
         isValidTimestamp(data.createdAt) &&
         isValidTimestamp(data.updatedAt);
@@ -518,7 +538,12 @@ service cloud.firestore {
         data.actorUid == request.auth.uid &&
         data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
         data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
-        data.targetType in ['mark', 'student', 'member', 'access', 'school', 'organisation', 'migration', 'invite', 'teacher', 'periodStructure', 'assignment', 'subjectRule', 'timetable', 'leave', 'substitution', 'timetableUndo', 'teacherAttendance', 'teacherScope', 'schoolCalendar', 'studentAttendance'] &&
+        data.targetType in [
+          'mark', 'student', 'member', 'access', 'school', 'organisation', 'migration', 'invite',
+          'teacher', 'periodStructure', 'assignment', 'subjectRule', 'timetable', 'leave',
+          'substitution', 'timetableUndo', 'teacherAttendance', 'teacherScope', 'schoolCalendar',
+          'studentAttendance', 'feeStructure', 'feeOverride', 'feeReceipt', 'feeNotice'
+        ] &&
         data.targetId is string && data.targetId.size() <= 128 &&
         data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 300 &&
         (!('schoolId' in data) || (data.schoolId is string && data.schoolId.size() <= 128)) &&
@@ -849,6 +874,206 @@ service cloud.firestore {
     }
 
     // =========================================================================
+    // PHASE 9: FEE MANAGEMENT VALIDATORS & CONCESSION LIMIT HELPERS
+    // =========================================================================
+    function isValidFeeStructure(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'monthOrder', 'chargedTuitionMonths', 'chargedTransportMonths',
+          'tuitionByClassAndMonth', 'examFees', 'optionalCatalogue', 'frozenPastCellAmountsByClass',
+          'maxConcessionPercentWithoutAdminApproval', 'messageTemplates',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'monthOrder', 'chargedTuitionMonths', 'chargedTransportMonths',
+          'tuitionByClassAndMonth', 'examFees', 'optionalCatalogue', 'frozenPastCellAmountsByClass',
+          'maxConcessionPercentWithoutAdminApproval', 'messageTemplates',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        isValidStringList(data.monthOrder, 12) &&
+        data.monthOrder.size() >= 1 &&
+        isValidStringList(data.chargedTuitionMonths, 12) &&
+        isValidStringList(data.chargedTransportMonths, 12) &&
+        data.tuitionByClassAndMonth is map && data.tuitionByClassAndMonth.size() <= 60 &&
+        data.examFees is list && data.examFees.size() <= 10 &&
+        data.optionalCatalogue is list && data.optionalCatalogue.size() <= 150 &&
+        data.frozenPastCellAmountsByClass is map && data.frozenPastCellAmountsByClass.size() <= 800 &&
+        data.maxConcessionPercentWithoutAdminApproval is int &&
+        data.maxConcessionPercentWithoutAdminApproval >= 0 &&
+        data.maxConcessionPercentWithoutAdminApproval <= 100 &&
+        data.messageTemplates is map && data.messageTemplates.size() <= 10 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStudentFeeOverride(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'studentId', 'studentName', 'cellOverrides', 'remark',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'studentId', 'studentName', 'cellOverrides', 'remark',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        isValidId(data.studentId) &&
+        data.studentName is string && data.studentName.size() <= 120 &&
+        data.cellOverrides is map && data.cellOverrides.size() <= 120 &&
+        data.remark is string && data.remark.size() >= 1 && data.remark.size() <= 300 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidFeeReceiptCreate(data) {
+      return data.size() == 40 &&
+        data.keys().hasAll([
+          'schoolId', 'session', 'receiptNumber', 'deviceNodeCode', 'sequenceNo', 'receiptDateIso',
+          'studentId', 'studentName', 'studentAdmNo', 'fatherName', 'className', 'section', 'rollNo',
+          'lineItems', 'totalBeforeConcession', 'concessionMode', 'concessionScope',
+          'concessionTargetLineId', 'concessionInputValue', 'concessionAmount', 'concessionRemark',
+          'concessionGivenByUid', 'concessionGivenByName', 'concessionApprovedByAdminUid', 'concessionApprovedByAdminName',
+          'netPayableAmount', 'amountPaid', 'balanceDueOnReceipt', 'paymentMode', 'paymentNote',
+          'status', 'receivedByUid', 'receivedByName', 'issuedAtMs',
+          'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.receiptNumber is string && data.receiptNumber.size() >= 3 && data.receiptNumber.size() <= 60 &&
+        data.sequenceNo is int && data.sequenceNo >= 1 &&
+        isValidIsoDate(data.receiptDateIso) &&
+        isValidId(data.studentId) &&
+        data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+        data.rollNo is int && data.rollNo >= 1 && data.rollNo <= 9999 &&
+        data.lineItems is list && data.lineItems.size() >= 1 && data.lineItems.size() <= 80 &&
+        data.totalBeforeConcession is int && data.totalBeforeConcession > 0 &&
+        data.concessionMode in ['NONE', 'RUPEES', 'PERCENTAGE'] &&
+        data.concessionScope in ['WHOLE_RECEIPT', 'SINGLE_LINE'] &&
+        data.concessionAmount is int &&
+        data.concessionAmount >= 0 &&
+        data.concessionAmount <= data.totalBeforeConcession &&
+        data.concessionRemark is string && data.concessionRemark.size() <= 300 &&
+        (data.concessionAmount == 0 || data.concessionRemark.size() >= 1) &&
+        data.concessionApprovedByAdminUid is string && data.concessionApprovedByAdminUid.size() <= 128 &&
+        data.netPayableAmount is int &&
+        data.netPayableAmount >= 0 &&
+        data.netPayableAmount == (data.totalBeforeConcession - data.concessionAmount) &&
+        data.amountPaid is int &&
+        data.amountPaid > 0 &&
+        data.amountPaid <= data.netPayableAmount &&
+        data.balanceDueOnReceipt is int &&
+        data.balanceDueOnReceipt >= 0 &&
+        data.balanceDueOnReceipt == (data.netPayableAmount - data.amountPaid) &&
+        data.paymentMode in ['CASH', 'UPI', 'CHEQUE', 'OTHER'] &&
+        data.status == 'ISSUED' &&
+        data.receivedByUid == request.auth.uid &&
+        data.receivedByName is string && data.receivedByName.size() >= 1 && data.receivedByName.size() <= 120 &&
+        data.issuedAtMs is int && data.issuedAtMs >= 0 &&
+        data.cancelledAtMs == 0 &&
+        data.cancelledByUid == '' &&
+        data.cancelledByName == '' &&
+        data.cancelReason == '' &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function canIssueReceiptWithConcession(orgId, data) {
+      return data.concessionAmount == 0 ||
+        (data.concessionAmount * 100) <= (data.totalBeforeConcession * 20) ||
+        isOrgAdmin(orgId) ||
+        (
+          data.concessionApprovedByAdminUid != '' &&
+          exists(memberPath(orgId, data.concessionApprovedByAdminUid)) &&
+          get(memberPath(orgId, data.concessionApprovedByAdminUid)).data.status == 'active' &&
+          get(memberPath(orgId, data.concessionApprovedByAdminUid)).data.role in ['OWNER', 'ADMIN']
+        );
+    }
+
+    function isValidFeeMessageSentLog(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'studentId', 'studentName', 'className', 'section',
+          'guardianName', 'normalizedMobile', 'messageType', 'contextKey',
+          'messageText', 'channel', 'sentByUid', 'sentByName', 'sentAtMs',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'studentId', 'studentName', 'className', 'section',
+          'guardianName', 'normalizedMobile', 'messageType', 'contextKey',
+          'messageText', 'channel', 'sentByUid', 'sentByName', 'sentAtMs',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        isValidId(data.studentId) &&
+        data.studentName is string && data.studentName.size() <= 120 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+        data.guardianName is string && data.guardianName.size() <= 120 &&
+        data.normalizedMobile is string && data.normalizedMobile.size() <= 24 &&
+        data.messageType in ['FEE_DUE_REMINDER', 'FEE_RECEIPT', 'GENERAL'] &&
+        data.contextKey is string && data.contextKey.size() >= 1 && data.contextKey.size() <= 80 &&
+        data.messageText is string && data.messageText.size() >= 1 && data.messageText.size() <= 600 &&
+        data.channel in ['WHATSAPP', 'SMS'] &&
+        data.sentByUid == request.auth.uid &&
+        data.sentByName is string && data.sentByName.size() >= 1 && data.sentByName.size() <= 120 &&
+        data.sentAtMs is int && data.sentAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSchoolNotice(data) {
+      return data.keys().hasAll([
+          'schoolId', 'title', 'bodyText', 'noticeDateIso',
+          'createdByUid', 'createdByName', 'createdAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'title', 'bodyText', 'noticeDateIso',
+          'createdByUid', 'createdByName', 'createdAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        data.bodyText is string && data.bodyText.size() >= 1 && data.bodyText.size() <= 2000 &&
+        data.noticeDateIso is string && data.noticeDateIso.size() <= 20 &&
+        data.createdByUid == request.auth.uid &&
+        data.createdByName is string && data.createdByName.size() >= 1 && data.createdByName.size() <= 120 &&
+        data.createdAtMs is int && data.createdAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidFeeAuditLog(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'action', 'targetId', 'studentId', 'studentName',
+          'summary', 'actorUid', 'actorName', 'clientCreatedAtMs', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'action', 'targetId', 'studentId', 'studentName',
+          'summary', 'actorUid', 'actorName', 'clientCreatedAtMs', 'createdAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.action is string && data.action.size() >= 1 && data.action.size() <= 60 &&
+        data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 &&
+        data.studentId is string && data.studentId.size() <= 128 &&
+        data.studentName is string && data.studentName.size() <= 120 &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 400 &&
+        data.actorUid == request.auth.uid &&
+        data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
+        data.clientCreatedAtMs is int && data.clientCreatedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    // =========================================================================
     // 1. PRIVATE USER ACCOUNT & MEMBERSHIPS INDEX
     // =========================================================================
     match /users/{uid} {
@@ -1145,11 +1370,13 @@ service cloud.firestore {
 
         allow delete: if isSignedIn() && isValidId(schoolId) && isOrgAdmin(orgId);
 
-        // --- STUDENTS ---
+        // --- STUDENTS (Controlled by 'students' OR Phase 9 11th module 'studentRegister'; readable also by 'fees') ---
         match /students/{studentId} {
           allow get, list: if isSignedIn() &&
             canAccessSchool(orgId, schoolId) && (
               hasModuleView(orgId, 'students') ||
+              hasModuleView(orgId, 'studentRegister') ||
+              hasModuleView(orgId, 'fees') ||
               hasModuleView(orgId, 'marks') ||
               hasModuleView(orgId, 'coScholastic') ||
               hasModuleView(orgId, 'reports') ||
@@ -1160,26 +1387,35 @@ service cloud.firestore {
           allow create: if isSignedIn() &&
             isValidId(studentId) &&
             isValidStudent(incoming(), schoolId) &&
-            canAccessSchool(orgId, schoolId) &&
-            hasModuleEdit(orgId, 'students');
+            canAccessSchool(orgId, schoolId) && (
+              hasModuleEdit(orgId, 'students') ||
+              hasModuleEdit(orgId, 'studentRegister')
+            );
 
           allow update: if isSignedIn() &&
             isValidId(studentId) &&
             isValidStudent(incoming(), schoolId) &&
             incoming().schoolId == existing().schoolId &&
             incoming().createdAt == existing().createdAt &&
-            canAccessSchool(orgId, schoolId) &&
-            hasModuleEdit(orgId, 'students') &&
+            canAccessSchool(orgId, schoolId) && (
+              hasModuleEdit(orgId, 'students') ||
+              hasModuleEdit(orgId, 'studentRegister')
+            ) &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'classId', 'session', 'admNo', 'name', 'fatherName', 'motherName',
-              'dob', 'mobile', 'address', 'photoBase64', 'className', 'section',
-              'rollNo', 'sample', 'updatedAt'
+              'dob', 'mobile', 'secondMobile', 'address', 'photoBase64', 'className', 'section',
+              'rollNo', 'admissionDate', 'previousSchool', 'siblingGroupId',
+              'usesTransport', 'transportRouteName', 'transportMonthlyAmount',
+              'status', 'leftDate', 'leftReason',
+              'sample', 'updatedAt'
             ]);
 
           allow delete: if isSignedIn() &&
             isValidId(studentId) &&
-            canAccessSchool(orgId, schoolId) &&
-            hasModuleEdit(orgId, 'students');
+            canAccessSchool(orgId, schoolId) && (
+              hasModuleEdit(orgId, 'students') ||
+              hasModuleEdit(orgId, 'studentRegister')
+            );
         }
 
         // --- MARKS ---
@@ -1727,6 +1963,160 @@ service cloud.firestore {
               )
             )
           );
+
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      // -----------------------------------------------------------------------
+      // 3k. PHASE 9: FEE MANAGEMENT (10th module 'fees')
+      // - feeStructures: per-school + session fee heads, exam fees, catalogue, concession limit, templates
+      // - studentFeeOverrides: per-student fee overrides with mandatory remark
+      // - feeReceipts: immutable receipts (create only when status == ISSUED and amounts are positive;
+      //   update only allows ISSUED -> CANCELLED with mandatory cancelReason; delete is always false)
+      // - feeMessageSentLogs: guardian WhatsApp/SMS sent logs for Send Queue
+      // - schoolNotices: notices created in Notice Maker
+      // - feeAuditLogs: append-only fee audit trail
+      // -----------------------------------------------------------------------
+      match /feeStructures/{structureId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'fees');
+
+        allow create: if isSignedIn() &&
+          isValidId(structureId) &&
+          isValidFeeStructure(incoming()) &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(structureId) &&
+          isValidFeeStructure(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().session == existing().session &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(structureId) &&
+          isOrgAdmin(orgId);
+      }
+
+      match /studentFeeOverrides/{overrideId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'fees');
+
+        allow create: if isSignedIn() &&
+          isValidId(overrideId) &&
+          isValidStudentFeeOverride(incoming()) &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(overrideId) &&
+          isValidStudentFeeOverride(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().session == existing().session &&
+          incoming().studentId == existing().studentId &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(overrideId) &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, existing().schoolId);
+      }
+
+      match /feeReceipts/{receiptId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'fees');
+
+        allow create: if isSignedIn() &&
+          isValidId(receiptId) &&
+          isValidFeeReceiptCreate(incoming()) &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, incoming().schoolId) &&
+          canIssueReceiptWithConcession(orgId, incoming());
+
+        // Issued receipts can NEVER be edited (no amount, line item, or receiptNumber changes).
+        // The ONLY allowed update is cancelling an ISSUED receipt with a mandatory cancelReason.
+        allow update: if isSignedIn() &&
+          isValidId(receiptId) &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, existing().schoolId) &&
+          existing().status == 'ISSUED' &&
+          incoming().status == 'CANCELLED' &&
+          incoming().cancelledByUid == request.auth.uid &&
+          incoming().cancelledByName is string &&
+          incoming().cancelledByName.size() >= 1 &&
+          incoming().cancelledByName.size() <= 120 &&
+          incoming().cancelledAtMs is int &&
+          incoming().cancelledAtMs > 0 &&
+          incoming().cancelReason is string &&
+          incoming().cancelReason.size() >= 1 &&
+          incoming().cancelReason.size() <= 300 &&
+          isValidTimestamp(incoming().updatedAt) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status', 'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason', 'updatedAt'
+          ]);
+
+        // Receipts are NEVER deleted
+        allow delete: if false;
+      }
+
+      match /feeMessageSentLogs/{logId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'fees');
+
+        allow create: if isSignedIn() &&
+          isValidId(logId) &&
+          isValidFeeMessageSentLog(incoming()) &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(logId) &&
+          isValidFeeMessageSentLog(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().session == existing().session &&
+          incoming().studentId == existing().studentId &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(logId) &&
+          isOrgAdmin(orgId);
+      }
+
+      match /schoolNotices/{noticeId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'fees');
+
+        allow create: if isSignedIn() &&
+          isValidId(noticeId) &&
+          isValidSchoolNotice(incoming()) &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(noticeId) &&
+          isValidSchoolNotice(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(noticeId) &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, existing().schoolId);
+      }
+
+      match /feeAuditLogs/{auditId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'fees');
+
+        allow create: if isSignedIn() &&
+          isValidId(auditId) &&
+          isValidFeeAuditLog(incoming()) &&
+          hasModuleEdit(orgId, 'fees') &&
+          canAccessSchool(orgId, incoming().schoolId);
 
         allow update: if false;
         allow delete: if false;

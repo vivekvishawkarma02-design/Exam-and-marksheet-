@@ -101,6 +101,8 @@ object AppRoutes {
     const val ROUTE_WORKLOAD_REPORT = "workload_report"
     const val ROUTE_TEACHER_ATTENDANCE = "teacher_attendance"
     const val ROUTE_STUDENT_ATTENDANCE = "student_attendance"
+    const val ROUTE_STUDENT_REGISTER = "student_register"
+    const val ROUTE_FEE_MANAGEMENT = "fee_management"
 }
 
 private enum class OnboardingSubScreen {
@@ -482,6 +484,8 @@ private fun OrganisationWorkspace(
     var attendanceJumpSection by remember { mutableStateOf<String?>(null) }
     var attendanceJumpDateIso by remember { mutableStateOf<String?>(null) }
     var attendanceJumpTab by remember { mutableStateOf<Int?>(null) }
+    var feeJumpInitialTab by remember { mutableStateOf(0) }
+    var feeJumpPreselectedStudent by remember { mutableStateOf<com.example.data.StudentEntity?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.snackbar.collect { msg ->
@@ -581,7 +585,9 @@ private fun OrganisationWorkspace(
         currentRoute == AppRoutes.ROUTE_PENDING_MARKS ||
         currentRoute == AppRoutes.ROUTE_WORKLOAD_REPORT ||
         currentRoute == AppRoutes.ROUTE_TEACHER_ATTENDANCE ||
-        currentRoute == AppRoutes.ROUTE_STUDENT_ATTENDANCE
+        currentRoute == AppRoutes.ROUTE_STUDENT_ATTENDANCE ||
+        currentRoute == AppRoutes.ROUTE_STUDENT_REGISTER ||
+        currentRoute == AppRoutes.ROUTE_FEE_MANAGEMENT
 
     fun navigateTopLevel(route: String) {
         navController.navigate(route) {
@@ -765,6 +771,18 @@ private fun OrganisationWorkspace(
                                             attendanceJumpDateIso = dateIso
                                             attendanceJumpTab = 0
                                             navController.navigate(AppRoutes.ROUTE_STUDENT_ATTENDANCE) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToStudentRegister = {
+                                        if (uiState.canViewStudentRegister) {
+                                            navController.navigate(AppRoutes.ROUTE_STUDENT_REGISTER) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToFeeManagement = {
+                                        if (uiState.canViewFees) {
+                                            feeJumpInitialTab = 0
+                                            feeJumpPreselectedStudent = null
+                                            navController.navigate(AppRoutes.ROUTE_FEE_MANAGEMENT) { launchSingleTop = true }
                                         }
                                     },
                                     onOpenPendingMarksItem = { item ->
@@ -1018,6 +1036,46 @@ private fun OrganisationWorkspace(
                                             attendanceJumpDateIso = null
                                             attendanceJumpTab = null
                                         }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_STUDENT_REGISTER) {
+                                if (uiState.canViewStudentRegister) {
+                                    Phase9StudentRegisterScreen(
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() },
+                                        onOpenFeeCollectionForStudent = { student ->
+                                            if (uiState.canViewFees) {
+                                                feeJumpInitialTab = 0
+                                                feeJumpPreselectedStudent = student
+                                                navController.navigate(AppRoutes.ROUTE_FEE_MANAGEMENT) { launchSingleTop = true }
+                                            }
+                                        }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_FEE_MANAGEMENT) {
+                                if (uiState.canViewFees) {
+                                    Phase9FeeManagementScreen(
+                                        viewModel = viewModel,
+                                        initialTab = feeJumpInitialTab,
+                                        preselectedStudent = feeJumpPreselectedStudent,
+                                        onOpenStudentRegister = {
+                                            if (uiState.canViewStudentRegister) {
+                                                navController.navigate(AppRoutes.ROUTE_STUDENT_REGISTER) { launchSingleTop = true }
+                                            }
+                                        },
+                                        onBack = { navController.popBackStack() }
                                     )
                                 } else {
                                     LaunchedEffect(Unit) {

@@ -2175,6 +2175,518 @@ test("Phase 8: Student Attendance 9th module, legacy 8-key migration, class teac
   }));
 });
 
+// =============================================================================
+// 13. PHASE 9: STUDENT REGISTER (11th MODULE) & FEE MANAGEMENT (10th MODULE)
+//     BACKWARD-COMPATIBLE 8/9-KEY MIGRATION, RECEIPT IMMUTABILITY, CONCESSION
+//     APPROVAL LIMIT, NEGATIVE AMOUNT REJECTION, CANCEL-ONLY & CROSS-ORG ISOLATION
+// =============================================================================
+test("Phase 9: Student Register (11th module) & Fees (10th module) permissions, receipt immutability, concession approval limit, negative amount rejection, cancel-only & cross-org isolation", async () => {
+  const FEE_CLERK = "uid_p9_fee_clerk";         // fees: 'edit', studentRegister: 'edit' in SCHOOL_1
+  const FEE_VIEWER = "uid_p9_fee_viewer";       // fees: 'view', studentRegister: 'view' in SCHOOL_1
+  const REG_ONLY_EDITOR = "uid_p9_reg_editor";  // students: 'none', studentRegister: 'edit', fees: 'none' in SCHOOL_1
+  const LEGACY_MEMBER = "uid_p9_legacy_9key";   // 9-key member (missing 'fees' & 'studentRegister' keys -> no access)
+  const OUTSIDER = "uid_p9_outsider";           // Not a member of ORG_ID
+
+  await seedOrgWithOwnerAndSchools();
+  const ts = pastDate();
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    const orgRef = db.collection("organisations").doc(ORG_ID);
+
+    // 1. Seed 11-key Fee Clerk (fees: 'edit', studentRegister: 'edit' in SCHOOL_1)
+    await orgRef.collection("members").doc(FEE_CLERK).set({
+      uid: FEE_CLERK,
+      name: "Mr. Fee Clerk",
+      email: "clerk@sts.edu",
+      mobile: "9800000101",
+      role: "OFFICE_OPERATOR",
+      status: "active",
+      allSchools: false,
+      schools: [SCHOOL_1],
+      permissions: {
+        students: "view",
+        marks: "none",
+        coScholastic: "none",
+        reports: "none",
+        timetable: "none",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+        attendance: "none",
+        fees: "edit",
+        studentRegister: "edit",
+      },
+      teacherProfileCompleted: false,
+      teacherPhotoBase64: "",
+      requestedSubjects: [],
+      requestedClasses: [],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // 2. Seed 11-key Fee Viewer (fees: 'view', studentRegister: 'view' in SCHOOL_1)
+    await orgRef.collection("members").doc(FEE_VIEWER).set({
+      uid: FEE_VIEWER,
+      name: "Ms. Fee Viewer",
+      email: "viewer@sts.edu",
+      mobile: "9800000102",
+      role: "OTHER",
+      status: "active",
+      allSchools: false,
+      schools: [SCHOOL_1],
+      permissions: {
+        students: "none",
+        marks: "none",
+        coScholastic: "none",
+        reports: "none",
+        timetable: "none",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+        attendance: "none",
+        fees: "view",
+        studentRegister: "view",
+      },
+      teacherProfileCompleted: false,
+      teacherPhotoBase64: "",
+      requestedSubjects: [],
+      requestedClasses: [],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // 3. Seed Student Register Editor (students: 'none', studentRegister: 'edit', fees: 'none' in SCHOOL_1)
+    await orgRef.collection("members").doc(REG_ONLY_EDITOR).set({
+      uid: REG_ONLY_EDITOR,
+      name: "Register Clerk",
+      email: "reg@sts.edu",
+      mobile: "9800000103",
+      role: "OFFICE_OPERATOR",
+      status: "active",
+      allSchools: false,
+      schools: [SCHOOL_1],
+      permissions: {
+        students: "none",
+        marks: "none",
+        coScholastic: "none",
+        reports: "none",
+        timetable: "none",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+        attendance: "none",
+        fees: "none",
+        studentRegister: "edit",
+      },
+      teacherProfileCompleted: false,
+      teacherPhotoBase64: "",
+      requestedSubjects: [],
+      requestedClasses: [],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // 4. Seed Legacy 9-key member (missing 'fees' and 'studentRegister' keys -> defaults to no access)
+    await orgRef.collection("members").doc(LEGACY_MEMBER).set({
+      uid: LEGACY_MEMBER,
+      name: "Legacy Teacher",
+      email: "legacy9@sts.edu",
+      mobile: "9800000104",
+      role: "TEACHER",
+      status: "active",
+      allSchools: false,
+      schools: [SCHOOL_1],
+      permissions: {
+        students: "none",
+        marks: "none",
+        coScholastic: "none",
+        reports: "none",
+        timetable: "view",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+        attendance: "none",
+      },
+      teacherProfileCompleted: true,
+      teacherPhotoBase64: "",
+      requestedSubjects: [],
+      requestedClasses: [],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+  });
+
+  const ownerOrg = testEnv.authenticatedContext(OWNER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const clerkOrg = testEnv.authenticatedContext(FEE_CLERK).firestore().collection("organisations").doc(ORG_ID);
+  const viewerOrg = testEnv.authenticatedContext(FEE_VIEWER).firestore().collection("organisations").doc(ORG_ID);
+  const regOrg = testEnv.authenticatedContext(REG_ONLY_EDITOR).firestore().collection("organisations").doc(ORG_ID);
+  const legacyOrg = testEnv.authenticatedContext(LEGACY_MEMBER).firestore().collection("organisations").doc(ORG_ID);
+  const outsiderOrg = testEnv.authenticatedContext(OUTSIDER).firestore().collection("organisations").doc(ORG_ID);
+
+  // 1. PART A: Student Register (11th module) allows creating & updating students with extended Phase 9 fields
+  const s1RegStudents = regOrg.collection("schools").doc(SCHOOL_1).collection("students");
+  await assertSucceeds(s1RegStudents.doc("stu_p9_reg_1").set({
+    schoolId: SCHOOL_1,
+    classId: "cls_3rd",
+    session: "2026-2027",
+    admNo: "ADM-P9-01",
+    name: "Ananya Tiwari",
+    fatherName: "Manoj Tiwari",
+    motherName: "Kavita Tiwari",
+    dob: "2017-03-14",
+    mobile: "9839100001",
+    secondMobile: "9839100002",
+    address: "Civil Lines, Ghazipur",
+    photoBase64: "",
+    className: "3rd",
+    section: "A",
+    rollNo: 5,
+    admissionDate: "2026-04-02",
+    previousSchool: "Little Angels School",
+    siblingGroupId: "FAM_ADM_P9_01",
+    usesTransport: true,
+    transportRouteName: "Route 2 - Lanka",
+    transportMonthlyAmount: 450,
+    status: "ACTIVE",
+    leftDate: "",
+    leftReason: "",
+    sample: false,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+
+  // Student Register editor can change status to LEFT with date & reason
+  await assertSucceeds(s1RegStudents.doc("stu_p9_reg_1").update({
+    status: "LEFT",
+    leftDate: "2026-10-15",
+    leftReason: "Transferred to Varanasi",
+    updatedAt: ts,
+  }));
+
+  // Fee Viewer (studentRegister: 'view', students: 'none') CAN read students, CANNOT edit
+  await assertSucceeds(viewerOrg.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_p9_reg_1").get());
+  await assertFails(viewerOrg.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_p9_reg_1").update({
+    section: "B",
+    updatedAt: ts,
+  }));
+
+  // Legacy member without 'students', 'studentRegister', or 'fees' view CANNOT read students
+  await assertFails(legacyOrg.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_p9_reg_1").get());
+
+  // 2. PART B: Fee Structure & Student Fee Overrides (10th module 'fees')
+  const structureDocId = `fstr_${SCHOOL_1}_2026_2027`;
+  const makeStructure = (uid, maxConcPct = 20) => ({
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    monthOrder: ["APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR"],
+    chargedTuitionMonths: ["APR", "MAY", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR"],
+    chargedTransportMonths: ["APR", "MAY", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR"],
+    tuitionByClassAndMonth: {
+      "3rd": { DEFAULT: 800, JUL: 800 },
+    },
+    examFees: [
+      { examHeadKey: "EXAM_UT1", monthCode: "JUL", amountByClass: { "3rd": 150 } },
+      { examHeadKey: "EXAM_HY", monthCode: "OCT", amountByClass: { "3rd": 250 } },
+    ],
+    optionalCatalogue: [
+      { id: "cat_tie", name: "Tie", price: 60, classFilter: [], hidden: false },
+      { id: "cat_belt", name: "Belt", price: 80, classFilter: [], hidden: false },
+    ],
+    frozenPastCellAmountsByClass: {},
+    maxConcessionPercentWithoutAdminApproval: maxConcPct,
+    messageTemplates: {
+      feeDueTemplate: "Dear {guardian}, fee of Rs. {amount} for {student} is due.",
+      feeReceiptTemplate: "Received Rs. {amount} for {student}.",
+      generalTemplate: "Update from {school}.",
+    },
+    updatedByUid: uid,
+    updatedByName: "Mr. Fee Clerk",
+    clientEditedAtMs: Date.now() - 500,
+    createdAt: ts,
+    updatedAt: ts,
+  });
+
+  // Fee Clerk (fees: 'edit', SCHOOL_1) CAN save FeeStructure & StudentFeeOverride in SCHOOL_1, REFUSED in SCHOOL_2
+  await assertSucceeds(clerkOrg.collection("feeStructures").doc(structureDocId).set(makeStructure(FEE_CLERK, 20)));
+  await assertFails(clerkOrg.collection("feeStructures").doc(`fstr_${SCHOOL_2}_2026_2027`).set({
+    ...makeStructure(FEE_CLERK, 20),
+    schoolId: SCHOOL_2,
+  }));
+
+  await assertSucceeds(clerkOrg.collection("studentFeeOverrides").doc(`fovr_${SCHOOL_1}_2026_2027_stu_1`).set({
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    studentId: "stu_1",
+    studentName: "Aarav Sharma",
+    cellOverrides: { "ALL|TUITION": 650 },
+    remark: "Staff ward concession rate",
+    updatedByUid: FEE_CLERK,
+    updatedByName: "Mr. Fee Clerk",
+    clientEditedAtMs: Date.now() - 300,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+
+  // Override WITHOUT a remark is REJECTED by rules
+  await assertFails(clerkOrg.collection("studentFeeOverrides").doc("fovr_empty_remark").set({
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    studentId: "stu_1",
+    studentName: "Aarav Sharma",
+    cellOverrides: { "ALL|TUITION": 650 },
+    remark: "",
+    updatedByUid: FEE_CLERK,
+    updatedByName: "Mr. Fee Clerk",
+    clientEditedAtMs: Date.now() - 300,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+
+  // 3. PART C & PART E: Fee Receipts — positive amounts, concession limit, immutability, cancel-only
+  const makeReceiptPayload = (uid, overrides = {}) => ({
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    receiptNumber: "RCP-2627-A1B-0001",
+    deviceNodeCode: "A1B",
+    sequenceNo: 1,
+    receiptDateIso: "2026-07-10",
+    studentId: "stu_p9_reg_1",
+    studentName: "Ananya Tiwari",
+    studentAdmNo: "ADM-P9-01",
+    fatherName: "Manoj Tiwari",
+    className: "3rd",
+    section: "A",
+    rollNo: 5,
+    lineItems: [
+      {
+        lineId: "GRID_JUL_TUITION",
+        lineType: "GRID_CELL",
+        monthCode: "JUL",
+        headKey: "TUITION",
+        title: "July Tuition Fee",
+        quantity: 1,
+        unitPrice: 800,
+        lineGrossAmount: 800,
+        concessionAllocated: 80,
+        netPayableOnLine: 720,
+        paidAllocated: 720,
+        balanceDueAfterLine: 0,
+        catalogueItemId: "",
+        saveToCatalogue: false,
+      },
+    ],
+    totalBeforeConcession: 800,
+    concessionMode: "PERCENTAGE",
+    concessionScope: "WHOLE_RECEIPT",
+    concessionTargetLineId: "",
+    concessionInputValue: 10,
+    concessionAmount: 80,
+    concessionRemark: "Sibling concession",
+    concessionGivenByUid: uid,
+    concessionGivenByName: "Mr. Fee Clerk",
+    concessionApprovedByAdminUid: "",
+    concessionApprovedByAdminName: "",
+    netPayableAmount: 720,
+    amountPaid: 720,
+    balanceDueOnReceipt: 0,
+    paymentMode: "CASH",
+    paymentNote: "Paid at counter",
+    status: "ISSUED",
+    receivedByUid: uid,
+    receivedByName: "Mr. Fee Clerk",
+    issuedAtMs: Date.now() - 200,
+    cancelledAtMs: 0,
+    cancelledByUid: "",
+    cancelledByName: "",
+    cancelReason: "",
+    createdAt: ts,
+    updatedAt: ts,
+    ...overrides,
+  });
+
+  // 3a. Clerk CAN issue a valid receipt with 10% concession (within 20% limit)
+  const rcpDocId = `frcp_${SCHOOL_1}_2026_2027_RCP_2627_A1B_0001`;
+  await assertSucceeds(clerkOrg.collection("feeReceipts").doc(rcpDocId).set(makeReceiptPayload(FEE_CLERK)));
+
+  // 3b. View-only member CANNOT create or cancel a receipt, but CAN read receipts & structures
+  await assertSucceeds(viewerOrg.collection("feeStructures").doc(structureDocId).get());
+  await assertSucceeds(viewerOrg.collection("feeReceipts").doc(rcpDocId).get());
+  await assertFails(viewerOrg.collection("feeReceipts").doc("frcp_viewer_try").set(makeReceiptPayload(FEE_VIEWER)));
+  await assertFails(viewerOrg.collection("feeReceipts").doc(rcpDocId).update({
+    status: "CANCELLED",
+    cancelledAtMs: Date.now(),
+    cancelledByUid: FEE_VIEWER,
+    cancelledByName: "Ms. Fee Viewer",
+    cancelReason: "Unauthorized cancel",
+    updatedAt: ts,
+  }));
+
+  // 3c. Negative or zero amounts, or mismatched math are REJECTED by rules
+  await assertFails(clerkOrg.collection("feeReceipts").doc("frcp_neg_paid").set(
+    makeReceiptPayload(FEE_CLERK, { amountPaid: -100, balanceDueOnReceipt: 820 })
+  ));
+  await assertFails(clerkOrg.collection("feeReceipts").doc("frcp_zero_paid").set(
+    makeReceiptPayload(FEE_CLERK, { amountPaid: 0, balanceDueOnReceipt: 720 })
+  ));
+  await assertFails(clerkOrg.collection("feeReceipts").doc("frcp_neg_conc").set(
+    makeReceiptPayload(FEE_CLERK, { concessionAmount: -50, netPayableAmount: 850, amountPaid: 850 })
+  ));
+  await assertFails(clerkOrg.collection("feeReceipts").doc("frcp_no_conc_remark").set(
+    makeReceiptPayload(FEE_CLERK, { concessionRemark: "" })
+  ));
+
+  // 3d. Concession above 20% limit by non-admin Clerk WITHOUT admin approval is REJECTED by rules
+  await assertFails(clerkOrg.collection("feeReceipts").doc("frcp_over_limit_no_admin").set(
+    makeReceiptPayload(FEE_CLERK, {
+      concessionInputValue: 30,
+      concessionAmount: 240,
+      netPayableAmount: 560,
+      amountPaid: 560,
+      concessionApprovedByAdminUid: "",
+    })
+  ));
+
+  // Non-admin Clerk forging their own UID as concessionApprovedByAdminUid is REJECTED by rules
+  await assertFails(clerkOrg.collection("feeReceipts").doc("frcp_over_limit_fake_admin").set(
+    makeReceiptPayload(FEE_CLERK, {
+      concessionInputValue: 30,
+      concessionAmount: 240,
+      netPayableAmount: 560,
+      amountPaid: 560,
+      concessionApprovedByAdminUid: FEE_CLERK,
+      concessionApprovedByAdminName: "Self Forged",
+    })
+  ));
+
+  // Concession above 20% limit WITH real active OWNER/ADMIN approval OR issued by OWNER/ADMIN SUCCEEDS
+  await assertSucceeds(clerkOrg.collection("feeReceipts").doc("frcp_over_limit_with_admin").set(
+    makeReceiptPayload(FEE_CLERK, {
+      receiptNumber: "RCP-2627-A1B-0002",
+      sequenceNo: 2,
+      concessionInputValue: 30,
+      concessionAmount: 240,
+      netPayableAmount: 560,
+      amountPaid: 560,
+      concessionApprovedByAdminUid: OWNER_UID,
+      concessionApprovedByAdminName: "Principal A",
+    })
+  ));
+
+  // 3e. Receipt immutability: CANNOT edit amountPaid, receiptNumber, or lineItems on an issued receipt; CANNOT delete receipt
+  await assertFails(clerkOrg.collection("feeReceipts").doc(rcpDocId).update({
+    amountPaid: 500,
+    balanceDueOnReceipt: 220,
+    updatedAt: ts,
+  }));
+  await assertFails(ownerOrg.collection("feeReceipts").doc(rcpDocId).update({
+    receiptNumber: "RCP-TAMPERED-9999",
+    updatedAt: ts,
+  }));
+  await assertFails(clerkOrg.collection("feeReceipts").doc(rcpDocId).delete());
+  await assertFails(ownerOrg.collection("feeReceipts").doc(rcpDocId).delete());
+
+  // 3f. Cancelling a receipt without a reason FAILS; cancelling with a reason SUCCEEDS; re-cancelling or reverting FAILS
+  await assertFails(clerkOrg.collection("feeReceipts").doc(rcpDocId).update({
+    status: "CANCELLED",
+    cancelledAtMs: Date.now(),
+    cancelledByUid: FEE_CLERK,
+    cancelledByName: "Mr. Fee Clerk",
+    cancelReason: "",
+    updatedAt: ts,
+  }));
+  await assertSucceeds(clerkOrg.collection("feeReceipts").doc(rcpDocId).update({
+    status: "CANCELLED",
+    cancelledAtMs: Date.now(),
+    cancelledByUid: FEE_CLERK,
+    cancelledByName: "Mr. Fee Clerk",
+    cancelReason: "Entered wrong payment mode, reissuing as UPI",
+    updatedAt: ts,
+  }));
+  await assertFails(clerkOrg.collection("feeReceipts").doc(rcpDocId).update({
+    status: "ISSUED",
+    cancelledAtMs: 0,
+    cancelledByUid: "",
+    cancelledByName: "",
+    cancelReason: "",
+    updatedAt: ts,
+  }));
+
+  // 4. PART D2: Send Queue message sent logs, Notice Maker & Append-Only Fee Audit Logs
+  const msgLogId = `fmsg_${SCHOOL_1}_2026_2027_stu_p9_reg_1_FEE_DUE_REMINDER_DUE_2026_11`;
+  await assertSucceeds(clerkOrg.collection("feeMessageSentLogs").doc(msgLogId).set({
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    studentId: "stu_p9_reg_1",
+    studentName: "Ananya Tiwari",
+    className: "3rd",
+    section: "A",
+    guardianName: "Manoj Tiwari",
+    normalizedMobile: "+919839100001",
+    messageType: "FEE_DUE_REMINDER",
+    contextKey: "DUE_2026_11",
+    messageText: "Dear Manoj Tiwari, fee of Rs. 800 is due.",
+    channel: "WHATSAPP",
+    sentByUid: FEE_CLERK,
+    sentByName: "Mr. Fee Clerk",
+    sentAtMs: Date.now() - 100,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+
+  const noticeId = "not_p9_001";
+  await assertSucceeds(clerkOrg.collection("schoolNotices").doc(noticeId).set({
+    schoolId: SCHOOL_1,
+    title: "Winter Timings Notice",
+    bodyText: "School will open at 8:30 AM from Monday.",
+    noticeDateIso: "2026-11-23",
+    createdByUid: FEE_CLERK,
+    createdByName: "Mr. Fee Clerk",
+    createdAtMs: Date.now() - 100,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+
+  const auditId = "faud_p9_001";
+  await assertSucceeds(clerkOrg.collection("feeAuditLogs").doc(auditId).set({
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    action: "RECEIPT_ISSUED",
+    targetId: rcpDocId,
+    studentId: "stu_p9_reg_1",
+    studentName: "Ananya Tiwari",
+    summary: "Issued RCP-2627-A1B-0001 for Ananya Tiwari: Paid Rs. 720",
+    actorUid: FEE_CLERK,
+    actorName: "Mr. Fee Clerk",
+    clientCreatedAtMs: Date.now() - 100,
+    createdAt: ts,
+  }));
+  // Fee audit logs are strictly append-only (update & delete denied even for Owner)
+  await assertFails(ownerOrg.collection("feeAuditLogs").doc(auditId).update({ summary: "Altered" }));
+  await assertFails(ownerOrg.collection("feeAuditLogs").doc(auditId).delete());
+
+  // 5. No-access members (including legacy 9-key member and Register-only member) & Cross-Org Outsider DENIED on all Fees collections
+  await assertFails(regOrg.collection("feeStructures").get());
+  await assertFails(regOrg.collection("feeReceipts").get());
+  await assertFails(legacyOrg.collection("feeStructures").get());
+  await assertFails(legacyOrg.collection("feeReceipts").get());
+  await assertFails(outsiderOrg.collection("feeStructures").get());
+  await assertFails(outsiderOrg.collection("feeReceipts").get());
+  await assertFails(outsiderOrg.collection("studentFeeOverrides").get());
+  await assertFails(outsiderOrg.collection("feeMessageSentLogs").get());
+  await assertFails(outsiderOrg.collection("schoolNotices").get());
+  await assertFails(outsiderOrg.collection("feeAuditLogs").get());
+});
+
+
 
 
 

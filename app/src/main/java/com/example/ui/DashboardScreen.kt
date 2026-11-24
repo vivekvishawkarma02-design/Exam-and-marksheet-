@@ -19,11 +19,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.AssignmentLate
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Description
@@ -111,6 +113,8 @@ fun DashboardScreen(
     onNavigateToTeacherAttendance: () -> Unit = {},
     onNavigateToStudentAttendance: (String?, String?) -> Unit = { _, _ -> },
     onTakeStudentAttendanceSection: (String, String, String, String) -> Unit = { _, _, _, _ -> },
+    onNavigateToStudentRegister: () -> Unit = {},
+    onNavigateToFeeManagement: () -> Unit = {},
     onOpenPendingMarksItem: (PendingMarksItem) -> Unit = {},
     onOpenCoScholasticSection: (String, String, String) -> Unit = { _, _, _ -> },
     onEditOwnTeacherProfile: () -> Unit = {},
@@ -228,6 +232,30 @@ fun DashboardScreen(
                     accent = secondaryColor,
                     testTag = "tile_students",
                     onClick = onNavigateToStudents
+                )
+            )
+        }
+        if (uiState.canViewFees) {
+            add(
+                QuickActionSpec(
+                    title = "Fee Management",
+                    subtitle = if (uiState.canEditFees) "Collect, receipts, dues & queue" else "View fee accounts & reports",
+                    icon = Icons.Default.AccountBalanceWallet,
+                    accent = primaryColor,
+                    testTag = "tile_fee_management",
+                    onClick = onNavigateToFeeManagement
+                )
+            )
+        }
+        if (uiState.canViewStudentRegister) {
+            add(
+                QuickActionSpec(
+                    title = "Student Register",
+                    subtitle = if (uiState.canEditStudentRegister) "Transport, siblings, ID cards" else "View register & ID cards",
+                    icon = Icons.Default.Badge,
+                    accent = secondaryColor,
+                    testTag = "tile_student_register",
+                    onClick = onNavigateToStudentRegister
                 )
             )
         }

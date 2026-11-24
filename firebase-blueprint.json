@@ -133,7 +133,7 @@
     },
     "Student": {
       "title": "Student",
-      "description": "Student record scoped to a single school within an organisation.",
+      "description": "Student record scoped to a single school within an organisation, including Phase 9 Student Register fields (photo, parents, primary & second mobile, address, DOB, admission no & date, previous school, sibling link, transport route & monthly fee, active/left status).",
       "type": "object",
       "properties": {
         "schoolId": { "type": "string" },
@@ -145,11 +145,21 @@
         "motherName": { "type": "string" },
         "dob": { "type": "string" },
         "mobile": { "type": "string" },
+        "secondMobile": { "type": "string" },
         "address": { "type": "string" },
         "photoBase64": { "type": "string" },
         "className": { "type": "string" },
         "section": { "type": "string" },
         "rollNo": { "type": "integer" },
+        "admissionDate": { "type": "string" },
+        "previousSchool": { "type": "string" },
+        "siblingGroupId": { "type": "string" },
+        "usesTransport": { "type": "boolean" },
+        "transportRouteName": { "type": "string" },
+        "transportMonthlyAmount": { "type": "integer" },
+        "status": { "type": "string", "enum": ["ACTIVE", "LEFT"] },
+        "leftDate": { "type": "string" },
+        "leftReason": { "type": "string" },
         "sample": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -518,6 +528,158 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["attendanceDocId", "schoolId", "session", "className", "section", "date", "editorUid", "editorName", "summary", "changes", "clientEditedAtMs", "createdAt"]
+    },
+    "FeeStructure": {
+      "title": "FeeStructure",
+      "description": "Per-school and session fee structure configuring month order, charged months, monthly tuition per class, exam fees & months, optional items catalogue, concession approval limit, and message templates.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "monthOrder": { "type": "array" },
+        "chargedTuitionMonths": { "type": "array" },
+        "chargedTransportMonths": { "type": "array" },
+        "tuitionByClassAndMonth": { "type": "object" },
+        "examFees": { "type": "array" },
+        "optionalCatalogue": { "type": "array" },
+        "frozenPastCellAmountsByClass": { "type": "object" },
+        "maxConcessionPercentWithoutAdminApproval": { "type": "integer" },
+        "messageTemplates": { "type": "object" },
+        "updatedByUid": { "type": "string" },
+        "updatedByName": { "type": "string" },
+        "clientEditedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "session", "monthOrder", "chargedTuitionMonths", "chargedTransportMonths", "tuitionByClassAndMonth", "examFees", "optionalCatalogue", "frozenPastCellAmountsByClass", "maxConcessionPercentWithoutAdminApproval", "messageTemplates", "updatedByUid", "updatedByName", "clientEditedAtMs", "createdAt", "updatedAt"]
+    },
+    "StudentFeeOverride": {
+      "title": "StudentFeeOverride",
+      "description": "Per-student fee amount overrides with mandatory remark.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "cellOverrides": { "type": "object" },
+        "remark": { "type": "string" },
+        "updatedByUid": { "type": "string" },
+        "updatedByName": { "type": "string" },
+        "clientEditedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "session", "studentId", "studentName", "cellOverrides", "remark", "updatedByUid", "updatedByName", "clientEditedAtMs", "createdAt", "updatedAt"]
+    },
+    "FeeReceipt": {
+      "title": "FeeReceipt",
+      "description": "Immutable fee receipt record with running offline-safe receipt number per school and session. Never deleted or edited after issuance; can only transition from ISSUED to CANCELLED with a mandatory cancelReason.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "receiptNumber": { "type": "string" },
+        "deviceNodeCode": { "type": "string" },
+        "sequenceNo": { "type": "integer" },
+        "receiptDateIso": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentAdmNo": { "type": "string" },
+        "fatherName": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "rollNo": { "type": "integer" },
+        "lineItems": { "type": "array" },
+        "totalBeforeConcession": { "type": "integer" },
+        "concessionMode": { "type": "string", "enum": ["NONE", "RUPEES", "PERCENTAGE"] },
+        "concessionScope": { "type": "string", "enum": ["WHOLE_RECEIPT", "SINGLE_LINE"] },
+        "concessionTargetLineId": { "type": "string" },
+        "concessionInputValue": { "type": "number" },
+        "concessionAmount": { "type": "integer" },
+        "concessionRemark": { "type": "string" },
+        "concessionGivenByUid": { "type": "string" },
+        "concessionGivenByName": { "type": "string" },
+        "concessionApprovedByAdminUid": { "type": "string" },
+        "concessionApprovedByAdminName": { "type": "string" },
+        "netPayableAmount": { "type": "integer" },
+        "amountPaid": { "type": "integer" },
+        "balanceDueOnReceipt": { "type": "integer" },
+        "paymentMode": { "type": "string", "enum": ["CASH", "UPI", "CHEQUE", "OTHER"] },
+        "paymentNote": { "type": "string" },
+        "status": { "type": "string", "enum": ["ISSUED", "CANCELLED"] },
+        "receivedByUid": { "type": "string" },
+        "receivedByName": { "type": "string" },
+        "issuedAtMs": { "type": "integer" },
+        "cancelledAtMs": { "type": "integer" },
+        "cancelledByUid": { "type": "string" },
+        "cancelledByName": { "type": "string" },
+        "cancelReason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "session", "receiptNumber", "deviceNodeCode", "sequenceNo", "receiptDateIso", "studentId", "studentName", "studentAdmNo", "fatherName", "className", "section", "rollNo", "lineItems", "totalBeforeConcession", "concessionMode", "concessionScope", "concessionTargetLineId", "concessionInputValue", "concessionAmount", "concessionRemark", "concessionGivenByUid", "concessionGivenByName", "concessionApprovedByAdminUid", "concessionApprovedByAdminName", "netPayableAmount", "amountPaid", "balanceDueOnReceipt", "paymentMode", "paymentNote", "status", "receivedByUid", "receivedByName", "issuedAtMs", "cancelledAtMs", "cancelledByUid", "cancelledByName", "cancelReason", "createdAt", "updatedAt"]
+    },
+    "FeeMessageSentLog": {
+      "title": "FeeMessageSentLog",
+      "description": "Deterministic record of a guardian fee message marked as sent via WhatsApp or SMS from the user's phone.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "guardianName": { "type": "string" },
+        "normalizedMobile": { "type": "string" },
+        "messageType": { "type": "string", "enum": ["FEE_DUE_REMINDER", "FEE_RECEIPT", "GENERAL"] },
+        "contextKey": { "type": "string" },
+        "messageText": { "type": "string" },
+        "channel": { "type": "string" },
+        "sentByUid": { "type": "string" },
+        "sentByName": { "type": "string" },
+        "sentAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "session", "studentId", "studentName", "className", "section", "guardianName", "normalizedMobile", "messageType", "contextKey", "messageText", "channel", "sentByUid", "sentByName", "sentAtMs", "createdAt", "updatedAt"]
+    },
+    "SchoolNotice": {
+      "title": "SchoolNotice",
+      "description": "School notice created in the Notice Maker for copying/sharing to class WhatsApp groups.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "title": { "type": "string" },
+        "bodyText": { "type": "string" },
+        "noticeDateIso": { "type": "string" },
+        "createdByUid": { "type": "string" },
+        "createdByName": { "type": "string" },
+        "createdAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "title", "bodyText", "noticeDateIso", "createdByUid", "createdByName", "createdAtMs", "createdAt", "updatedAt"]
+    },
+    "FeeAuditLog": {
+      "title": "FeeAuditLog",
+      "description": "Append-only fee audit trail recording receipt issuance, receipt cancellation, fee structure edits, and per-student overrides.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "action": { "type": "string" },
+        "targetId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "summary": { "type": "string" },
+        "actorUid": { "type": "string" },
+        "actorName": { "type": "string" },
+        "clientCreatedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "session", "action", "targetId", "studentId", "studentName", "summary", "actorUid", "actorName", "clientCreatedAtMs", "createdAt"]
     }
   },
   "firestore": {
@@ -628,6 +790,30 @@
     "/organisations/{orgId}/studentAttendanceEditLogs/{logId}": {
       "schema": { "$ref": "#/entities/StudentAttendanceEditLog" },
       "description": "Append-only edit history for post-day/subsequent edits to student attendance."
+    },
+    "/organisations/{orgId}/feeStructures/{structureId}": {
+      "schema": { "$ref": "#/entities/FeeStructure" },
+      "description": "Per-school and session fee structure controlled by the 10th Fees module."
+    },
+    "/organisations/{orgId}/studentFeeOverrides/{overrideId}": {
+      "schema": { "$ref": "#/entities/StudentFeeOverride" },
+      "description": "Per-student fee overrides with mandatory remark controlled by the 10th Fees module."
+    },
+    "/organisations/{orgId}/feeReceipts/{receiptId}": {
+      "schema": { "$ref": "#/entities/FeeReceipt" },
+      "description": "Immutable fee receipts controlled by the 10th Fees module."
+    },
+    "/organisations/{orgId}/feeMessageSentLogs/{logId}": {
+      "schema": { "$ref": "#/entities/FeeMessageSentLog" },
+      "description": "Guardian message sent logs for the Send Queue controlled by the 10th Fees module."
+    },
+    "/organisations/{orgId}/schoolNotices/{noticeId}": {
+      "schema": { "$ref": "#/entities/SchoolNotice" },
+      "description": "School notices created in Notice Maker controlled by the 10th Fees module."
+    },
+    "/organisations/{orgId}/feeAuditLogs/{auditId}": {
+      "schema": { "$ref": "#/entities/FeeAuditLog" },
+      "description": "Append-only fee audit trail controlled by the 10th Fees module."
     }
   }
 }

@@ -361,7 +361,9 @@ data class CloudSchoolRecord(
     val printClassTeacherNameOnReports: Boolean = false,
     val checkReportCardsReadyBeforeBatch: Boolean = false,
     val openExamsForTeachers: List<String> = Phase7AccessEvaluator.ALL_EXAM_KEYS,
-    val classTeacherNamesBySection: Map<String, String> = emptyMap()
+    val classTeacherNamesBySection: Map<String, String> = emptyMap(),
+    val autoFillReportAttendance: Boolean = false,
+    val classTeacherAttendanceEditDaysBack: Int = 7
 ) {
     fun toSchoolEntity(): SchoolEntity = SchoolEntity(
         id = stableId,
@@ -462,6 +464,7 @@ data class CloudTermInfoRecord(
     val schoolDocId: String,
     val studentDocId: String,
     val entity: TermInfoEntity,
+    val attendanceManualOverride: Boolean? = null,
     val createdAt: Timestamp? = null
 )
 

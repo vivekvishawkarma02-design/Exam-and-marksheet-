@@ -704,6 +704,106 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            // 2.75 PHASE 8: PER-SCHOOL STUDENT ATTENDANCE SETTINGS
+            item {
+                val schDocId = uiState.activeSchoolDocId
+                val autoFillAttendance = uiState.activeSchoolAutoFillAttendance
+                val savedDaysBack = uiState.activeSchoolClassTeacherDaysBack
+                var daysBackText by remember(schDocId, savedDaysBack) { mutableStateOf(savedDaysBack.toString()) }
+
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.testTag("settings_student_attendance_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Student Attendance Settings (${activeSchool.name})",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Controls how daily student attendance links to report cards and how many past days a Class Teacher may edit.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Fill report card attendance automatically from daily attendance",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "OFF by default so existing report cards stay untouched. When ON, manually typed values remain protected with a Manual badge.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = autoFillAttendance,
+                                onCheckedChange = { checked ->
+                                    if (schDocId.isNotBlank()) {
+                                        viewModel.updateSchoolAttendanceSettings(
+                                            schoolDocId = schDocId,
+                                            autoFillReportAttendance = checked,
+                                            classTeacherDaysBack = (daysBackText.toIntOrNull() ?: savedDaysBack).coerceIn(0, 365)
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.testTag("toggle_autofill_report_attendance")
+                            )
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = daysBackText,
+                                onValueChange = { daysBackText = it.filter(Char::isDigit).take(3) },
+                                label = { Text("Class teacher edit limit (days back)") },
+                                supportingText = { Text("Default 7 days (0–365). Admins always have unlimited access.") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("input_class_teacher_days_back")
+                            )
+                            Button(
+                                onClick = {
+                                    val days = (daysBackText.toIntOrNull() ?: 7).coerceIn(0, 365)
+                                    daysBackText = days.toString()
+                                    if (schDocId.isNotBlank()) {
+                                        viewModel.updateSchoolAttendanceSettings(
+                                            schoolDocId = schDocId,
+                                            autoFillReportAttendance = autoFillAttendance,
+                                            classTeacherDaysBack = days
+                                        )
+                                    }
+                                },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("save_class_teacher_days_back_button")
+                            ) {
+                                Text("Save")
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // 3. EDITABLE SUBJECT LISTS PER CLASS GROUP (for active school)

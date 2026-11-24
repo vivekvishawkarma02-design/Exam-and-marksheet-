@@ -24,7 +24,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FactCheck
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -92,12 +94,24 @@ fun CoScholasticScreen(
     var promotedTo by remember { mutableStateOf("") }
     var reportDate by remember { mutableStateOf("") }
     var attendanceError by remember { mutableStateOf<String?>(null) }
+    var confirmOverwriteManual by remember { mutableStateOf(false) }
 
     val existingInfo = student?.let { uiState.termInfoForStudent(it.id, selectedTerm) }
+    val effectiveAtt = student?.let { uiState.effectiveTermAttendanceForStudent(it.id, selectedTerm) }
 
-    LaunchedEffect(student?.id, selectedTerm, existingInfo) {
-        daysPresentText = existingInfo?.daysPresent?.takeIf { it > 0 }?.toString() ?: ""
-        workingDaysText = existingInfo?.workingDays?.takeIf { it > 0 }?.toString() ?: ""
+    LaunchedEffect(student?.id, selectedTerm, existingInfo, effectiveAtt) {
+        val initPresent = if (uiState.activeSchoolAutoFillAttendance && effectiveAtt != null) {
+            effectiveAtt.daysPresent
+        } else {
+            existingInfo?.daysPresent ?: 0
+        }
+        val initWorking = if (uiState.activeSchoolAutoFillAttendance && effectiveAtt != null) {
+            effectiveAtt.workingDays
+        } else {
+            existingInfo?.workingDays ?: 0
+        }
+        daysPresentText = initPresent.takeIf { it > 0 }?.toString() ?: ""
+        workingDaysText = initWorking.takeIf { it > 0 }?.toString() ?: ""
         remarks = existingInfo?.remarks ?: ""
         val suggestedNext = if (selectedTerm == 2 && student != null) {
             DefaultSchoolTemplate.suggestNextClassName(student.className, uiState.activeSchoolClassNames)
@@ -233,13 +247,14 @@ fun CoScholasticScreen(
             }
         } else {
             val coMap = uiState.coScholasticMapForStudent(student.id, selectedTerm)
-            val otherTermInfo = uiState.termInfoForStudent(student.id, if (selectedTerm == 1) 2 else 1)
+            val otherTermNo = if (selectedTerm == 1) 2 else 1
+            val otherTermEff = uiState.effectiveTermAttendanceForStudent(student.id, otherTermNo)
             val curPresent = daysPresentText.toIntOrNull() ?: 0
             val curWorking = workingDaysText.toIntOrNull() ?: 0
             val liveAttendance = if (selectedTerm == 1) {
-                AttendanceSummary(curPresent, curWorking, otherTermInfo?.daysPresent ?: 0, otherTermInfo?.workingDays ?: 0)
+                AttendanceSummary(curPresent, curWorking, otherTermEff.daysPresent, otherTermEff.workingDays)
             } else {
-                AttendanceSummary(otherTermInfo?.daysPresent ?: 0, otherTermInfo?.workingDays ?: 0, curPresent, curWorking)
+                AttendanceSummary(otherTermEff.daysPresent, otherTermEff.workingDays, curPresent, curWorking)
             }
 
             LazyColumn(
@@ -356,11 +371,63 @@ fun CoScholasticScreen(
                             modifier = Modifier.padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Text(
-                                text = "Attendance & Term-$selectedTerm Details",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Attendance & Term-$selectedTerm Details",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (uiState.activeSchoolAutoFillAttendance && effectiveAtt != null) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (effectiveAtt.isManual) AbsentAmberContainer else PassGreenContainer,
+                                        modifier = Modifier.testTag("coscholastic_attendance_source_badge")
+                                    ) {
+                                        Text(
+                                            text = if (effectiveAtt.isManual) "Manual" else "Auto from Daily",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (effectiveAtt.isManual) AbsentAmber else PassGreen,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (canEditCoScholastic && uiState.canAccessStudentAttendance) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    val dailyComp = uiState.computeStudentTermAttendance(student.id, selectedTerm)
+                                    Text(
+                                        text = "Daily attendance total: ${dailyComp.formattedRawDaysPresent()} / ${dailyComp.totalWorkingDays}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(
+                                        onClick = {
+                                            if (effectiveAtt?.isManual == true) {
+                                                confirmOverwriteManual = true
+                                            } else {
+                                                viewModel.recalculateStudentTermAttendance(student.id, selectedTerm)
+                                            }
+                                        },
+                                        modifier = Modifier.testTag("coscholastic_recalc_attendance_button")
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Recalculate")
+                                    }
+                                }
+                            }
 
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
@@ -507,6 +574,27 @@ fun CoScholasticScreen(
                 }
             }
         }
+    }
+
+    if (confirmOverwriteManual && student != null) {
+        AlertDialog(
+            onDismissRequest = { confirmOverwriteManual = false },
+            title = { Text("Overwrite Manual Attendance?") },
+            text = {
+                Text("${student.name} has a manually entered Term-$selectedTerm attendance value. Replace it with the calculated daily attendance total?")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmOverwriteManual = false
+                        viewModel.recalculateStudentTermAttendance(student.id, selectedTerm)
+                    }
+                ) { Text("Overwrite") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmOverwriteManual = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 

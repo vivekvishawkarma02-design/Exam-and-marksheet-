@@ -45,13 +45,17 @@ import com.example.data.cloud.OrgAcademicRepository
 import com.example.data.cloud.OrgCloudRepository
 import com.example.data.cloud.CloudPhase6Snapshot
 import com.example.data.cloud.CloudPhase7Snapshot
+import com.example.data.cloud.CloudPhase8Snapshot
 import com.example.data.cloud.Phase4Repository
 import com.example.data.cloud.Phase6Repository
 import com.example.data.cloud.Phase7Repository
+import com.example.data.cloud.Phase8Repository
 import com.example.data.cloud.StableDocId
+import com.example.data.cloud.TermAttendanceRecalcItem
 import com.example.data.cloud.TimetableRepository
 import com.example.domain.AppModule
 import com.example.domain.AssignmentWarning
+import com.example.domain.AttendanceConflictNotice
 import com.example.domain.AttendanceSummary
 import com.example.domain.AutoGenerateConfig
 import com.example.domain.AutoGenerateEngine
@@ -119,16 +123,37 @@ import com.example.domain.TimetableHardConflict
 import com.example.domain.TimetableUndoSnapshot
 import com.example.domain.WorkloadReportEngine
 import com.example.domain.WorkloadReportPeriodMode
+import com.example.domain.DayCalendarStatus
+import com.example.domain.EffectiveTermAttendance
+import com.example.domain.LowAttendanceStudentRow
+import com.example.domain.SchoolCalendarConfig
+import com.example.domain.SchoolCalendarEngine
+import com.example.domain.SchoolTodayAttendanceSummary
+import com.example.domain.SectionDailyAttendanceStatus
+import com.example.domain.StudentAttendanceAccessEvaluator
+import com.example.domain.StudentAttendanceEditLog
+import com.example.domain.StudentAttendanceEngine
+import com.example.domain.StudentAttendanceEntry
+import com.example.domain.StudentAttendanceSheet
+import com.example.domain.StudentAttendanceStatus
+import com.example.domain.StudentRangeAttendanceSummaryRow
+import com.example.domain.StudentTermAttendanceComputation
+import com.example.domain.WorkingDayExceptionEntry
 import com.example.util.BackupAndCsvManager
 import com.example.util.ClassTimetablePrintBundle
+import com.example.util.DailyAttendancePdfBundle
+import com.example.util.LowAttendancePdfBundle
 import com.example.util.MarksCsvIssue
 import com.example.util.MasterClassSectionRow
 import com.example.util.MasterTimetablePrintBundle
+import com.example.util.MonthlyRegisterPdfBundle
 import com.example.util.OperationType
 import com.example.util.ParsedBackupResult
 import com.example.util.PdfExportHelper
 import com.example.util.PdfReportGenerator
+import com.example.util.StudentAttendancePdfGenerator
 import com.example.util.StudentReportBundle
+import com.example.util.StudentSummaryRangePdfBundle
 import com.example.util.SubstitutionPdfGenerator
 import com.example.util.SubstitutionSlipPrintBundle
 import com.example.util.TeacherAttendanceMonthlyPrintBundle
@@ -275,7 +300,14 @@ data class SchoolUiState(
     val allTeacherScopes: Map<String, TeacherAccessScope> = emptyMap(),
     val teacherAttendanceRecords: List<TeacherAttendanceRecord> = emptyList(),
     val multiSchoolPendingBundles: List<SchoolAcademicBundleForPending> = emptyList(),
-    val schoolRecordsByDocId: Map<String, CloudSchoolRecord> = emptyMap()
+    val schoolRecordsByDocId: Map<String, CloudSchoolRecord> = emptyMap(),
+    // Phase 8: School Calendar & Student Attendance (strictly separate from Teacher Attendance)
+    val schoolCalendars: List<SchoolCalendarConfig> = emptyList(),
+    val studentAttendanceSheets: List<StudentAttendanceSheet> = emptyList(),
+    val studentAttendanceEditLogs: List<StudentAttendanceEditLog> = emptyList(),
+    val attendanceConflictNotices: List<AttendanceConflictNotice> = emptyList(),
+    val termInfoManualOverrideByStudentTerm: Map<Pair<Long, Int>, Boolean?> = emptyMap(),
+    val studentDocIdByLongId: Map<Long, String> = emptyMap()
 ) {
     val activeSchoolDocId: String
         get() = schoolDocIdByLongId[activeSchool.id].orEmpty()
@@ -291,6 +323,266 @@ data class SchoolUiState(
 
     val activeSchoolOpenExams: List<String>
         get() = activeSchoolCloudRecord?.openExamsForTeachers ?: Phase7AccessEvaluator.ALL_EXAM_KEYS
+
+    val activeSchoolAutoFillAttendance: Boolean
+        get() = activeSchoolCloudRecord?.autoFillReportAttendance ?: false
+
+    val activeSchoolClassTeacherDaysBack: Int
+        get() = activeSchoolCloudRecord?.classTeacherAttendanceEditDaysBack
+            ?: StudentAttendanceAccessEvaluator.DEFAULT_CLASS_TEACHER_DAYS_BACK
+
+    val canAccessStudentAttendance: Boolean
+        get() = activeOrg == null || StudentAttendanceAccessEvaluator.canAccessStudentAttendanceModule(
+            member = accessProfile,
+            teacherScope = effectiveOwnTeacherScope
+        )
+
+    fun canEditSchoolCalendar(schoolDocId: String): Boolean =
+        activeOrg == null || StudentAttendanceAccessEvaluator.canEditSchoolCalendar(accessProfile, schoolDocId)
+
+    fun canViewSectionAttendance(schoolDocId: String, className: String, section: String): Boolean =
+        activeOrg == null || StudentAttendanceAccessEvaluator.canViewSectionAttendance(
+            member = accessProfile,
+            teacherScope = effectiveOwnTeacherScope,
+            schoolId = schoolDocId,
+            className = className,
+            section = section
+        )
+
+    fun canEditSectionAttendance(schoolDocId: String, className: String, section: String): Boolean =
+        activeOrg == null || StudentAttendanceAccessEvaluator.canEditSectionAttendance(
+            member = accessProfile,
+            teacherScope = effectiveOwnTeacherScope,
+            schoolId = schoolDocId,
+            className = className,
+            section = section
+        )
+
+    fun hasSavedCalendarForSchool(schoolDocId: String, session: String = filter.session): Boolean =
+        schoolCalendars.any { it.schoolId == schoolDocId && it.session.equals(session, ignoreCase = true) }
+
+    fun calendarForSchool(schoolDocId: String, session: String = filter.session): SchoolCalendarConfig {
+        val saved = schoolCalendars.firstOrNull {
+            it.schoolId == schoolDocId && it.session.equals(session, ignoreCase = true)
+        }
+        if (saved != null) return saved
+        val ps = periodStructuresBySchool[schoolDocId] ?: timetableLayoutsBySchool[schoolDocId]
+        return SchoolCalendarEngine.buildDefaultCalendar(schoolDocId, session, ps)
+    }
+
+    fun studentDocIdFor(studentId: Long): String = studentDocIdByLongId[studentId].orEmpty()
+
+    fun computeStudentTermAttendance(studentId: Long, termNo: Int): StudentTermAttendanceComputation {
+        val student = allStudents.firstOrNull { it.id == studentId }
+        val schDocId = student?.let { schoolDocIdByLongId[it.schoolId] } ?: activeSchoolDocId
+        val ses = student?.session ?: filter.session
+        val cal = calendarForSchool(schDocId, ses)
+        val stuDocId = studentDocIdFor(studentId)
+        if (stuDocId.isBlank() || schDocId.isBlank()) {
+            val (s, e) = SchoolCalendarEngine.termDateRange(cal, termNo)
+            val stats = SchoolCalendarEngine.countWorkingDaysInRange(cal, s, e)
+            return StudentTermAttendanceComputation(
+                termNo = termNo,
+                rawDaysPresent = 0.0,
+                roundedDaysPresent = 0,
+                totalWorkingDays = stats.workingDays,
+                markedDays = 0,
+                presentCount = 0,
+                lateCount = 0,
+                halfDayCount = 0,
+                leaveCount = 0,
+                absentCount = 0
+            )
+        }
+        return StudentAttendanceEngine.computeTermAttendance(
+            studentDocId = stuDocId,
+            schoolId = schDocId,
+            session = ses,
+            termNo = termNo,
+            calendar = cal,
+            sheets = studentAttendanceSheets
+        )
+    }
+
+    fun effectiveTermAttendanceForStudent(studentId: Long, termNo: Int): EffectiveTermAttendance {
+        val student = allStudents.firstOrNull { it.id == studentId }
+        val schDocId = student?.let { schoolDocIdByLongId[it.schoolId] } ?: activeSchoolDocId
+        val autoFillOn = schoolRecordsByDocId[schDocId]?.autoFillReportAttendance ?: false
+        val stored = termInfoForStudent(studentId, termNo)
+        val manualFlag = termInfoManualOverrideByStudentTerm[studentId to termNo]
+        val daily = computeStudentTermAttendance(studentId, termNo)
+        return StudentAttendanceEngine.resolveEffectiveTermAttendance(
+            autoFillSwitchOn = autoFillOn,
+            storedTermInfo = stored,
+            storedManualFlag = manualFlag,
+            dailyComputation = daily
+        )
+    }
+
+    fun computeTodayAttendanceSummaries(todayIso: String = Phase6DateUtils.todayIso()): List<SchoolTodayAttendanceSummary> {
+        val visibleSchools = schools.filter { sch ->
+            val docId = schoolDocIdByLongId[sch.id].orEmpty()
+            docId.isNotBlank() && OrgAccessEvaluator.canAccessSchool(accessProfile, docId)
+        }
+        return visibleSchools.map { sch ->
+            val schDocId = schoolDocIdByLongId[sch.id].orEmpty()
+            val cal = calendarForSchool(schDocId, filter.session)
+            val dayStatus = SchoolCalendarEngine.dayStatus(cal, todayIso)
+            val schStudents = allStudents.filter { it.schoolId == sch.id && it.session == filter.session }
+            val sectionsFromStudents = schStudents
+                .map { it.className to it.section.uppercase().ifBlank { "A" } }
+                .distinct()
+            val sectionsFromAssignments = classAssignments
+                .filter { it.schoolId == schDocId }
+                .map { it.className to it.section.uppercase().ifBlank { "A" } }
+                .distinct()
+            val allSections = (sectionsFromStudents + sectionsFromAssignments).distinct()
+                .sortedWith(compareBy({ it.first.lowercase() }, { it.second }))
+
+            val sectionStatuses = allSections.map { (cls, sec) ->
+                val secStudentsCount = schStudents.count {
+                    it.className.equals(cls, ignoreCase = true) && it.section.equals(sec, ignoreCase = true)
+                }
+                val sheet = studentAttendanceSheets.firstOrNull {
+                    it.schoolId == schDocId &&
+                        it.session.equals(filter.session, ignoreCase = true) &&
+                        it.className.equals(cls, ignoreCase = true) &&
+                        it.section.equals(sec, ignoreCase = true) &&
+                        it.date == todayIso
+                }
+                SectionDailyAttendanceStatus(
+                    schoolDocId = schDocId,
+                    schoolName = sch.name,
+                    className = cls,
+                    section = sec,
+                    date = todayIso,
+                    taken = sheet != null,
+                    totalStudents = sheet?.totalStudents?.takeIf { it > 0 } ?: secStudentsCount,
+                    presentEquivalent = (sheet?.presentCount ?: 0) + (sheet?.lateCount ?: 0),
+                    halfDayCount = sheet?.halfDayCount ?: 0,
+                    absentCount = sheet?.absentCount ?: 0,
+                    leaveCount = sheet?.leaveCount ?: 0,
+                    updatedByName = sheet?.updatedByName.orEmpty()
+                )
+            }
+            val takenList = sectionStatuses.filter { it.taken }
+            val totalMarked = takenList.sumOf { it.totalStudents }
+            val weightedPresent = takenList.sumOf { it.presentEquivalent.toDouble() + it.halfDayCount * 0.5 }
+            SchoolTodayAttendanceSummary(
+                schoolDocId = schDocId,
+                schoolName = sch.name,
+                date = todayIso,
+                dayStatus = dayStatus,
+                totalSections = sectionStatuses.size,
+                sectionsTaken = takenList.size,
+                totalMarkedStudents = totalMarked,
+                weightedPresentStudents = weightedPresent,
+                sectionStatuses = sectionStatuses
+            )
+        }
+    }
+
+    fun computeClassTeacherTodayCards(todayIso: String = Phase6DateUtils.todayIso()): List<SectionDailyAttendanceStatus> {
+        val scope = effectiveOwnTeacherScope ?: return emptyList()
+        return scope.classTeacherSections.mapNotNull { key ->
+            val parts = key.split("|")
+            if (parts.size != 3) return@mapNotNull null
+            val (schDocId, cls, sec) = parts
+            if (!OrgAccessEvaluator.canAccessSchool(accessProfile, schDocId)) return@mapNotNull null
+            val schName = schoolRecordsByDocId[schDocId]?.name ?: activeSchool.name
+            val schLongId = schoolRecordsByDocId[schDocId]?.stableId ?: activeSchool.id
+            val secStudentsCount = allStudents.count {
+                it.schoolId == schLongId &&
+                    it.session == filter.session &&
+                    it.className.equals(cls, ignoreCase = true) &&
+                    it.section.equals(sec, ignoreCase = true)
+            }
+            val sheet = studentAttendanceSheets.firstOrNull {
+                it.schoolId == schDocId &&
+                    it.session.equals(filter.session, ignoreCase = true) &&
+                    it.className.equals(cls, ignoreCase = true) &&
+                    it.section.equals(sec, ignoreCase = true) &&
+                    it.date == todayIso
+            }
+            SectionDailyAttendanceStatus(
+                schoolDocId = schDocId,
+                schoolName = schName,
+                className = cls,
+                section = sec,
+                date = todayIso,
+                taken = sheet != null,
+                totalStudents = sheet?.totalStudents?.takeIf { it > 0 } ?: secStudentsCount,
+                presentEquivalent = (sheet?.presentCount ?: 0) + (sheet?.lateCount ?: 0),
+                halfDayCount = sheet?.halfDayCount ?: 0,
+                absentCount = sheet?.absentCount ?: 0,
+                leaveCount = sheet?.leaveCount ?: 0,
+                updatedByName = sheet?.updatedByName.orEmpty()
+            )
+        }
+    }
+
+    fun computeSectionRangeSummary(
+        schoolDocId: String,
+        className: String,
+        section: String,
+        startDate: String,
+        endDate: String
+    ): List<StudentRangeAttendanceSummaryRow> {
+        val schLongId = schoolRecordsByDocId[schoolDocId]?.stableId ?: activeSchool.id
+        val cal = calendarForSchool(schoolDocId, filter.session)
+        val students = allStudents
+            .filter {
+                it.schoolId == schLongId &&
+                    it.session == filter.session &&
+                    it.className.equals(className, ignoreCase = true) &&
+                    it.section.equals(section, ignoreCase = true)
+            }
+            .mapNotNull { st ->
+                val docId = studentDocIdFor(st.id)
+                if (docId.isBlank()) null else docId to st
+            }
+        return StudentAttendanceEngine.buildSectionRangeSummary(
+            students = students,
+            schoolId = schoolDocId,
+            session = filter.session,
+            calendar = cal,
+            sheets = studentAttendanceSheets,
+            startDate = startDate,
+            endDate = endDate
+        )
+    }
+
+    fun computeLowAttendanceRows(
+        schoolDocIdFilter: String?,
+        classNameFilter: String?,
+        sectionFilter: String?,
+        startDate: String,
+        endDate: String,
+        thresholdPercent: Int
+    ): List<LowAttendanceStudentRow> {
+        val targetSchoolDocId = schoolDocIdFilter ?: activeSchoolDocId
+        val schName = schoolRecordsByDocId[targetSchoolDocId]?.name ?: activeSchool.name
+        val schLongId = schoolRecordsByDocId[targetSchoolDocId]?.stableId ?: activeSchool.id
+        val students = allStudents
+            .filter { it.schoolId == schLongId && it.session == filter.session }
+            .mapNotNull { st ->
+                val docId = studentDocIdFor(st.id)
+                if (docId.isBlank()) null else Triple(targetSchoolDocId, schName, docId to st)
+            }
+        val calMap = mapOf(targetSchoolDocId to calendarForSchool(targetSchoolDocId, filter.session))
+        return StudentAttendanceEngine.buildLowAttendanceList(
+            students = students,
+            session = filter.session,
+            calendarsBySchool = calMap,
+            sheets = studentAttendanceSheets,
+            startDate = startDate,
+            endDate = endDate,
+            thresholdPercent = thresholdPercent,
+            schoolIdFilter = targetSchoolDocId,
+            classNameFilter = classNameFilter,
+            sectionFilter = sectionFilter
+        )
+    }
 
     val isTeacherRestricted: Boolean
         get() = activeOrg != null && Phase7AccessEvaluator.isTeacherRestricted(accessProfile)
@@ -729,13 +1021,27 @@ data class SchoolUiState(
         allTermInfos.firstOrNull { it.studentId == studentId && it.termNo == termNo }
 
     fun attendanceForStudent(studentId: Long): AttendanceSummary {
+        val student = allStudents.firstOrNull { it.id == studentId }
+        val schDocId = student?.let { schoolDocIdByLongId[it.schoolId] } ?: activeSchoolDocId
+        val autoFillOn = schoolRecordsByDocId[schDocId]?.autoFillReportAttendance ?: false
         val t1 = termInfoForStudent(studentId, 1)
         val t2 = termInfoForStudent(studentId, 2)
-        return AttendanceSummary(
-            t1Present = t1?.daysPresent ?: 0,
-            t1Working = t1?.workingDays ?: 0,
-            t2Present = t2?.daysPresent ?: 0,
-            t2Working = t2?.workingDays ?: 0
+        if (!autoFillOn) {
+            return AttendanceSummary(
+                t1Present = t1?.daysPresent ?: 0,
+                t1Working = t1?.workingDays ?: 0,
+                t2Present = t2?.daysPresent ?: 0,
+                t2Working = t2?.workingDays ?: 0
+            )
+        }
+        return StudentAttendanceEngine.buildEffectiveAttendanceSummary(
+            autoFillSwitchOn = true,
+            term1Stored = t1,
+            term1ManualFlag = termInfoManualOverrideByStudentTerm[studentId to 1],
+            term2Stored = t2,
+            term2ManualFlag = termInfoManualOverrideByStudentTerm[studentId to 2],
+            term1Daily = computeStudentTermAttendance(studentId, 1),
+            term2Daily = computeStudentTermAttendance(studentId, 2)
         )
     }
 
@@ -869,6 +1175,7 @@ class SchoolViewModel(
     private val timetableRepo: TimetableRepository,
     private val phase6Repo: Phase6Repository,
     private val phase7Repo: Phase7Repository,
+    private val phase8Repo: Phase8Repository,
     private val localRepo: ReportCardRepository,
     private val connectivityMonitor: NetworkConnectivityMonitor,
     private val offlinePrefs: OfflinePrefsStore
@@ -924,6 +1231,8 @@ class SchoolViewModel(
     private val _timetableSnapshot = MutableStateFlow(CloudTimetableSnapshot())
     private val _phase6Snapshot = MutableStateFlow(CloudPhase6Snapshot())
     private val _phase7Snapshot = MutableStateFlow(CloudPhase7Snapshot())
+    private val _phase8Snapshot = MutableStateFlow(CloudPhase8Snapshot())
+    private val _attendanceConflicts = MutableStateFlow<List<AttendanceConflictNotice>>(emptyList())
     private val _multiSchoolPendingBundles = MutableStateFlow<List<SchoolAcademicBundleForPending>>(emptyList())
     private val _orgMembers = MutableStateFlow<List<CloudMember>>(emptyList())
     private val _joinRequests = MutableStateFlow<List<CloudJoinRequest>>(emptyList())
@@ -955,12 +1264,9 @@ class SchoolViewModel(
     }
 
     private val combinedSyncErrorFlow = combine(
-        academicRepo.syncError,
-        phase4Repo.syncError,
-        timetableRepo.syncError,
-        phase6Repo.syncError,
-        phase7Repo.syncError
-    ) { acadErr, p4Err, ttErr, p6Err, p7Err -> acadErr ?: p4Err ?: ttErr ?: p6Err ?: p7Err }
+        combine(academicRepo.syncError, phase4Repo.syncError, timetableRepo.syncError) { a, b, c -> a ?: b ?: c },
+        combine(phase6Repo.syncError, phase7Repo.syncError, phase8Repo.syncError) { d, e, f -> d ?: e ?: f }
+    ) { left, right -> left ?: right }
 
     private val phase4To6Flow = combine(
         _phase4Snapshot,
@@ -972,12 +1278,14 @@ class SchoolViewModel(
         Phase4And5Bundle(p4, tt, ttConflicts, p6, p6Conflicts)
     }
 
-    private val phase4To7Flow = combine(
+    private val phase4To8Flow = combine(
         phase4To6Flow,
         _phase7Snapshot,
-        _multiSchoolPendingBundles
-    ) { p46, p7, pendingBundles ->
-        Triple(p46, p7, pendingBundles)
+        _multiSchoolPendingBundles,
+        _phase8Snapshot,
+        _attendanceConflicts
+    ) { p46, p7, pendingBundles, p8, attConflicts ->
+        Phase7And8Bundle(p46, p7, pendingBundles, p8, attConflicts)
     }
 
     private val syncExtrasFlow = combine(
@@ -995,20 +1303,22 @@ class SchoolViewModel(
         _joinRequests,
         _inviteCodes,
         _auditLogs,
-        phase4To7Flow
-    ) { members, reqs, invites, logs, (p46, p7, pendingBundles) ->
+        phase4To8Flow
+    ) { members, reqs, invites, logs, p78 ->
         AdminAndPhase4Bundle(
             members = members,
             joinRequests = reqs,
             inviteCodes = invites,
             auditLogs = logs,
-            phase4 = p46.phase4,
-            timetable = p46.timetable,
-            timetableConflicts = p46.timetableConflicts,
-            phase6 = p46.phase6,
-            phase6Conflicts = p46.phase6Conflicts,
-            phase7 = p7,
-            multiSchoolPendingBundles = pendingBundles
+            phase4 = p78.p46.phase4,
+            timetable = p78.p46.timetable,
+            timetableConflicts = p78.p46.timetableConflicts,
+            phase6 = p78.p46.phase6,
+            phase6Conflicts = p78.p46.phase6Conflicts,
+            phase7 = p78.phase7,
+            multiSchoolPendingBundles = p78.multiSchoolPendingBundles,
+            phase8 = p78.phase8,
+            attendanceConflicts = p78.attendanceConflicts
         )
     }
 
@@ -1048,7 +1358,8 @@ class SchoolViewModel(
             admin.phase4.pendingWriteCount +
             admin.timetable.pendingWriteCount +
             admin.phase6.pendingWriteCount +
-            admin.phase7.pendingWriteCount
+            admin.phase7.pendingWriteCount +
+            admin.phase8.pendingWriteCount
 
         val syncUi = OfflineSyncEngine.computeSyncUiState(
             isOnline = core.isOnline,
@@ -1104,7 +1415,15 @@ class SchoolViewModel(
             allTeacherScopes = admin.phase7.allTeacherScopes,
             teacherAttendanceRecords = admin.phase7.teacherAttendanceRecords,
             multiSchoolPendingBundles = admin.multiSchoolPendingBundles,
-            schoolRecordsByDocId = schoolsRecords.associateBy { it.docId }
+            schoolRecordsByDocId = schoolsRecords.associateBy { it.docId },
+            schoolCalendars = admin.phase8.schoolCalendars,
+            studentAttendanceSheets = admin.phase8.studentAttendanceSheets,
+            studentAttendanceEditLogs = admin.phase8.attendanceEditLogs,
+            attendanceConflictNotices = admin.attendanceConflicts,
+            termInfoManualOverrideByStudentTerm = core.academicSnap.termInfos.associate {
+                (it.entity.studentId to it.entity.termNo) to it.attendanceManualOverride
+            },
+            studentDocIdByLongId = core.academicSnap.students.associate { it.entity.id to it.docId }
         )
     }.stateIn(
         scope = viewModelScope,
@@ -1242,19 +1561,22 @@ class SchoolViewModel(
                 _observerRestartTick,
                 _ownMember.map { it?.toAccessProfile() },
                 _schoolsSnapshot.map { it.schools },
-                _filter.map { it.schoolId }
-            ) { tick, profile, schools, selectedSchoolId ->
+                _filter.map { it.schoolId },
+                _phase7Snapshot.map { StudentAttendanceAccessEvaluator.hasAnyClassTeacherSection(it.ownTeacherScope) }
+            ) { tick, profile, schools, selectedSchoolId, isCt ->
                 val targetSchool = schools.firstOrNull { it.stableId == selectedSchoolId }
                     ?: schools.firstOrNull { it.active }
                     ?: schools.firstOrNull()
-                Triple(tick, profile, targetSchool?.docId)
+                AcademicObserverKey(tick, profile, targetSchool?.docId, isCt)
             }
                 .distinctUntilChanged()
-                .flatMapLatest { (_, profile, schoolDocId) ->
+                .flatMapLatest { key ->
+                    val profile = key.profile
+                    val schoolDocId = key.schoolDocId
                     if (profile == null || schoolDocId.isNullOrBlank() || !OrgAccessEvaluator.isActive(profile)) {
                         flowOf(null to CloudSchoolAcademicSnapshot())
                     } else {
-                        academicRepo.observeSchoolAcademicData(orgId, schoolDocId, profile)
+                        academicRepo.observeSchoolAcademicData(orgId, schoolDocId, profile, isClassTeacher = key.isClassTeacher)
                             .map { schoolDocId to it }
                             .catch { e ->
                                 val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
@@ -1500,6 +1822,44 @@ class SchoolViewModel(
                     }
                 }
         }
+
+        // 14. Phase 8: School calendars, daily student attendance sheets & edit logs
+        viewModelScope.launch {
+            combine(
+                _observerRestartTick,
+                _ownMember.map { it?.toAccessProfile() },
+                _phase7Snapshot.map { it.ownTeacherScope }
+            ) { tick, profile, scope ->
+                Triple(tick, profile, scope)
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { (_, profile, scope) ->
+                    if (profile == null || !OrgAccessEvaluator.isActive(profile)) {
+                        flowOf(CloudPhase8Snapshot())
+                    } else {
+                        phase8Repo.observePhase8Data(orgId, profile, scope, currentUserId)
+                            .catch { e ->
+                                val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
+                                if (cause != null) {
+                                    handleFirestoreError(cause, OperationType.LIST, "organisations/$orgId/studentAttendance")
+                                    emit(CloudPhase8Snapshot())
+                                    return@catch
+                                }
+                                if (e is CancellationException) throw e
+                            }
+                    }
+                }
+                .collect { snap ->
+                    _phase8Snapshot.value = snap
+                }
+        }
+
+        // 15. Phase 8: Latest-edit-wins student attendance conflict notices
+        viewModelScope.launch {
+            phase8Repo.conflictNotices.collect { notices ->
+                _attendanceConflicts.value = notices
+            }
+        }
     }
 
     private fun evaluatePhase6Conflicts(snap: CloudPhase6Snapshot) {
@@ -1628,8 +1988,9 @@ class SchoolViewModel(
         val retriedPhase5 = timetableRepo.retrySync()
         val retriedPhase6 = phase6Repo.retrySync()
         val retriedPhase7 = phase7Repo.retrySync()
+        val retriedPhase8 = phase8Repo.retrySync()
         academicRepo.retrySync { msg ->
-            emitMessage(if (retriedPhase4 || retriedPhase5 || retriedPhase6 || retriedPhase7) "Retrying pending sync…" else msg)
+            emitMessage(if (retriedPhase4 || retriedPhase5 || retriedPhase6 || retriedPhase7 || retriedPhase8) "Retrying pending sync…" else msg)
         }
     }
 
@@ -1639,6 +2000,7 @@ class SchoolViewModel(
         timetableRepo.clearSyncError()
         phase6Repo.clearSyncError()
         phase7Repo.clearSyncError()
+        phase8Repo.clearSyncError()
     }
 
     private fun handleListenerError(e: Throwable, sub: String) {
@@ -2497,13 +2859,24 @@ class SchoolViewModel(
         }
         val rec = activeSchoolRecord(student.schoolId) ?: return
         val docId = OrgAcademicRepository.makeTermInfoDocId(stuDocId, info.termNo)
+        // Phase 8: Protect manually typed attendance values when auto-fill switch is ON
+        val existingEffective = uiState.value.effectiveTermAttendanceForStudent(info.studentId, info.termNo)
+        val attendanceChangedOrManual = existingEffective.isManual ||
+            info.daysPresent != existingEffective.daysPresent ||
+            info.workingDays != existingEffective.workingDays
+        val manualFlagToWrite: Boolean? = if (rec.autoFillReportAttendance) {
+            attendanceChangedOrManual
+        } else {
+            null
+        }
         viewModelScope.launch {
             academicRepo.saveTermInfo(
                 orgId = orgId,
                 schoolDocId = rec.docId,
                 studentDocId = stuDocId,
                 info = info,
-                exists = docId in existingTermInfoDocIds
+                exists = docId in existingTermInfoDocIds,
+                attendanceManualOverride = manualFlagToWrite
             ).onSuccess {
                 emitMessage("Saved Term-${info.termNo} attendance & remarks")
                 onSaved()
@@ -4738,6 +5111,481 @@ class SchoolViewModel(
         }
     }
 
+    // =========================================================================
+    // PHASE 8: STUDENT ATTENDANCE, SCHOOL CALENDAR, TERM AUTO-FILL & PDF/CSV
+    // =========================================================================
+    fun saveSchoolCalendar(calendar: SchoolCalendarConfig, onSaved: () -> Unit = {}) {
+        val state = uiState.value
+        if (!state.canEditSchoolCalendar(calendar.schoolId)) {
+            emitMessage("Only Admins or Settings/Attendance editors can update the school calendar.")
+            return
+        }
+        val validationError = SchoolCalendarEngine.validateTermDates(
+            session = calendar.session,
+            term1Start = calendar.term1StartDate,
+            term1End = calendar.term1EndDate,
+            term2Start = calendar.term2StartDate,
+            term2End = calendar.term2EndDate
+        )
+        if (validationError != null) {
+            emitMessage(validationError)
+            return
+        }
+        if (calendar.workingDays.isEmpty()) {
+            emitMessage("Select at least one working weekday.")
+            return
+        }
+        val existsInCloud = state.hasSavedCalendarForSchool(calendar.schoolId, calendar.session)
+        phase8Repo.saveSchoolCalendar(orgId, calendar, existsInCloud)
+            .onSuccess {
+                emitMessage("Saved school calendar for ${calendar.session}")
+                onSaved()
+            }
+            .onFailure { err ->
+                emitMessage(friendlyFirestoreErrorMessage(err, "Unable to save school calendar."))
+            }
+    }
+
+    fun addWorkingDayException(
+        schoolDocId: String,
+        dateIso: String,
+        note: String = "Declared working day"
+    ) {
+        val state = uiState.value
+        if (!state.canEditSchoolCalendar(schoolDocId)) {
+            emitMessage("Only Admins or Settings editors can add a working day exception.")
+            return
+        }
+        val cal = state.calendarForSchool(schoolDocId, state.filter.session)
+        val updatedExceptions = (cal.workingDayExceptions.filterNot { it.date == dateIso } +
+            WorkingDayExceptionEntry(
+                id = "wex_${dateIso.replace("-", "_")}",
+                date = dateIso,
+                note = note.trim().ifBlank { "Working day override" }
+            ))
+            .sortedBy { it.date }
+        saveSchoolCalendar(cal.copy(workingDayExceptions = updatedExceptions))
+    }
+
+    fun saveDailyStudentAttendance(
+        schoolDocId: String,
+        className: String,
+        section: String,
+        dateIso: String,
+        entries: Map<String, StudentAttendanceEntry>,
+        onSaved: () -> Unit = {}
+    ) {
+        val state = uiState.value
+        val todayIso = Phase6DateUtils.todayIso()
+        val daysBackLimit = state.schoolRecordsByDocId[schoolDocId]?.classTeacherAttendanceEditDaysBack
+            ?: StudentAttendanceAccessEvaluator.DEFAULT_CLASS_TEACHER_DAYS_BACK
+
+        val dateAccessError = StudentAttendanceAccessEvaluator.validateEditDateLimit(
+            member = state.accessProfile,
+            teacherScope = state.effectiveOwnTeacherScope,
+            schoolId = schoolDocId,
+            className = className,
+            section = section,
+            targetDateIso = dateIso,
+            todayIso = todayIso,
+            classTeacherDaysBackLimit = daysBackLimit
+        )
+        if (dateAccessError != null) {
+            emitMessage(dateAccessError)
+            return
+        }
+
+        val cal = state.calendarForSchool(schoolDocId, state.filter.session)
+        val dayStatus = SchoolCalendarEngine.dayStatus(cal, dateIso)
+        if (dayStatus is DayCalendarStatus.NonWorking) {
+            emitMessage("Blocked: ${dayStatus.reasonTitle}. Use Admin exception if school was open.")
+            return
+        }
+
+        val normSec = section.trim().uppercase().ifBlank { "A" }
+        val docId = StudentAttendanceSheet.makeDocId(schoolDocId, state.filter.session, className, normSec, dateIso)
+        val existingSheet = state.studentAttendanceSheets.firstOrNull { it.id == docId }
+
+        val studentsByDocId = state.allStudents.mapNotNull { st ->
+            val sid = state.studentDocIdFor(st.id)
+            if (sid.isBlank()) null else sid to st
+        }.toMap()
+
+        val changes = StudentAttendanceEngine.computeEditChanges(existingSheet, entries, studentsByDocId)
+        val writeEditLog = StudentAttendanceEngine.shouldWritePostDayEditLog(
+            sheetDateIso = dateIso,
+            todayIso = todayIso,
+            sheetAlreadyExisted = existingSheet != null,
+            changes = changes
+        )
+
+        val sheet = StudentAttendanceSheet(
+            id = docId,
+            schoolId = schoolDocId,
+            session = state.filter.session,
+            className = className,
+            section = normSec,
+            date = dateIso,
+            entries = entries
+        ).withRecomputedCounts()
+
+        phase8Repo.saveStudentAttendanceSheet(
+            orgId = orgId,
+            sheet = sheet,
+            existsInCloud = existingSheet != null,
+            writeEditLog = writeEditLog,
+            changes = changes
+        ).onSuccess {
+            val pTotal = sheet.presentCount + sheet.lateCount
+            emitMessage("Saved Class $className-$normSec ($dateIso): $pTotal Present, ${sheet.absentCount} Absent")
+            onSaved()
+        }.onFailure { err ->
+            emitMessage(friendlyFirestoreErrorMessage(err, "Unable to save daily student attendance."))
+        }
+    }
+
+    fun updateSchoolAttendanceSettings(
+        schoolDocId: String,
+        autoFillReportAttendance: Boolean,
+        classTeacherDaysBack: Int
+    ) {
+        val state = uiState.value
+        if (!state.canEdit(AppModule.SETTINGS) && !state.isAdmin) {
+            emitMessage("Settings edit access is required to change attendance preferences.")
+            return
+        }
+        val schName = state.schoolRecordsByDocId[schoolDocId]?.name ?: state.activeSchool.name
+        academicRepo.updateSchoolAttendanceSettings(
+            orgId = orgId,
+            schoolDocId = schoolDocId,
+            schoolName = schName,
+            autoFillReportAttendance = autoFillReportAttendance,
+            classTeacherAttendanceEditDaysBack = classTeacherDaysBack
+        ).onSuccess {
+            emitMessage("Saved student attendance settings for $schName")
+        }.onFailure { err ->
+            emitMessage(friendlyFirestoreErrorMessage(err, "Could not save student attendance settings."))
+        }
+    }
+
+    fun recalculateStudentTermAttendance(studentId: Long, termNo: Int) {
+        val (stuDocId, student) = studentDocIdByLongId[studentId] ?: return
+        val rec = activeSchoolRecord(student.schoolId) ?: return
+        val state = uiState.value
+        val canRecalc = state.canEditSectionAttendance(rec.docId, student.className, student.section) ||
+            state.canEditCoScholasticFor(student)
+        if (!canRecalc) {
+            emitMessage("You do not have permission to recalculate attendance for ${student.className}-${student.section}.")
+            return
+        }
+        val comp = state.computeStudentTermAttendance(studentId, termNo)
+        val existing = state.termInfoForStudent(studentId, termNo)
+        val tiDocId = OrgAcademicRepository.makeTermInfoDocId(stuDocId, termNo)
+        val item = TermAttendanceRecalcItem(
+            studentDocId = stuDocId,
+            termNo = termNo,
+            daysPresent = comp.roundedDaysPresent,
+            workingDays = comp.totalWorkingDays,
+            existsInCloud = tiDocId in existingTermInfoDocIds,
+            existingRemarks = existing?.remarks.orEmpty(),
+            existingPromotedTo = existing?.promotedTo.orEmpty(),
+            existingReportDate = existing?.reportDate.orEmpty()
+        )
+        academicRepo.recalculateTermAttendanceBatch(orgId, rec.docId, listOf(item))
+            .onSuccess {
+                emitMessage("Recalculated Term-$termNo for ${student.name}: ${comp.roundedDaysPresent}/${comp.totalWorkingDays}")
+            }
+            .onFailure { err ->
+                emitMessage(friendlyFirestoreErrorMessage(err, "Unable to recalculate attendance."))
+            }
+    }
+
+    fun recalculateSectionTermAttendance(
+        schoolDocId: String,
+        className: String,
+        section: String,
+        termNo: Int
+    ) {
+        val state = uiState.value
+        val canRecalc = state.canEditSectionAttendance(schoolDocId, className, section) ||
+            state.canEditCoScholasticForSection(className, section)
+        if (!canRecalc) {
+            emitMessage("You do not have permission to recalculate attendance for Class $className-$section.")
+            return
+        }
+        val schLongId = state.schoolRecordsByDocId[schoolDocId]?.stableId ?: state.activeSchool.id
+        val secStudents = state.allStudents.filter {
+            it.schoolId == schLongId &&
+                it.session == state.filter.session &&
+                it.className.equals(className, ignoreCase = true) &&
+                it.section.equals(section, ignoreCase = true)
+        }
+        val updates = secStudents.mapNotNull { st ->
+            val stuDocId = state.studentDocIdFor(st.id)
+            if (stuDocId.isBlank()) return@mapNotNull null
+            val comp = state.computeStudentTermAttendance(st.id, termNo)
+            val existing = state.termInfoForStudent(st.id, termNo)
+            val tiDocId = OrgAcademicRepository.makeTermInfoDocId(stuDocId, termNo)
+            TermAttendanceRecalcItem(
+                studentDocId = stuDocId,
+                termNo = termNo,
+                daysPresent = comp.roundedDaysPresent,
+                workingDays = comp.totalWorkingDays,
+                existsInCloud = tiDocId in existingTermInfoDocIds,
+                existingRemarks = existing?.remarks.orEmpty(),
+                existingPromotedTo = existing?.promotedTo.orEmpty(),
+                existingReportDate = existing?.reportDate.orEmpty()
+            )
+        }
+        if (updates.isEmpty()) {
+            emitMessage("No students found in Class $className-$section.")
+            return
+        }
+        academicRepo.recalculateTermAttendanceBatch(orgId, schoolDocId, updates)
+            .onSuccess { count ->
+                emitMessage("Recalculated Term-$termNo attendance from daily records for $count student(s)")
+            }
+            .onFailure { err ->
+                emitMessage(friendlyFirestoreErrorMessage(err, "Unable to recalculate section attendance."))
+            }
+    }
+
+    fun dismissAttendanceConflictNotices() {
+        phase8Repo.clearConflictNotices()
+    }
+
+    fun generateDailyAttendancePdf(
+        schoolDocId: String,
+        className: String,
+        section: String,
+        dateIso: String
+    ) {
+        val state = uiState.value
+        val school = state.schoolRecordsByDocId[schoolDocId]?.toSchoolEntity() ?: state.activeSchool
+        val schLongId = state.schoolRecordsByDocId[schoolDocId]?.stableId ?: state.activeSchool.id
+        val normSec = section.trim().uppercase().ifBlank { "A" }
+        val students = state.allStudents
+            .filter {
+                it.schoolId == schLongId &&
+                    it.session == state.filter.session &&
+                    it.className.equals(className, ignoreCase = true) &&
+                    it.section.equals(normSec, ignoreCase = true)
+            }
+            .mapNotNull { st ->
+                val docId = state.studentDocIdFor(st.id)
+                if (docId.isBlank()) null else docId to st
+            }
+        val sheetId = StudentAttendanceSheet.makeDocId(schoolDocId, state.filter.session, className, normSec, dateIso)
+        val sheet = state.studentAttendanceSheets.firstOrNull { it.id == sheetId }
+        val cal = state.calendarForSchool(schoolDocId, state.filter.session)
+        val bundle = DailyAttendancePdfBundle(
+            school = school,
+            session = state.filter.session,
+            className = className,
+            section = normSec,
+            dateIso = dateIso,
+            classTeacherName = state.classTeacherNameForSection(schoolDocId, className, normSec),
+            dayStatus = SchoolCalendarEngine.dayStatus(cal, dateIso),
+            students = students,
+            sheet = sheet
+        )
+        launchAttendancePdfJob(
+            title = "Daily Attendance • $className-$normSec ($dateIso)",
+            isLandscape = false
+        ) {
+            StudentAttendancePdfGenerator.generateDailyAttendancePdf(appContext, bundle)
+        }
+    }
+
+    fun generateMonthlyRegisterPdf(
+        schoolDocId: String,
+        className: String,
+        section: String,
+        year: Int,
+        month1Based: Int,
+        monthLabel: String
+    ) {
+        val state = uiState.value
+        val school = state.schoolRecordsByDocId[schoolDocId]?.toSchoolEntity() ?: state.activeSchool
+        val schLongId = state.schoolRecordsByDocId[schoolDocId]?.stableId ?: state.activeSchool.id
+        val normSec = section.trim().uppercase().ifBlank { "A" }
+        val students = state.allStudents
+            .filter {
+                it.schoolId == schLongId &&
+                    it.session == state.filter.session &&
+                    it.className.equals(className, ignoreCase = true) &&
+                    it.section.equals(normSec, ignoreCase = true)
+            }
+            .mapNotNull { st ->
+                val docId = state.studentDocIdFor(st.id)
+                if (docId.isBlank()) null else docId to st
+            }
+        val prefix = String.format(java.util.Locale.US, "%04d-%02d-", year, month1Based)
+        val sheetsByDate = state.studentAttendanceSheets
+            .filter {
+                it.schoolId == schoolDocId &&
+                    it.session.equals(state.filter.session, ignoreCase = true) &&
+                    it.className.equals(className, ignoreCase = true) &&
+                    it.section.equals(normSec, ignoreCase = true) &&
+                    it.date.startsWith(prefix)
+            }
+            .associateBy { it.date }
+        val bundle = MonthlyRegisterPdfBundle(
+            school = school,
+            session = state.filter.session,
+            className = className,
+            section = normSec,
+            year = year,
+            month1Based = month1Based,
+            monthLabel = monthLabel,
+            classTeacherName = state.classTeacherNameForSection(schoolDocId, className, normSec),
+            calendar = state.calendarForSchool(schoolDocId, state.filter.session),
+            students = students,
+            sheetsByDate = sheetsByDate
+        )
+        launchAttendancePdfJob(
+            title = "Monthly Register • $className-$normSec ($monthLabel)",
+            isLandscape = true
+        ) {
+            StudentAttendancePdfGenerator.generateMonthlyRegisterPdf(appContext, bundle)
+        }
+    }
+
+    fun generateStudentAttendanceSummaryPdf(
+        schoolDocId: String,
+        className: String,
+        section: String,
+        startDate: String,
+        endDate: String
+    ) {
+        val state = uiState.value
+        val school = state.schoolRecordsByDocId[schoolDocId]?.toSchoolEntity() ?: state.activeSchool
+        val normSec = section.trim().uppercase().ifBlank { "A" }
+        val rows = state.computeSectionRangeSummary(schoolDocId, className, normSec, startDate, endDate)
+        val cal = state.calendarForSchool(schoolDocId, state.filter.session)
+        val workingDays = SchoolCalendarEngine.countWorkingDaysInRange(cal, startDate, endDate).workingDays
+        val bundle = StudentSummaryRangePdfBundle(
+            school = school,
+            session = state.filter.session,
+            scopeTitle = "Class $className-$normSec",
+            startDateIso = startDate,
+            endDateIso = endDate,
+            calendarWorkingDays = workingDays,
+            rows = rows
+        )
+        launchAttendancePdfJob(
+            title = "Attendance Summary • $className-$normSec",
+            isLandscape = false
+        ) {
+            StudentAttendancePdfGenerator.generateStudentSummaryPdf(appContext, bundle)
+        }
+    }
+
+    fun generateLowAttendancePdf(
+        schoolDocId: String,
+        classNameFilter: String?,
+        sectionFilter: String?,
+        startDate: String,
+        endDate: String,
+        thresholdPercent: Int
+    ) {
+        val state = uiState.value
+        val school = state.schoolRecordsByDocId[schoolDocId]?.toSchoolEntity() ?: state.activeSchool
+        val rows = state.computeLowAttendanceRows(
+            schoolDocIdFilter = schoolDocId,
+            classNameFilter = classNameFilter,
+            sectionFilter = sectionFilter,
+            startDate = startDate,
+            endDate = endDate,
+            thresholdPercent = thresholdPercent
+        )
+        val scopeTitle = if (!classNameFilter.isNullOrBlank()) {
+            val secPart = if (!sectionFilter.isNullOrBlank()) "-$sectionFilter" else ""
+            "Class $classNameFilter$secPart"
+        } else {
+            "Whole School"
+        }
+        val bundle = LowAttendancePdfBundle(
+            school = school,
+            session = state.filter.session,
+            scopeTitle = scopeTitle,
+            startDateIso = startDate,
+            endDateIso = endDate,
+            thresholdPercent = thresholdPercent.toDouble(),
+            rows = rows
+        )
+        launchAttendancePdfJob(
+            title = "Low Attendance (<$thresholdPercent%) • $scopeTitle",
+            isLandscape = false
+        ) {
+            StudentAttendancePdfGenerator.generateLowAttendancePdf(appContext, bundle)
+        }
+    }
+
+    fun exportLowAttendanceCsvToUri(
+        destinationUri: Uri,
+        schoolDocId: String,
+        classNameFilter: String?,
+        sectionFilter: String?,
+        startDate: String,
+        endDate: String,
+        thresholdPercent: Int
+    ) {
+        val state = uiState.value
+        val rows = state.computeLowAttendanceRows(
+            schoolDocIdFilter = schoolDocId,
+            classNameFilter = classNameFilter,
+            sectionFilter = sectionFilter,
+            startDate = startDate,
+            endDate = endDate,
+            thresholdPercent = thresholdPercent
+        )
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                val csv = StudentAttendanceEngine.buildLowAttendanceCsv(rows, thresholdPercent, startDate, endDate)
+                PdfExportHelper.writeTextToUri(appContext, csv, destinationUri)
+            }
+            emitMessage(if (ok) "Exported Low Attendance CSV (${rows.size} student(s))" else "Could not export Low Attendance CSV")
+        }
+    }
+
+    private fun launchAttendancePdfJob(
+        title: String,
+        isLandscape: Boolean,
+        generator: () -> File
+    ) {
+        val orientLabel = if (isLandscape) "A4 Landscape" else "A4 Portrait"
+        _timetablePdfState.value = TimetablePdfPreviewState(
+            isGenerating = true,
+            title = title,
+            statusLabel = "Generating $orientLabel PDF…",
+            isLandscape = isLandscape
+        )
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val file = generator()
+                    val totalPages = PdfExportHelper.countPdfPages(file)
+                    val preview = PdfExportHelper.renderPdfPages(file, maxPagesToPreview = 10)
+                    Triple(file, totalPages, preview)
+                }
+            }.onSuccess { (file, totalPages, preview) ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    statusLabel = "Ready ($totalPages page(s), $orientLabel)",
+                    generatedFile = file,
+                    totalPages = totalPages,
+                    previewPages = preview
+                )
+            }.onFailure { err ->
+                _timetablePdfState.value = _timetablePdfState.value.copy(
+                    isGenerating = false,
+                    error = err.message ?: "Failed to generate Attendance PDF"
+                )
+            }
+        }
+    }
+
     companion object {
         fun provideFactory(
             appContext: Application,
@@ -4749,6 +5597,7 @@ class SchoolViewModel(
             timetableRepo: TimetableRepository,
             phase6Repo: Phase6Repository,
             phase7Repo: Phase7Repository,
+            phase8Repo: Phase8Repository,
             localRepo: ReportCardRepository,
             connectivityMonitor: NetworkConnectivityMonitor,
             offlinePrefs: OfflinePrefsStore
@@ -4764,6 +5613,7 @@ class SchoolViewModel(
                     timetableRepo = timetableRepo,
                     phase6Repo = phase6Repo,
                     phase7Repo = phase7Repo,
+                    phase8Repo = phase8Repo,
                     localRepo = localRepo,
                     connectivityMonitor = connectivityMonitor,
                     offlinePrefs = offlinePrefs
@@ -4773,12 +5623,27 @@ class SchoolViewModel(
     }
 }
 
+private data class AcademicObserverKey(
+    val tick: Int,
+    val profile: MemberAccessProfile?,
+    val schoolDocId: String?,
+    val isClassTeacher: Boolean
+)
+
 private data class Phase4And5Bundle(
     val phase4: CloudPhase4Snapshot,
     val timetable: CloudTimetableSnapshot,
     val timetableConflicts: List<TimetableConflictNotice>,
     val phase6: CloudPhase6Snapshot,
     val phase6Conflicts: List<Phase6ConflictNotice>
+)
+
+private data class Phase7And8Bundle(
+    val p46: Phase4And5Bundle,
+    val phase7: CloudPhase7Snapshot,
+    val multiSchoolPendingBundles: List<SchoolAcademicBundleForPending>,
+    val phase8: CloudPhase8Snapshot,
+    val attendanceConflicts: List<AttendanceConflictNotice>
 )
 
 private data class AdminAndPhase4Bundle(
@@ -4792,7 +5657,9 @@ private data class AdminAndPhase4Bundle(
     val phase6: CloudPhase6Snapshot,
     val phase6Conflicts: List<Phase6ConflictNotice>,
     val phase7: CloudPhase7Snapshot,
-    val multiSchoolPendingBundles: List<SchoolAcademicBundleForPending>
+    val multiSchoolPendingBundles: List<SchoolAcademicBundleForPending>,
+    val phase8: CloudPhase8Snapshot,
+    val attendanceConflicts: List<AttendanceConflictNotice>
 )
 
 private data class CloudCoreBundle(

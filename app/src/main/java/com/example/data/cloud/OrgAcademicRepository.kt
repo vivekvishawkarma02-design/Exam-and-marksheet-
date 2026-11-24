@@ -188,7 +188,8 @@ class OrgAcademicRepository(
     fun observeSchoolAcademicData(
         orgId: String,
         schoolDocId: String,
-        member: MemberAccessProfile
+        member: MemberAccessProfile,
+        isClassTeacher: Boolean = false
     ): Flow<CloudSchoolAcademicSnapshot> {
         if (!OrgAccessEvaluator.canAccessSchool(member, schoolDocId)) {
             return flowOf(CloudSchoolAcademicSnapshot())
@@ -200,7 +201,9 @@ class OrgAcademicRepository(
         val canReadStudents = OrgAccessEvaluator.canViewModule(member, AppModule.STUDENTS) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.MARKS) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.CO_SCHOLASTIC) ||
-            OrgAccessEvaluator.canViewModule(member, AppModule.REPORTS)
+            OrgAccessEvaluator.canViewModule(member, AppModule.REPORTS) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.ATTENDANCE) ||
+            isClassTeacher
 
         val canReadMarks = OrgAccessEvaluator.canViewModule(member, AppModule.MARKS) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.REPORTS)
@@ -253,7 +256,11 @@ class OrgAcademicRepository(
             flowOf(CollectionSlice(emptyList(), 0, false))
         }
 
-        val termFlow: Flow<CollectionSlice<CloudTermInfoRecord>> = if (canReadCo) {
+        val canReadTermInfo = canReadCo ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.ATTENDANCE) ||
+            isClassTeacher
+
+        val termFlow: Flow<CollectionSlice<CloudTermInfoRecord>> = if (canReadTermInfo) {
             schoolRef.collection("termInfo").snapshots(MetadataChanges.INCLUDE).map { snap ->
                 val pCount = snap.documents.count { it.metadata.hasPendingWrites() }
                 val hasPending = snap.metadata.hasPendingWrites() || pCount > 0
@@ -524,6 +531,48 @@ class OrgAcademicRepository(
                 .collection("schools").document(schoolDocId)
             val task = ref.update(payload)
             attachSyncListeners(task, OperationType.UPDATE, path) { ref.update(payload) }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Phase 8: Updates per-school Student Attendance settings:
+     * - `autoFillReportAttendance`: OFF by default; when ON, report cards auto-fill attendance from daily sheets.
+     * - `classTeacherAttendanceEditDaysBack`: default 7 (0..365); Admins are always unlimited.
+     */
+    fun updateSchoolAttendanceSettings(
+        orgId: String,
+        schoolDocId: String,
+        schoolName: String,
+        autoFillReportAttendance: Boolean,
+        classTeacherAttendanceEditDaysBack: Int
+    ): Result<Unit> {
+        val path = "organisations/$orgId/schools/$schoolDocId"
+        return try {
+            requireUid()
+            val clampedDays = classTeacherAttendanceEditDaysBack.coerceIn(0, 365)
+            val payload = mapOf(
+                "autoFillReportAttendance" to autoFillReportAttendance,
+                "classTeacherAttendanceEditDaysBack" to clampedDays.toLong(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            val ref = db.collection("organisations").document(orgId)
+                .collection("schools").document(schoolDocId)
+            val task = ref.update(payload)
+            attachSyncListeners(task, OperationType.UPDATE, path) { ref.update(payload) }
+            orgRepo.logAuditNonBlocking(
+                orgId = orgId,
+                action = "SCHOOL_ATTENDANCE_SETTINGS_UPDATED",
+                targetType = "school",
+                targetId = schoolDocId,
+                summary = "Updated student attendance settings for '$schoolName' (autoFillReportAttendance=$autoFillReportAttendance, classTeacherDaysBack=$clampedDays)",
+                schoolId = schoolDocId
+            )
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -978,7 +1027,8 @@ class OrgAcademicRepository(
         schoolDocId: String,
         studentDocId: String,
         info: TermInfoEntity,
-        exists: Boolean
+        exists: Boolean,
+        attendanceManualOverride: Boolean? = null
     ): Result<Unit> {
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         val tiDocId = makeTermInfoDocId(studentDocId, info.termNo)
@@ -988,35 +1038,108 @@ class OrgAcademicRepository(
                 .collection("schools").document(schoolDocId)
                 .collection("termInfo").document(tiDocId)
             if (exists) {
-                val payload = mapOf(
-                    "daysPresent" to info.daysPresent.coerceIn(0, 366).toLong(),
-                    "workingDays" to info.workingDays.coerceIn(0, 366).toLong(),
-                    "remarks" to info.remarks.take(400),
-                    "promotedTo" to info.promotedTo.take(60),
-                    "reportDate" to info.reportDate.take(40),
-                    "updatedByUid" to uid,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
+                val payload = buildMap<String, Any> {
+                    put("daysPresent", info.daysPresent.coerceIn(0, 366).toLong())
+                    put("workingDays", info.workingDays.coerceIn(0, 366).toLong())
+                    put("remarks", info.remarks.take(400))
+                    put("promotedTo", info.promotedTo.take(60))
+                    put("reportDate", info.reportDate.take(40))
+                    if (attendanceManualOverride != null) {
+                        put("attendanceManualOverride", attendanceManualOverride)
+                    }
+                    put("updatedByUid", uid)
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
                 val task = ref.update(payload)
                 attachSyncListeners(task, OperationType.UPDATE, path) { ref.update(payload) }
             } else {
-                val payload = mapOf(
-                    "studentId" to studentDocId,
-                    "schoolId" to schoolDocId,
-                    "termNo" to info.termNo.coerceIn(1, 2).toLong(),
-                    "daysPresent" to info.daysPresent.coerceIn(0, 366).toLong(),
-                    "workingDays" to info.workingDays.coerceIn(0, 366).toLong(),
-                    "remarks" to info.remarks.take(400),
-                    "promotedTo" to info.promotedTo.take(60),
-                    "reportDate" to info.reportDate.take(40),
-                    "updatedByUid" to uid,
-                    "createdAt" to FieldValue.serverTimestamp(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
+                val payload = buildMap<String, Any> {
+                    put("studentId", studentDocId)
+                    put("schoolId", schoolDocId)
+                    put("termNo", info.termNo.coerceIn(1, 2).toLong())
+                    put("daysPresent", info.daysPresent.coerceIn(0, 366).toLong())
+                    put("workingDays", info.workingDays.coerceIn(0, 366).toLong())
+                    put("remarks", info.remarks.take(400))
+                    put("promotedTo", info.promotedTo.take(60))
+                    put("reportDate", info.reportDate.take(40))
+                    if (attendanceManualOverride != null) {
+                        put("attendanceManualOverride", attendanceManualOverride)
+                    }
+                    put("updatedByUid", uid)
+                    put("createdAt", FieldValue.serverTimestamp())
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
                 val task = ref.set(payload)
                 attachSyncListeners(task, OperationType.CREATE, path) { ref.set(payload) }
             }
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Phase 8: Batch-recalculates Term-I/Term-II attendance (`daysPresent`, `workingDays`) from
+     * daily student attendance sheets and sets `attendanceManualOverride = false`, preserving
+     * existing remarks, promotedTo, and reportDate without touching them.
+     */
+    fun recalculateTermAttendanceBatch(
+        orgId: String,
+        schoolDocId: String,
+        updates: List<TermAttendanceRecalcItem>
+    ): Result<Int> {
+        val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
+        if (updates.isEmpty()) return Result.success(0)
+        val path = "organisations/$orgId/schools/$schoolDocId/termInfo"
+        return try {
+            val col = db.collection("organisations").document(orgId)
+                .collection("schools").document(schoolDocId)
+                .collection("termInfo")
+            var written = 0
+            updates.chunked(200).forEach { chunk ->
+                val batch = db.batch()
+                chunk.forEach { item ->
+                    val tiDocId = makeTermInfoDocId(item.studentDocId, item.termNo)
+                    val ref = col.document(tiDocId)
+                    if (item.existsInCloud) {
+                        batch.update(
+                            ref,
+                            mapOf(
+                                "daysPresent" to item.daysPresent.coerceIn(0, 366).toLong(),
+                                "workingDays" to item.workingDays.coerceIn(0, 366).toLong(),
+                                "attendanceManualOverride" to false,
+                                "updatedByUid" to uid,
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                    } else {
+                        batch.set(
+                            ref,
+                            mapOf(
+                                "studentId" to item.studentDocId,
+                                "schoolId" to schoolDocId,
+                                "termNo" to item.termNo.coerceIn(1, 2).toLong(),
+                                "daysPresent" to item.daysPresent.coerceIn(0, 366).toLong(),
+                                "workingDays" to item.workingDays.coerceIn(0, 366).toLong(),
+                                "remarks" to item.existingRemarks.take(400),
+                                "promotedTo" to item.existingPromotedTo.take(60),
+                                "reportDate" to item.existingReportDate.take(40),
+                                "attendanceManualOverride" to false,
+                                "updatedByUid" to uid,
+                                "createdAt" to FieldValue.serverTimestamp(),
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                    }
+                    written++
+                }
+                val task = batch.commit()
+                attachSyncListeners(task, OperationType.WRITE, path)
+            }
+            Result.success(written)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1414,7 +1537,9 @@ class OrgAcademicRepository(
             printClassTeacherNameOnReports = doc.getBoolean("printClassTeacherNameOnReports") ?: false,
             checkReportCardsReadyBeforeBatch = doc.getBoolean("checkReportCardsReadyBeforeBatch") ?: false,
             openExamsForTeachers = parsedOpenExams,
-            classTeacherNamesBySection = parsedCtMap
+            classTeacherNamesBySection = parsedCtMap,
+            autoFillReportAttendance = doc.getBoolean("autoFillReportAttendance") ?: false,
+            classTeacherAttendanceEditDaysBack = (doc.getLong("classTeacherAttendanceEditDaysBack") ?: 7L).toInt().coerceIn(0, 365)
         )
     }
 
@@ -1519,6 +1644,7 @@ class OrgAcademicRepository(
                 promotedTo = doc.getString("promotedTo").orEmpty(),
                 reportDate = doc.getString("reportDate").orEmpty()
             ),
+            attendanceManualOverride = doc.getBoolean("attendanceManualOverride"),
             createdAt = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
         )
     }
@@ -1534,6 +1660,17 @@ class OrgAcademicRepository(
             "${StableDocId.sanitizeSegment(studentDocId)}_T$termNo"
     }
 }
+
+data class TermAttendanceRecalcItem(
+    val studentDocId: String,
+    val termNo: Int,
+    val daysPresent: Int,
+    val workingDays: Int,
+    val existsInCloud: Boolean,
+    val existingRemarks: String = "",
+    val existingPromotedTo: String = "",
+    val existingReportDate: String = ""
+)
 
 private data class CollectionSlice<T>(
     val items: List<T>,

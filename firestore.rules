@@ -40,7 +40,7 @@ service cloud.firestore {
 
     function isValidPermissionsMap(perms) {
       return perms is map &&
-        perms.size() == 8 &&
+        (perms.size() == 8 || (perms.size() == 9 && 'attendance' in perms && perms.attendance in ['none', 'view', 'edit'])) &&
         perms.keys().hasAll(['students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members']) &&
         perms.students in ['none', 'view', 'edit'] &&
         perms.marks in ['none', 'view', 'edit'] &&
@@ -103,14 +103,16 @@ service cloud.firestore {
     function hasModuleView(orgId, moduleKey) {
       let m = memberData(orgId);
       return memberExists(orgId) && m.status == 'active' && (
-        m.role in ['OWNER', 'ADMIN'] || m.permissions[moduleKey] in ['view', 'edit']
+        m.role in ['OWNER', 'ADMIN'] ||
+        (moduleKey in m.permissions && m.permissions[moduleKey] in ['view', 'edit'])
       );
     }
 
     function hasModuleEdit(orgId, moduleKey) {
       let m = memberData(orgId);
       return memberExists(orgId) && m.status == 'active' && (
-        m.role in ['OWNER', 'ADMIN'] || m.permissions[moduleKey] == 'edit'
+        m.role in ['OWNER', 'ADMIN'] ||
+        (moduleKey in m.permissions && m.permissions[moduleKey] == 'edit')
       );
     }
 
@@ -176,6 +178,65 @@ service cloud.firestore {
         exists(studentDocPath(orgId, schoolId, studentId)) &&
         (schoolId + '|' + get(studentDocPath(orgId, schoolId, studentId)).data.className + '|' + get(studentDocPath(orgId, schoolId, studentId)).data.section) in get(teacherScopePath(orgId, request.auth.uid)).data.classTeacherSections;
       return baseAllowed && (isUnrestricted || isClassTeacherForStudent);
+    }
+
+    // Phase 8: Class teacher section isolation & student attendance edit rules
+    function isClassTeacherOfSection(orgId, schoolId, className, section) {
+      return isSignedIn() &&
+        exists(teacherScopePath(orgId, request.auth.uid)) &&
+        (schoolId + '|' + className + '|' + section) in get(teacherScopePath(orgId, request.auth.uid)).data.classTeacherSections;
+    }
+
+    function hasAnyClassTeacherSection(orgId) {
+      return isSignedIn() &&
+        exists(teacherScopePath(orgId, request.auth.uid)) &&
+        get(teacherScopePath(orgId, request.auth.uid)).data.classTeacherSections.size() > 0;
+    }
+
+    function canEditSchoolCalendar(orgId, schoolId) {
+      let m = memberData(orgId);
+      return memberExists(orgId) && m.status == 'active' &&
+        (m.role in ['OWNER', 'ADMIN'] || m.allSchools == true || schoolId in m.schools) && (
+          m.role in ['OWNER', 'ADMIN'] ||
+          hasModuleEdit(orgId, 'settings') ||
+          (m.role != 'TEACHER' && hasModuleEdit(orgId, 'attendance'))
+        );
+    }
+
+    function canEditStudentAttendance(orgId, schoolId, className, section, dateEpochDay) {
+      let m = memberData(orgId);
+      let activeAndSchool = memberExists(orgId) && m.status == 'active' &&
+        (m.role in ['OWNER', 'ADMIN'] || m.allSchools == true || schoolId in m.schools);
+      let isUnlimited = m.role in ['OWNER', 'ADMIN'] ||
+        (m.role != 'TEACHER' && hasModuleEdit(orgId, 'attendance'));
+      let isAllowedTeacher = hasModuleEdit(orgId, 'attendance') ||
+        isClassTeacherOfSection(orgId, schoolId, className, section);
+      let hasSchool = exists(schoolDocPath(orgId, schoolId));
+      let s = hasSchool ? get(schoolDocPath(orgId, schoolId)).data : {};
+      let maxDaysBack = (hasSchool && 'classTeacherAttendanceEditDaysBack' in s && s.classTeacherAttendanceEditDaysBack is int)
+        ? s.classTeacherAttendanceEditDaysBack
+        : 7;
+      let serverEpochDay = int(request.time.toMillis() / 86400000);
+      // +/- 1 day UTC timezone buffer so local dates never false-reject across time zones
+      let withinDateWindow = dateEpochDay <= (serverEpochDay + 1) &&
+        dateEpochDay >= (serverEpochDay - maxDaysBack - 1);
+      return activeAndSchool && (
+        isUnlimited || (isAllowedTeacher && withinDateWindow)
+      );
+    }
+
+    function canRecalculateTermAttendance(orgId, schoolId, studentId) {
+      let m = memberData(orgId);
+      let activeAndSchool = memberExists(orgId) && m.status == 'active' &&
+        (m.role in ['OWNER', 'ADMIN'] || m.allSchools == true || schoolId in m.schools);
+      let isClassTeacherForStudent = exists(teacherScopePath(orgId, request.auth.uid)) &&
+        exists(studentDocPath(orgId, schoolId, studentId)) &&
+        (schoolId + '|' + get(studentDocPath(orgId, schoolId, studentId)).data.className + '|' + get(studentDocPath(orgId, schoolId, studentId)).data.section) in get(teacherScopePath(orgId, request.auth.uid)).data.classTeacherSections;
+      return activeAndSchool && (
+        m.role in ['OWNER', 'ADMIN'] ||
+        hasModuleEdit(orgId, 'attendance') ||
+        isClassTeacherForStudent
+      );
     }
 
     function canUpdateMember(orgId, memberUid) {
@@ -329,6 +390,7 @@ service cloud.firestore {
         data.keys().hasOnly([
           'schoolKey', 'name', 'address', 'mobile', 'email', 'logoBase64', 'active', 'classGroups', 'classes',
           'printClassTeacherNameOnReports', 'checkReportCardsReadyBeforeBatch', 'openExamsForTeachers', 'classTeacherNamesBySection',
+          'autoFillReportAttendance', 'classTeacherAttendanceEditDaysBack',
           'createdAt', 'updatedAt'
         ]) &&
         data.schoolKey == schoolId &&
@@ -344,6 +406,8 @@ service cloud.firestore {
         (!('checkReportCardsReadyBeforeBatch' in data) || data.checkReportCardsReadyBeforeBatch is bool) &&
         (!('openExamsForTeachers' in data) || isValidStringList(data.openExamsForTeachers, 4)) &&
         (!('classTeacherNamesBySection' in data) || (data.classTeacherNamesBySection is map && data.classTeacherNamesBySection.size() <= 120)) &&
+        (!('autoFillReportAttendance' in data) || data.autoFillReportAttendance is bool) &&
+        (!('classTeacherAttendanceEditDaysBack' in data) || (data.classTeacherAttendanceEditDaysBack is int && data.classTeacherAttendanceEditDaysBack >= 0 && data.classTeacherAttendanceEditDaysBack <= 365)) &&
         isValidTimestamp(data.createdAt) &&
         isValidTimestamp(data.updatedAt);
     }
@@ -433,7 +497,7 @@ service cloud.firestore {
 
     function isValidTermInfo(data, schoolId) {
       return data.keys().hasAll(['studentId', 'schoolId', 'termNo', 'daysPresent', 'workingDays', 'remarks', 'promotedTo', 'reportDate', 'updatedByUid', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['studentId', 'schoolId', 'termNo', 'daysPresent', 'workingDays', 'remarks', 'promotedTo', 'reportDate', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['studentId', 'schoolId', 'termNo', 'daysPresent', 'workingDays', 'remarks', 'promotedTo', 'reportDate', 'attendanceManualOverride', 'updatedByUid', 'createdAt', 'updatedAt']) &&
         isValidId(data.studentId) &&
         data.schoolId == schoolId &&
         data.termNo in [1, 2] &&
@@ -442,6 +506,7 @@ service cloud.firestore {
         data.remarks is string && data.remarks.size() <= 400 &&
         data.promotedTo is string && data.promotedTo.size() <= 60 &&
         data.reportDate is string && data.reportDate.size() <= 40 &&
+        (!('attendanceManualOverride' in data) || data.attendanceManualOverride is bool) &&
         data.updatedByUid == request.auth.uid &&
         isValidTimestamp(data.createdAt) &&
         isValidTimestamp(data.updatedAt);
@@ -453,7 +518,7 @@ service cloud.firestore {
         data.actorUid == request.auth.uid &&
         data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
         data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
-        data.targetType in ['mark', 'student', 'member', 'access', 'school', 'organisation', 'migration', 'invite', 'teacher', 'periodStructure', 'assignment', 'subjectRule', 'timetable', 'leave', 'substitution', 'timetableUndo', 'teacherAttendance', 'teacherScope'] &&
+        data.targetType in ['mark', 'student', 'member', 'access', 'school', 'organisation', 'migration', 'invite', 'teacher', 'periodStructure', 'assignment', 'subjectRule', 'timetable', 'leave', 'substitution', 'timetableUndo', 'teacherAttendance', 'teacherScope', 'schoolCalendar', 'studentAttendance'] &&
         data.targetId is string && data.targetId.size() <= 128 &&
         data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 300 &&
         (!('schoolId' in data) || (data.schoolId is string && data.schoolId.size() <= 128)) &&
@@ -697,6 +762,90 @@ service cloud.firestore {
         data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
         isValidTimestamp(data.createdAt) &&
         isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSchoolCalendar(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'workingDays', 'holidays', 'halfWorkingDays', 'workingDayExceptions',
+          'term1StartDate', 'term1EndDate', 'term2StartDate', 'term2EndDate',
+          'updatedByUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'workingDays', 'holidays', 'halfWorkingDays', 'workingDayExceptions',
+          'term1StartDate', 'term1EndDate', 'term2StartDate', 'term2EndDate',
+          'updatedByUid', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        isValidStringList(data.workingDays, 7) &&
+        data.workingDays.size() >= 1 &&
+        data.holidays is list && data.holidays.size() <= 120 &&
+        data.halfWorkingDays is list && data.halfWorkingDays.size() <= 60 &&
+        data.workingDayExceptions is list && data.workingDayExceptions.size() <= 60 &&
+        isValidIsoDate(data.term1StartDate) &&
+        isValidIsoDate(data.term1EndDate) &&
+        data.term1EndDate >= data.term1StartDate &&
+        isValidIsoDate(data.term2StartDate) &&
+        isValidIsoDate(data.term2EndDate) &&
+        data.term2EndDate >= data.term2StartDate &&
+        (data.term1EndDate < data.term2StartDate || data.term2EndDate < data.term1StartDate) &&
+        data.updatedByUid == request.auth.uid &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStudentAttendance(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'className', 'section', 'date', 'dateEpochDay',
+          'entries', 'presentCount', 'absentCount', 'leaveCount', 'lateCount', 'halfDayCount', 'totalStudents',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'className', 'section', 'date', 'dateEpochDay',
+          'entries', 'presentCount', 'absentCount', 'leaveCount', 'lateCount', 'halfDayCount', 'totalStudents',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+        isValidIsoDate(data.date) &&
+        data.dateEpochDay is int && data.dateEpochDay >= 18000 && data.dateEpochDay <= 40000 &&
+        data.entries is map && data.entries.size() <= 200 &&
+        data.presentCount is int && data.presentCount >= 0 && data.presentCount <= 200 &&
+        data.absentCount is int && data.absentCount >= 0 && data.absentCount <= 200 &&
+        data.leaveCount is int && data.leaveCount >= 0 && data.leaveCount <= 200 &&
+        data.lateCount is int && data.lateCount >= 0 && data.lateCount <= 200 &&
+        data.halfDayCount is int && data.halfDayCount >= 0 && data.halfDayCount <= 200 &&
+        data.totalStudents is int && data.totalStudents >= 0 && data.totalStudents <= 200 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStudentAttendanceEditLog(data) {
+      return data.keys().hasAll([
+          'attendanceDocId', 'schoolId', 'session', 'className', 'section', 'date',
+          'editorUid', 'editorName', 'summary', 'changes', 'clientEditedAtMs', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'attendanceDocId', 'schoolId', 'session', 'className', 'section', 'date',
+          'editorUid', 'editorName', 'summary', 'changes', 'clientEditedAtMs', 'createdAt'
+        ]) &&
+        isValidId(data.attendanceDocId) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+        isValidIsoDate(data.date) &&
+        data.editorUid == request.auth.uid &&
+        data.editorName is string && data.editorName.size() >= 1 && data.editorName.size() <= 120 &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 350 &&
+        data.changes is list && data.changes.size() >= 1 && data.changes.size() <= 80 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt);
     }
 
     // =========================================================================
@@ -982,7 +1131,9 @@ service cloud.firestore {
                 'name', 'address', 'mobile', 'email', 'logoBase64',
                 'active', 'classGroups', 'classes',
                 'printClassTeacherNameOnReports', 'checkReportCardsReadyBeforeBatch',
-                'openExamsForTeachers', 'classTeacherNamesBySection', 'updatedAt'
+                'openExamsForTeachers', 'classTeacherNamesBySection',
+                'autoFillReportAttendance', 'classTeacherAttendanceEditDaysBack',
+                'updatedAt'
               ])
             ) || (
               hasModuleEdit(orgId, 'teachers') &&
@@ -1001,7 +1152,9 @@ service cloud.firestore {
               hasModuleView(orgId, 'students') ||
               hasModuleView(orgId, 'marks') ||
               hasModuleView(orgId, 'coScholastic') ||
-              hasModuleView(orgId, 'reports')
+              hasModuleView(orgId, 'reports') ||
+              hasModuleView(orgId, 'attendance') ||
+              hasAnyClassTeacherSection(orgId)
             );
 
           allow create: if isSignedIn() &&
@@ -1113,13 +1266,22 @@ service cloud.firestore {
           allow get, list: if isSignedIn() &&
             canAccessSchool(orgId, schoolId) && (
               hasModuleView(orgId, 'coScholastic') ||
-              hasModuleView(orgId, 'reports')
+              hasModuleView(orgId, 'reports') ||
+              hasModuleView(orgId, 'attendance') ||
+              hasAnyClassTeacherSection(orgId)
             );
 
           allow create: if isSignedIn() &&
             isValidId(termInfoId) &&
-            isValidTermInfo(incoming(), schoolId) &&
-            canEditCoScholasticScope(orgId, schoolId, incoming().studentId);
+            isValidTermInfo(incoming(), schoolId) && (
+              canEditCoScholasticScope(orgId, schoolId, incoming().studentId) ||
+              (
+                canRecalculateTermAttendance(orgId, schoolId, incoming().studentId) &&
+                incoming().remarks == '' &&
+                incoming().promotedTo == '' &&
+                incoming().reportDate == ''
+              )
+            );
 
           allow update: if isSignedIn() &&
             isValidId(termInfoId) &&
@@ -1127,12 +1289,20 @@ service cloud.firestore {
             incoming().studentId == existing().studentId &&
             incoming().schoolId == existing().schoolId &&
             incoming().termNo == existing().termNo &&
-            incoming().createdAt == existing().createdAt &&
-            canEditCoScholasticScope(orgId, schoolId, incoming().studentId) &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'daysPresent', 'workingDays', 'remarks', 'promotedTo',
-              'reportDate', 'updatedByUid', 'updatedAt'
-            ]);
+            incoming().createdAt == existing().createdAt && (
+              (
+                canEditCoScholasticScope(orgId, schoolId, incoming().studentId) &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'daysPresent', 'workingDays', 'remarks', 'promotedTo',
+                  'reportDate', 'attendanceManualOverride', 'updatedByUid', 'updatedAt'
+                ])
+              ) || (
+                canRecalculateTermAttendance(orgId, schoolId, incoming().studentId) &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'daysPresent', 'workingDays', 'attendanceManualOverride', 'updatedByUid', 'updatedAt'
+                ])
+              )
+            );
 
           allow delete: if isSignedIn() &&
             isValidId(termInfoId) &&
@@ -1455,6 +1625,111 @@ service cloud.firestore {
           isValidId(attId) &&
           hasModuleEdit(orgId, 'timetable') &&
           canAccessSchool(orgId, existing().schoolId);
+      }
+
+      // -----------------------------------------------------------------------
+      // 3j. PHASE 8: SCHOOL CALENDAR & STUDENT ATTENDANCE (9th module + CT scope)
+      // Strictly separate from Phase 7 Teacher Attendance.
+      // -----------------------------------------------------------------------
+      match /schoolCalendars/{calId} {
+        allow get, list: if isSignedIn() && isActiveMember(orgId) && (
+          hasModuleView(orgId, 'attendance') ||
+          hasModuleView(orgId, 'reports') ||
+          hasModuleView(orgId, 'coScholastic') ||
+          hasModuleView(orgId, 'settings') ||
+          hasAnyClassTeacherSection(orgId)
+        );
+
+        allow create: if isSignedIn() &&
+          isValidId(calId) &&
+          isValidSchoolCalendar(incoming()) &&
+          canEditSchoolCalendar(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(calId) &&
+          isValidSchoolCalendar(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().session == existing().session &&
+          incoming().createdAt == existing().createdAt &&
+          canEditSchoolCalendar(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(calId) &&
+          isOrgAdmin(orgId);
+      }
+
+      match /studentAttendance/{attId} {
+        allow get: if isSignedIn() && isActiveMember(orgId) &&
+          canAccessSchool(orgId, resource.data.schoolId) && (
+            hasModuleView(orgId, 'attendance') ||
+            hasModuleView(orgId, 'reports') ||
+            hasModuleView(orgId, 'coScholastic') ||
+            isClassTeacherOfSection(orgId, resource.data.schoolId, resource.data.className, resource.data.section)
+          );
+
+        allow list: if isSignedIn() && isActiveMember(orgId) && (
+          hasModuleView(orgId, 'attendance') ||
+          (
+            canAccessSchool(orgId, resource.data.schoolId) &&
+            isClassTeacherOfSection(orgId, resource.data.schoolId, resource.data.className, resource.data.section)
+          )
+        );
+
+        allow create: if isSignedIn() &&
+          isValidId(attId) &&
+          isValidStudentAttendance(incoming()) &&
+          canEditStudentAttendance(orgId, incoming().schoolId, incoming().className, incoming().section, incoming().dateEpochDay);
+
+        allow update: if isSignedIn() &&
+          isValidId(attId) &&
+          isValidStudentAttendance(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().session == existing().session &&
+          incoming().className == existing().className &&
+          incoming().section == existing().section &&
+          incoming().date == existing().date &&
+          incoming().dateEpochDay == existing().dateEpochDay &&
+          incoming().createdAt == existing().createdAt &&
+          canEditStudentAttendance(orgId, incoming().schoolId, incoming().className, incoming().section, incoming().dateEpochDay) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'entries', 'presentCount', 'absentCount', 'leaveCount', 'lateCount', 'halfDayCount', 'totalStudents',
+            'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+          ]);
+
+        allow delete: if isSignedIn() &&
+          isValidId(attId) &&
+          isOrgAdmin(orgId);
+      }
+
+      match /studentAttendanceEditLogs/{logId} {
+        allow get: if isSignedIn() && isActiveMember(orgId) &&
+          canAccessSchool(orgId, resource.data.schoolId) && (
+            hasModuleView(orgId, 'attendance') ||
+            isClassTeacherOfSection(orgId, resource.data.schoolId, resource.data.className, resource.data.section)
+          );
+
+        allow list: if isSignedIn() && isActiveMember(orgId) && (
+          hasModuleView(orgId, 'attendance') ||
+          (
+            canAccessSchool(orgId, resource.data.schoolId) &&
+            isClassTeacherOfSection(orgId, resource.data.schoolId, resource.data.className, resource.data.section)
+          )
+        );
+
+        allow create: if isSignedIn() &&
+          isValidId(logId) &&
+          isValidStudentAttendanceEditLog(incoming()) && (
+            isOrgAdmin(orgId) ||
+            (
+              canAccessSchool(orgId, incoming().schoolId) && (
+                hasModuleEdit(orgId, 'attendance') ||
+                isClassTeacherOfSection(orgId, incoming().schoolId, incoming().className, incoming().section)
+              )
+            )
+          );
+
+        allow update: if false;
+        allow delete: if false;
       }
     }
   }

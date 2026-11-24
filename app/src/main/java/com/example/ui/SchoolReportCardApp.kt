@@ -72,11 +72,16 @@ import com.example.data.cloud.OrgCloudRepository
 import com.example.data.cloud.Phase4Repository
 import com.example.data.cloud.Phase6Repository
 import com.example.data.cloud.Phase7Repository
+import com.example.data.cloud.Phase8Repository
 import com.example.data.cloud.TimetableRepository
 import com.example.data.cloud.authStateFlow
 import com.example.domain.AppModule
 import com.example.domain.ExamType
+import com.example.util.FirebaseNotConfiguredScreen
+import com.example.util.LastCrashReportScreen
+import com.example.util.StartupSafetyManager
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
 
@@ -95,6 +100,7 @@ object AppRoutes {
     const val ROUTE_PENDING_MARKS = "pending_marks"
     const val ROUTE_WORKLOAD_REPORT = "workload_report"
     const val ROUTE_TEACHER_ATTENDANCE = "teacher_attendance"
+    const val ROUTE_STUDENT_ATTENDANCE = "student_attendance"
 }
 
 private enum class OnboardingSubScreen {
@@ -114,12 +120,43 @@ private data class TopNavItem(
 
 /**
  * Root multi-tenant gate:
+ * 0) Startup safety: show previous uncaught crash report if present; if FirebaseApp.getApps(context).isEmpty(),
+ *    show FirebaseNotConfiguredScreen without touching Firebase.auth or Firestore.
  * 1) Signed out -> ONLY AuthScreen (zero Firestore listeners, zero data screens reachable).
  * 2) Signed in -> OrgSessionHost (keyed by user.uid) -> Org Picker / Create / Join / Waiting.
  * 3) Selected Org -> OrganisationWorkspace (keyed by "${user.uid}_$orgId") -> Teacher Onboarding or App.
  */
 @Composable
 fun SchoolReportCardApp() {
+    val context = LocalContext.current
+    remember(context) {
+        StartupSafetyManager.installGlobalExceptionHandler(context)
+        true
+    }
+
+    var lastCrashTrace by remember(context) {
+        mutableStateOf(StartupSafetyManager.readLastCrashStackTrace(context))
+    }
+
+    if (!lastCrashTrace.isNullOrBlank()) {
+        LastCrashReportScreen(
+            stackTrace = lastCrashTrace!!,
+            onDismiss = {
+                StartupSafetyManager.clearLastCrashStackTrace(context)
+                lastCrashTrace = null
+            }
+        )
+        return
+    }
+
+    val isFirebaseConfigured = remember(context) {
+        !FirebaseApp.getApps(context).isEmpty()
+    }
+    if (!isFirebaseConfigured) {
+        FirebaseNotConfiguredScreen()
+        return
+    }
+
     val auth = remember { Firebase.auth }
     val currentUser by remember(auth) { auth.authStateFlow() }
         .collectAsStateWithLifecycle(initialValue = auth.currentUser)
@@ -138,7 +175,6 @@ fun SchoolReportCardApp() {
     }
 
     val user = currentUser
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
     val rootConnectivity = remember(context.applicationContext) {
@@ -209,6 +245,7 @@ private fun AuthenticatedSessionHost(
     val timetableRepo = remember(orgRepo) { TimetableRepository(orgRepo) }
     val phase6Repo = remember(orgRepo) { Phase6Repository(orgRepo) }
     val phase7Repo = remember(orgRepo) { Phase7Repository(orgRepo) }
+    val phase8Repo = remember(orgRepo) { Phase8Repository(orgRepo) }
     val localRepo = remember(appContext) { ReportCardRepository(AppDatabase.getInstance(appContext).reportCardDao()) }
 
     val sessionViewModel: OrgSessionViewModel = viewModel(
@@ -344,6 +381,7 @@ private fun AuthenticatedSessionHost(
                     timetableRepo = timetableRepo,
                     phase6Repo = phase6Repo,
                     phase7Repo = phase7Repo,
+                    phase8Repo = phase8Repo,
                     localRepo = localRepo,
                     connectivityMonitor = connectivityMonitor,
                     offlinePrefs = offlinePrefs
@@ -439,6 +477,11 @@ private fun OrganisationWorkspace(
     var pendingMarksJumpTarget by remember { mutableStateOf<Pair<ExamType, String>?>(null) }
     var timetableJumpTab by remember { mutableStateOf<Int?>(null) }
     var timetableJumpSubsDate by remember { mutableStateOf<String?>(null) }
+    var attendanceJumpSchoolDocId by remember { mutableStateOf<String?>(null) }
+    var attendanceJumpClassName by remember { mutableStateOf<String?>(null) }
+    var attendanceJumpSection by remember { mutableStateOf<String?>(null) }
+    var attendanceJumpDateIso by remember { mutableStateOf<String?>(null) }
+    var attendanceJumpTab by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.snackbar.collect { msg ->
@@ -537,7 +580,8 @@ private fun OrganisationWorkspace(
         currentRoute == AppRoutes.ROUTE_TIMETABLE ||
         currentRoute == AppRoutes.ROUTE_PENDING_MARKS ||
         currentRoute == AppRoutes.ROUTE_WORKLOAD_REPORT ||
-        currentRoute == AppRoutes.ROUTE_TEACHER_ATTENDANCE
+        currentRoute == AppRoutes.ROUTE_TEACHER_ATTENDANCE ||
+        currentRoute == AppRoutes.ROUTE_STUDENT_ATTENDANCE
 
     fun navigateTopLevel(route: String) {
         navController.navigate(route) {
@@ -701,6 +745,26 @@ private fun OrganisationWorkspace(
                                     onNavigateToTeacherAttendance = {
                                         if (uiState.canView(AppModule.TIMETABLE)) {
                                             navController.navigate(AppRoutes.ROUTE_TEACHER_ATTENDANCE) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToStudentAttendance = { schDocId, dateIso ->
+                                        if (uiState.canAccessStudentAttendance) {
+                                            attendanceJumpSchoolDocId = schDocId
+                                            attendanceJumpClassName = null
+                                            attendanceJumpSection = null
+                                            attendanceJumpDateIso = dateIso
+                                            attendanceJumpTab = 0
+                                            navController.navigate(AppRoutes.ROUTE_STUDENT_ATTENDANCE) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onTakeStudentAttendanceSection = { schDocId, cls, sec, dateIso ->
+                                        if (uiState.canAccessStudentAttendance) {
+                                            attendanceJumpSchoolDocId = schDocId
+                                            attendanceJumpClassName = cls
+                                            attendanceJumpSection = sec
+                                            attendanceJumpDateIso = dateIso
+                                            attendanceJumpTab = 0
+                                            navController.navigate(AppRoutes.ROUTE_STUDENT_ATTENDANCE) { launchSingleTop = true }
                                         }
                                     },
                                     onOpenPendingMarksItem = { item ->
@@ -927,6 +991,32 @@ private fun OrganisationWorkspace(
                                             timetableJumpTab = 4 // TimetableTab.LEAVE_SUBS
                                             timetableJumpSubsDate = dateIso
                                             navController.navigate(AppRoutes.ROUTE_TIMETABLE) { launchSingleTop = true }
+                                        }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_STUDENT_ATTENDANCE) {
+                                if (uiState.canAccessStudentAttendance) {
+                                    Phase8StudentAttendanceScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() },
+                                        initialSchoolDocId = attendanceJumpSchoolDocId,
+                                        initialClassName = attendanceJumpClassName,
+                                        initialSection = attendanceJumpSection,
+                                        initialDateIso = attendanceJumpDateIso,
+                                        initialTabIndex = attendanceJumpTab,
+                                        onInitialJumpConsumed = {
+                                            attendanceJumpSchoolDocId = null
+                                            attendanceJumpClassName = null
+                                            attendanceJumpSection = null
+                                            attendanceJumpDateIso = null
+                                            attendanceJumpTab = null
                                         }
                                     )
                                 } else {

@@ -172,6 +172,7 @@ object Phase4Validator {
 
     const val DEFAULT_MAX_PERIODS_PER_DAY = 7
     const val DEFAULT_MAX_CONSECUTIVE_PERIODS = 3
+    val DEFAULT_WORKING_DAYS: List<DayOfWeekCode> = DayOfWeekCode.defaultWorkingDays
 
     fun formatMinutes(totalMinutes: Int): String {
         val clamped = totalMinutes.coerceIn(0, 24 * 60)

@@ -29,6 +29,8 @@ object Phase6DateUtils {
         return formatCalendar(cal)
     }
 
+    fun todayIso(nowMs: Long = System.currentTimeMillis()): String = todayIsoDate(nowMs)
+
     fun monthPrefix(isoDate: String): String {
         val clean = isoDate.trim()
         return if (clean.length >= 7) clean.substring(0, 7) else clean

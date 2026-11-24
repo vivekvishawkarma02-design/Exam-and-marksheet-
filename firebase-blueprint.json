@@ -45,7 +45,7 @@
     },
     "OrgMember": {
       "title": "OrgMember",
-      "description": "Member record with role, allowed schools, 8-module permissions, teacher profile fields, and activity timestamp.",
+      "description": "Member record with role, allowed schools, 9-module permissions (including Phase 8 Attendance with backward-compatible 8-key support), teacher profile fields, and activity timestamp.",
       "type": "object",
       "properties": {
         "uid": { "type": "string" },
@@ -124,6 +124,8 @@
         "checkReportCardsReadyBeforeBatch": { "type": "boolean" },
         "openExamsForTeachers": { "type": "array" },
         "classTeacherNamesBySection": { "type": "object" },
+        "autoFillReportAttendance": { "type": "boolean" },
+        "classTeacherAttendanceEditDaysBack": { "type": "integer" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -223,6 +225,7 @@
         "remarks": { "type": "string" },
         "promotedTo": { "type": "string" },
         "reportDate": { "type": "string" },
+        "attendanceManualOverride": { "type": "boolean" },
         "updatedByUid": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -448,6 +451,73 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["date", "schoolId", "teacherId", "teacherName", "status", "note", "linkedLeaveId", "updatedByUid", "updatedByName", "clientEditedAtMs", "createdAt", "updatedAt"]
+    },
+    "SchoolCalendar": {
+      "title": "SchoolCalendar",
+      "description": "Per-school and session calendar storing working days of the week, holidays, declared off days, half working days, working day exceptions, and Term-I/Term-II date bounds.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "workingDays": { "type": "array" },
+        "holidays": { "type": "array" },
+        "halfWorkingDays": { "type": "array" },
+        "workingDayExceptions": { "type": "array" },
+        "term1StartDate": { "type": "string" },
+        "term1EndDate": { "type": "string" },
+        "term2StartDate": { "type": "string" },
+        "term2EndDate": { "type": "string" },
+        "updatedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "session", "workingDays", "holidays", "halfWorkingDays", "workingDayExceptions", "term1StartDate", "term1EndDate", "term2StartDate", "term2EndDate", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "StudentAttendance": {
+      "title": "StudentAttendance",
+      "description": "Deterministic one-doc-per-section-per-date student attendance sheet storing P/A/L/Lt/H statuses, optional reasons, and summary counts.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "date": { "type": "string" },
+        "dateEpochDay": { "type": "integer" },
+        "entries": { "type": "object" },
+        "presentCount": { "type": "integer" },
+        "absentCount": { "type": "integer" },
+        "leaveCount": { "type": "integer" },
+        "lateCount": { "type": "integer" },
+        "halfDayCount": { "type": "integer" },
+        "totalStudents": { "type": "integer" },
+        "updatedByUid": { "type": "string" },
+        "updatedByName": { "type": "string" },
+        "clientEditedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "session", "className", "section", "date", "dateEpochDay", "entries", "presentCount", "absentCount", "leaveCount", "lateCount", "halfDayCount", "totalStudents", "updatedByUid", "updatedByName", "clientEditedAtMs", "createdAt", "updatedAt"]
+    },
+    "StudentAttendanceEditLog": {
+      "title": "StudentAttendanceEditLog",
+      "description": "Append-only edit history recording who edited a section's student attendance after initial entry, when, and exact per-student diffs.",
+      "type": "object",
+      "properties": {
+        "attendanceDocId": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "className": { "type": "string" },
+        "section": { "type": "string" },
+        "date": { "type": "string" },
+        "editorUid": { "type": "string" },
+        "editorName": { "type": "string" },
+        "summary": { "type": "string" },
+        "changes": { "type": "array" },
+        "clientEditedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["attendanceDocId", "schoolId", "session", "className", "section", "date", "editorUid", "editorName", "summary", "changes", "clientEditedAtMs", "createdAt"]
     }
   },
   "firestore": {
@@ -546,6 +616,18 @@
     "/organisations/{orgId}/teacherAttendance/{attId}": {
       "schema": { "$ref": "#/entities/TeacherAttendance" },
       "description": "Daily per-school teacher attendance records controlled by the Timetable module."
+    },
+    "/organisations/{orgId}/schoolCalendars/{calId}": {
+      "schema": { "$ref": "#/entities/SchoolCalendar" },
+      "description": "Per-school and session calendar (working days, holidays, half days, working day exceptions, Term-I/Term-II dates)."
+    },
+    "/organisations/{orgId}/studentAttendance/{attId}": {
+      "schema": { "$ref": "#/entities/StudentAttendance" },
+      "description": "Daily student attendance sheet per section per date controlled by the 9th Attendance module and Class Teacher own-section scope."
+    },
+    "/organisations/{orgId}/studentAttendanceEditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/StudentAttendanceEditLog" },
+      "description": "Append-only edit history for post-day/subsequent edits to student attendance."
     }
   }
 }

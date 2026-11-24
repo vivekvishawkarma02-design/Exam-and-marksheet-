@@ -109,6 +109,8 @@ fun DashboardScreen(
     onNavigateToPendingMarks: () -> Unit = {},
     onNavigateToWorkloadReport: () -> Unit = {},
     onNavigateToTeacherAttendance: () -> Unit = {},
+    onNavigateToStudentAttendance: (String?, String?) -> Unit = { _, _ -> },
+    onTakeStudentAttendanceSection: (String, String, String, String) -> Unit = { _, _, _, _ -> },
     onOpenPendingMarksItem: (PendingMarksItem) -> Unit = {},
     onOpenCoScholasticSection: (String, String, String) -> Unit = { _, _, _ -> },
     onEditOwnTeacherProfile: () -> Unit = {},
@@ -226,6 +228,18 @@ fun DashboardScreen(
                     accent = secondaryColor,
                     testTag = "tile_students",
                     onClick = onNavigateToStudents
+                )
+            )
+        }
+        if (uiState.canAccessStudentAttendance) {
+            add(
+                QuickActionSpec(
+                    title = "Student Attendance",
+                    subtitle = "Daily roll, calendar & PDF",
+                    icon = Icons.Default.FactCheck,
+                    accent = primaryColor,
+                    testTag = "tile_student_attendance",
+                    onClick = { onNavigateToStudentAttendance(uiState.activeSchoolDocId, null) }
                 )
             )
         }
@@ -445,6 +459,28 @@ fun DashboardScreen(
                     onOpenPendingMarks = onNavigateToPendingMarks,
                     onOpenMarksForItem = onOpenPendingMarksItem,
                     onOpenCoScholasticForSection = onOpenCoScholasticSection
+                )
+            }
+        }
+
+        // Phase 8: Class Teacher Student Attendance Home Card (1-tap "Take Attendance" for own section)
+        if (uiState.effectiveOwnTeacherScope?.classTeacherSections?.isNotEmpty() == true) {
+            item {
+                ClassTeacherAttendanceHomeCard(
+                    uiState = uiState,
+                    onTakeAttendance = onTakeStudentAttendanceSection
+                )
+            }
+        }
+
+        // Phase 8: Admin / Attendance Viewer Today's Student Attendance Summary per School
+        if (uiState.canAccessStudentAttendance && (uiState.isAdmin || uiState.canView(AppModule.ATTENDANCE))) {
+            item {
+                AdminStudentAttendanceSummaryCard(
+                    uiState = uiState,
+                    onOpenStudentAttendance = { schDocId, dateIso ->
+                        onNavigateToStudentAttendance(schDocId, dateIso)
+                    }
                 )
             }
         }

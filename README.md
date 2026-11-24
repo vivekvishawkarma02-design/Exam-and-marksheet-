@@ -200,12 +200,51 @@ All Phase 7 data lives under `organisations/{orgId}/`, works 100% offline with P
 
 ---
 
+## Phase 8: Student Attendance Module
+
+All Phase 8 student attendance data belongs to an organisation in Cloud Firestore (`schoolCalendars`, `studentAttendance`, `studentAttendanceEditLogs`), works 100% offline with Phase 3 sync, and stays completely separate from Phase 7 **Teacher Attendance**. Report card layouts, marks calculations, and grading rules remain completely unchanged.
+
+1. **9th Access Module (`Attendance`) & Zero-Downtime 8→9 Migration**
+   - Added a 9th module **`Attendance`** (`no access` / `view only` / `view and edit`) with the same per-school scope as the other 8 modules.
+   - **Backward-Compatible Migration:** Both the app and `firestore.rules` accept legacy 8-key member documents (without `"attendance"`) and 9-key documents side-by-side. A missing `"attendance"` key is treated as `no access`, **except that any Class Teacher always automatically has edit access to their own assigned section(s)** (verified via `teacherScopes`). Admins and Owners keep full access, and saving any member or invite code lazily writes all 9 keys with zero downtime.
+   - Enforced in both the UI and `firestore.rules` (with emulator tests): Class Teachers can write only for their own section within the school's edit window; other subject teachers cannot unless granted `Attendance: edit`; view-only members cannot write; members without access see nothing; cross-organisation isolation stays intact.
+
+2. **Per-School & Session Calendar (`organisations/{orgId}/schoolCalendars/{docId}`)**
+   - Working weekdays default from the school's Phase 4 period structure and can be overridden per session.
+   - Supports single-day holidays, date ranges (e.g., Diwali Break), later **"Declared Off"** days, optional **Half Working Days**, and Admin **"Working Day Exceptions"** (so an Admin can declare a holiday/weekend open when needed).
+   - Editable **Term-I** and **Term-II** start/end dates validated to never overlap and to stay within the active session, plus a **Live Working-Days Calculator** for any custom date range.
+
+3. **Daily Student Attendance Entry (`organisations/{orgId}/studentAttendance/{docId}`)**
+   - One deterministic document per section per date (`satt_<school>_<session>_<class>_<section>_<date>`) so offline edits never create duplicates, synced with latest-edit-wins conflict alerts.
+   - Students ordered by roll number starting as **Present (`P`)**; 1-tap cycles or opens a quick chooser for **Present (`P`)**, **Absent (`A`)**, **Leave (`L`, with optional reason)**, **Late (`Lt`)**, and **Half-day (`H`)**, with big **"Mark All Present"** and **"Save"** buttons, live counts, and a search box.
+   - Blocks holidays and non-working days (with an Admin **"It is a working day — add exception"** button). Past dates are allowed up to the school's configurable **Class teacher edit limit** (default **7 days**, configurable in **Settings**; Admins unlimited). Any post-day or subsequent edit appends an immutable audit record to `studentAttendanceEditLogs` (`who`, `when`, `what changed`).
+
+4. **Optional Report Card Attendance Link (OFF by Default)**
+   - Per-school switch in **Settings -> Student Attendance Settings**: **"Fill report card attendance automatically from daily attendance"** (**OFF by default** so existing report cards are untouched).
+   - Weighting: **Present = 1.0**, **Late = 1.0**, **Half-day = 0.5**, **Absent = 0.0**, **Leave = 0.0** (rounded half-up to integers on report cards so existing Annual Grand Total math like `84/111 + 82/97 = 166/208` works identically).
+   - Manually typed report card attendance values stay protected with a **"Manual"** badge; use **"Recalculate"** (per student or per section & term) with confirmation to refresh from daily records.
+
+5. **Offline A4 PDF Reports, Low Attendance CSV & Guardian Share Texts**
+   - **Daily Attendance Sheet** (A4 Portrait), **Monthly Attendance Register** (A4 Landscape, 31-day grid, shaded holidays, `P`/`A`/`L`/`Lt`/`H`, per-student & per-day totals, paginated for 50+ students), **Student-Wise Date-Range Summary** (A4 Portrait), and **Low Attendance List** (section or whole school, configurable threshold % default `75%`, A4 Portrait PDF + CSV export).
+   - **Guardian WhatsApp/SMS Share:** Share an individual absent-student message or a full class absent list using Android's standard share sheet (never auto-sent).
+
+### Quick Guide for Class Teachers (Taking Daily Student Attendance)
+
+1. Open the app — on your **Home** screen you will see **"My Class Attendance (Today)"** showing whether today's attendance for your section is taken or pending.
+2. Tap **"Take Attendance"** to open your section's roster ordered by roll number (everyone starts marked **Present**).
+3. Tap a student's status pill to cycle (`P -> A -> L -> Lt -> H`) or tap the edit icon to pick a status and add an optional **Leave reason** (e.g., *Sick*). Use **Search** to jump straight to any student.
+4. Check the live **Present / Absent / Leave / Late / Half** counters at the top, then tap **"Save Attendance"**. Works offline too — saved on your phone and synced automatically when internet returns.
+5. Need to inform parents? Tap **Share** next to an absent student (or **"Share Absent List"** at the top) to send a ready-made message via WhatsApp or SMS.
+6. Need to fix a recent day? Use the date arrows to step back (up to the school's edit window, default 7 days). All post-day changes are recorded in the **Edit History** log; for older dates or holiday overrides, ask your school Admin.
+
+---
+
 ## How Each Role Uses the App
 
-- **Owner:** Creates the organisation (and first school), can add/edit multiple schools, manage all academic/timetable/attendance modules, approve members & set granular per-school/per-module access, configure report card links & open exams, export JSON backups, transfer ownership, or delete the organisation (requires a backup first).
-- **Admin:** Day-to-day head across assigned schools — manages members & invite codes, teachers, period structures, class-subject assignments (which automatically sync teacher scopes & Class Teacher names), timetables, auto-generate, leave approvals, daily substitutions, staff attendance, pending marks reminders, workload reports, marks history audit logs, and batch A4 report cards.
-- **Office Operator:** Handles daily administrative operations for their assigned school(s) based on the exact modules granted by the Admin (typically Students, Marks, Co-Scholastic, Reports, Timetable/Substitutions, and Staff Attendance). Keeps full marks & co-scholastic access across assigned schools even when an exam is closed for teachers.
-- **Teacher:** Signs in and lands on **"My Day"** showing today's periods, assigned substitutions, weekly timetable, Class Teacher section(s), and own pending marks. Enters marks **only** for their assigned class-section-subject combinations during open exams, enters co-scholastic/attendance/remarks **only** for their own Class Teacher section, and can submit or cancel their own `PENDING` leave requests.
+- **Owner:** Creates the organisation (and first school), can add/edit multiple schools, manage all academic/timetable/attendance modules, approve members & set granular per-school/per-module access (all 9 modules), configure report card links, attendance auto-fill & open exams, export JSON backups, transfer ownership, or delete the organisation (requires a backup first).
+- **Admin:** Day-to-day head across assigned schools — manages members & invite codes, teachers, period structures, class-subject assignments (which automatically sync teacher scopes & Class Teacher names), timetables, auto-generate, leave approvals, daily substitutions, staff attendance, student attendance & school calendars, pending marks reminders, workload reports, marks history audit logs, and batch A4 report cards.
+- **Office Operator:** Handles daily administrative operations for their assigned school(s) based on the exact modules granted by the Admin (typically Students, Marks, Co-Scholastic, Reports, Timetable/Substitutions, Staff Attendance, and Student Attendance). Keeps full marks & co-scholastic access across assigned schools even when an exam is closed for teachers.
+- **Teacher:** Signs in and lands on **"My Day"** and **"My Class Attendance (Today)"** showing today's periods, assigned substitutions, weekly timetable, Class Teacher section(s), and own pending marks. Enters marks **only** for their assigned class-section-subject combinations during open exams, enters co-scholastic/attendance/remarks and takes daily **Student Attendance** **only** for their own Class Teacher section, and can submit or cancel their own `PENDING` leave requests.
 
 ---
 

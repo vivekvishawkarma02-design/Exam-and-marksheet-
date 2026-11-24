@@ -1820,6 +1820,362 @@ test("Phase 7: Server-side teacher scope enforcement for marks, open exams, clas
   }));
 });
 
+// =============================================================================
+// 12. PHASE 8: STUDENT ATTENDANCE (9th MODULE), BACKWARD-COMPATIBLE 8-KEY MIGRATION,
+//     CLASS TEACHER OWN-SECTION & DAYS-BACK LIMIT, CALENDAR & APPEND-ONLY EDIT LOGS
+// =============================================================================
+test("Phase 8: Student Attendance 9th module, legacy 8-key migration, class teacher own-section + days-back limit, calendar, edit logs & cross-org isolation", async () => {
+  const LEGACY_CT = "uid_p8_legacy_ct";      // Legacy 8-key member (NO 'attendance' key), Class Teacher of SCHOOL_1 3rd-A
+  const SUBJ_TEACHER = "uid_p8_subj_tchr";   // 9-key member with attendance: 'none', NOT a class teacher
+  const EDIT_TEACHER = "uid_p8_edit_tchr";   // 9-key member with attendance: 'edit' in SCHOOL_1
+  const VIEW_ONLY = "uid_p8_view_only";      // 9-key member with attendance: 'view' in SCHOOL_1
+  const NO_ACCESS = "uid_p8_no_access";      // 9-key member with attendance: 'none', NOT a class teacher
+  const OUTSIDER = "uid_p8_outsider";        // Not a member of ORG_ID
+
+  await seedOrgWithOwnerAndSchools();
+
+  const nowEpochDay = Math.floor(Date.now() / 86400000);
+  const isoFromEpochDay = (ed) => {
+    const d = new Date(ed * 86400000);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+  const todayIso = isoFromEpochDay(nowEpochDay);
+  const twoDaysAgoEpoch = nowEpochDay - 2;
+  const twoDaysAgoIso = isoFromEpochDay(twoDaysAgoEpoch);
+  const thirtyDaysAgoEpoch = nowEpochDay - 30;
+  const thirtyDaysAgoIso = isoFromEpochDay(thirtyDaysAgoEpoch);
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    const orgRef = db.collection("organisations").doc(ORG_ID);
+    const ts = pastDate();
+
+    // Configure SCHOOL_1 with Phase 8 defaults: autoFillReportAttendance=false, classTeacherAttendanceEditDaysBack=7
+    await orgRef.collection("schools").doc(SCHOOL_1).set({
+      autoFillReportAttendance: false,
+      classTeacherAttendanceEditDaysBack: 7,
+      updatedAt: ts,
+    }, { merge: true });
+
+    // Legacy 8-key member (NO 'attendance' key) — Class Teacher of 3rd-A
+    await orgRef.collection("members").doc(LEGACY_CT).set({
+      uid: LEGACY_CT,
+      name: "Mrs. Legacy CT",
+      email: "legacyct@org1.com",
+      mobile: "9999900011",
+      role: "TEACHER",
+      status: "active",
+      allSchools: false,
+      schools: [SCHOOL_1],
+      permissions: {
+        students: "view",
+        marks: "edit",
+        coScholastic: "edit",
+        reports: "view",
+        timetable: "view",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+      },
+      teacherProfileCompleted: true,
+      teacherPhotoBase64: "",
+      requestedSubjects: ["Maths"],
+      requestedClasses: ["3rd"],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    await orgRef.collection("teacherScopes").doc(LEGACY_CT).set({
+      uid: LEGACY_CT,
+      teacherId: "tchr_legacy_ct",
+      teacherName: "Mrs. Legacy CT",
+      assignedClassSectionSubjects: [`${SCHOOL_1}|3rd|A|Maths`],
+      classTeacherSections: [`${SCHOOL_1}|3rd|A`],
+      updatedByUid: OWNER_UID,
+      updatedAt: ts,
+    });
+
+    // Subject Teacher (attendance: 'none', NOT a class teacher)
+    await orgRef.collection("members").doc(SUBJ_TEACHER).set({
+      uid: SUBJ_TEACHER,
+      name: "Mr. Subject Only",
+      email: "subj@org1.com",
+      mobile: "9999900012",
+      role: "TEACHER",
+      status: "active",
+      allSchools: false,
+      schools: [SCHOOL_1],
+      permissions: {
+        students: "view",
+        marks: "edit",
+        coScholastic: "none",
+        reports: "none",
+        timetable: "view",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+        attendance: "none",
+      },
+      teacherProfileCompleted: true,
+      teacherPhotoBase64: "",
+      requestedSubjects: ["Hindi"],
+      requestedClasses: ["3rd"],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // Teacher explicitly granted attendance: 'edit' in SCHOOL_1
+    await orgRef.collection("members").doc(EDIT_TEACHER).set({
+      uid: EDIT_TEACHER,
+      name: "Ms. Att Editor",
+      email: "attedit@org1.com",
+      mobile: "9999900013",
+      role: "OFFICE_OPERATOR",
+      status: "active",
+      allSchools: false,
+      schools: [SCHOOL_1],
+      permissions: {
+        students: "view",
+        marks: "none",
+        coScholastic: "none",
+        reports: "none",
+        timetable: "none",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+        attendance: "edit",
+      },
+      teacherProfileCompleted: false,
+      teacherPhotoBase64: "",
+      requestedSubjects: [],
+      requestedClasses: [],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // View-only attendance member
+    await orgRef.collection("members").doc(VIEW_ONLY).set({
+      uid: VIEW_ONLY,
+      name: "Att Viewer",
+      email: "attview@org1.com",
+      mobile: "9999900014",
+      role: "OTHER",
+      status: "active",
+      allSchools: false,
+      schools: [SCHOOL_1],
+      permissions: {
+        students: "none",
+        marks: "none",
+        coScholastic: "none",
+        reports: "none",
+        timetable: "none",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+        attendance: "view",
+      },
+      teacherProfileCompleted: false,
+      teacherPhotoBase64: "",
+      requestedSubjects: [],
+      requestedClasses: [],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // No-access member (attendance: 'none', not a class teacher)
+    await orgRef.collection("members").doc(NO_ACCESS).set({
+      uid: NO_ACCESS,
+      name: "No Att Access",
+      email: "noatt@org1.com",
+      mobile: "9999900015",
+      role: "OTHER",
+      status: "active",
+      allSchools: true,
+      schools: [],
+      permissions: {
+        students: "none",
+        marks: "none",
+        coScholastic: "none",
+        reports: "none",
+        timetable: "none",
+        teachers: "none",
+        settings: "none",
+        members: "none",
+        attendance: "none",
+      },
+      teacherProfileCompleted: false,
+      teacherPhotoBase64: "",
+      requestedSubjects: [],
+      requestedClasses: [],
+      assignedClassSubjects: [],
+      lastActiveAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+  });
+
+  const ownerOrg = testEnv.authenticatedContext(OWNER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const ctOrg = testEnv.authenticatedContext(LEGACY_CT).firestore().collection("organisations").doc(ORG_ID);
+  const subjOrg = testEnv.authenticatedContext(SUBJ_TEACHER).firestore().collection("organisations").doc(ORG_ID);
+  const editOrg = testEnv.authenticatedContext(EDIT_TEACHER).firestore().collection("organisations").doc(ORG_ID);
+  const viewOrg = testEnv.authenticatedContext(VIEW_ONLY).firestore().collection("organisations").doc(ORG_ID);
+  const noneOrg = testEnv.authenticatedContext(NO_ACCESS).firestore().collection("organisations").doc(ORG_ID);
+  const outsiderOrg = testEnv.authenticatedContext(OUTSIDER).firestore().collection("organisations").doc(ORG_ID);
+  const ts = pastDate();
+
+  const makeSheet = (uid, name, overrides = {}) => ({
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    className: "3rd",
+    section: "A",
+    date: todayIso,
+    dateEpochDay: nowEpochDay,
+    entries: { stu_3a: { status: "P", reason: "" } },
+    presentCount: 1,
+    absentCount: 0,
+    leaveCount: 0,
+    lateCount: 0,
+    halfDayCount: 0,
+    totalStudents: 1,
+    updatedByUid: uid,
+    updatedByName: name,
+    clientEditedAtMs: Date.now() - 500,
+    createdAt: ts,
+    updatedAt: ts,
+    ...overrides,
+  });
+
+  // 1. Legacy 8-key Class Teacher CAN write attendance for OWN section (3rd-A) today & 2 days ago
+  const ctDocIdToday = `satt_${SCHOOL_1}_2026_2027_3rd_A_${todayIso.replace(/-/g, "_")}`;
+  await assertSucceeds(ctOrg.collection("studentAttendance").doc(ctDocIdToday).set(makeSheet(LEGACY_CT, "Mrs. Legacy CT")));
+  const ctDocId2Days = `satt_${SCHOOL_1}_2026_2027_3rd_A_${twoDaysAgoIso.replace(/-/g, "_")}`;
+  await assertSucceeds(ctOrg.collection("studentAttendance").doc(ctDocId2Days).set(
+    makeSheet(LEGACY_CT, "Mrs. Legacy CT", { date: twoDaysAgoIso, dateEpochDay: twoDaysAgoEpoch })
+  ));
+
+  // 2. Legacy Class Teacher REFUSED writing another section (3rd-B)
+  await assertFails(ctOrg.collection("studentAttendance").doc("satt_3b_today").set(
+    makeSheet(LEGACY_CT, "Mrs. Legacy CT", { section: "B" })
+  ));
+
+  // 3. Legacy Class Teacher REFUSED writing 30 days ago (exceeds 7-day limit), while Owner/Admin ALLOWED
+  const oldDocId = `satt_${SCHOOL_1}_2026_2027_3rd_A_${thirtyDaysAgoIso.replace(/-/g, "_")}`;
+  await assertFails(ctOrg.collection("studentAttendance").doc(oldDocId).set(
+    makeSheet(LEGACY_CT, "Mrs. Legacy CT", { date: thirtyDaysAgoIso, dateEpochDay: thirtyDaysAgoEpoch })
+  ));
+  await assertSucceeds(ownerOrg.collection("studentAttendance").doc(oldDocId).set(
+    makeSheet(OWNER_UID, "Principal Owner", { date: thirtyDaysAgoIso, dateEpochDay: thirtyDaysAgoEpoch })
+  ));
+
+  // 4. Class Teacher CAN query own section sheets, CANNOT list all org attendance sheets
+  await assertSucceeds(
+    ctOrg.collection("studentAttendance")
+      .where("schoolId", "==", SCHOOL_1)
+      .where("className", "==", "3rd")
+      .where("section", "==", "A")
+      .get()
+  );
+  await assertFails(ctOrg.collection("studentAttendance").get());
+
+  // 5. Subject teacher (attendance: 'none', not CT) REFUSED read & write
+  await assertFails(subjOrg.collection("studentAttendance").doc(ctDocIdToday).get());
+  await assertFails(subjOrg.collection("studentAttendance").get());
+  await assertFails(subjOrg.collection("studentAttendance").doc("satt_subj_write").set(makeSheet(SUBJ_TEACHER, "Mr. Subject Only")));
+
+  // 6. Member with attendance: 'edit' in SCHOOL_1 ALLOWED to write 3rd-B in SCHOOL_1, REFUSED in SCHOOL_2
+  await assertSucceeds(editOrg.collection("studentAttendance").doc("satt_edit_3b").set(
+    makeSheet(EDIT_TEACHER, "Ms. Att Editor", { section: "B" })
+  ));
+  await assertFails(editOrg.collection("studentAttendance").doc("satt_edit_sch2").set(
+    makeSheet(EDIT_TEACHER, "Ms. Att Editor", { schoolId: SCHOOL_2 })
+  ));
+
+  // 7. View-only member (attendance: 'view') ALLOWED to read SCHOOL_1, REFUSED write & delete
+  await assertSucceeds(viewOrg.collection("studentAttendance").doc(ctDocIdToday).get());
+  await assertFails(viewOrg.collection("studentAttendance").doc("satt_view_write").set(makeSheet(VIEW_ONLY, "Att Viewer")));
+  await assertFails(viewOrg.collection("studentAttendance").doc(ctDocIdToday).delete());
+
+  // 8. No-access member & Cross-org outsider REFUSED read & write on all Phase 8 collections
+  await assertFails(noneOrg.collection("studentAttendance").doc(ctDocIdToday).get());
+  await assertFails(noneOrg.collection("studentAttendance").get());
+  await assertFails(noneOrg.collection("schoolCalendars").get());
+  await assertFails(outsiderOrg.collection("studentAttendance").doc(ctDocIdToday).get());
+  await assertFails(outsiderOrg.collection("schoolCalendars").get());
+  await assertFails(outsiderOrg.collection("studentAttendanceEditLogs").get());
+
+  // 9. School Calendar rules: Owner ALLOWED valid calendar, REFUSED overlapping terms; Legacy CT CAN read, CANNOT write
+  const calDocId = `cal_${SCHOOL_1}_2026_2027`;
+  const validCalendar = {
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    workingDays: ["MON", "TUE", "WED", "THU", "FRI", "SAT"],
+    holidays: [{ id: "h1", name: "Diwali", startDate: "2026-11-08", endDate: "2026-11-12", kind: "HOLIDAY" }],
+    halfWorkingDays: [{ id: "hd1", date: "2026-08-14", name: "PTM Half Day" }],
+    workingDayExceptions: [],
+    term1StartDate: "2026-04-01",
+    term1EndDate: "2026-09-30",
+    term2StartDate: "2026-10-01",
+    term2EndDate: "2027-03-31",
+    updatedByUid: OWNER_UID,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+  await assertSucceeds(ownerOrg.collection("schoolCalendars").doc(calDocId).set(validCalendar));
+  await assertFails(ownerOrg.collection("schoolCalendars").doc("cal_overlap").set({
+    ...validCalendar,
+    term1EndDate: "2026-10-15",
+    term2StartDate: "2026-10-01",
+  }));
+  await assertSucceeds(ctOrg.collection("schoolCalendars").doc(calDocId).get());
+  await assertFails(ctOrg.collection("schoolCalendars").doc(calDocId).update({
+    workingDays: ["MON", "TUE"],
+    updatedByUid: LEGACY_CT,
+    updatedAt: ts,
+  }));
+
+  // 10. Student Attendance Edit Logs: append-only (create allowed for authorized editor, update & delete DENIED even for Owner)
+  const logPayload = {
+    attendanceDocId: ctDocId2Days,
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    className: "3rd",
+    section: "A",
+    date: twoDaysAgoIso,
+    editorUid: LEGACY_CT,
+    editorName: "Mrs. Legacy CT",
+    summary: "Changed Aarav from P to A",
+    changes: [{ studentId: "stu_3a", studentName: "Aarav", oldStatus: "P", newStatus: "A", oldReason: "", newReason: "" }],
+    clientEditedAtMs: Date.now() - 200,
+    createdAt: ts,
+  };
+  await assertSucceeds(ctOrg.collection("studentAttendanceEditLogs").doc("salog_01").set(logPayload));
+  await assertFails(ownerOrg.collection("studentAttendanceEditLogs").doc("salog_01").update({ summary: "Tampered" }));
+  await assertFails(ownerOrg.collection("studentAttendanceEditLogs").doc("salog_01").delete());
+
+  // 11. Per-school Phase 8 settings update: Owner ALLOWED, Class Teacher REFUSED
+  await assertSucceeds(ownerOrg.collection("schools").doc(SCHOOL_1).update({
+    autoFillReportAttendance: true,
+    classTeacherAttendanceEditDaysBack: 10,
+    updatedAt: ts,
+  }));
+  await assertFails(ctOrg.collection("schools").doc(SCHOOL_1).update({
+    autoFillReportAttendance: false,
+    updatedAt: ts,
+  }));
+});
+
+
 
 
 

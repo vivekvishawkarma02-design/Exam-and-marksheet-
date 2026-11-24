@@ -121,6 +121,20 @@ jobs:
             echo "::warning::sdkmanager not found under ${SDK_ROOT}; relying on pre-installed Android SDK."
           fi
 
+      - name: Write google-services.json from secret
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON_SECRET: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${GOOGLE_SERVICES_JSON_SECRET:-}" ]]; then
+            mkdir -p app
+            printf '%s\n' "${GOOGLE_SERVICES_JSON_SECRET}" > app/google-services.json
+            echo "Wrote app/google-services.json from GOOGLE_SERVICES_JSON secret."
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret is empty; building APK without app/google-services.json (app will display the Firebase not configured notice)."
+          fi
+
       - name: Build debug APK
         shell: bash
         run: |

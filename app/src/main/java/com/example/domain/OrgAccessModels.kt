@@ -37,6 +37,7 @@ enum class AppModule(val key: String, val label: String, val description: String
     REPORTS("reports", "Reports", "UT slips, Half-Yearly slips, Annual report cards, and batch PDFs"),
     TIMETABLE("timetable", "Timetable", "Class and teacher timetables (full scheduling in later phases)"),
     TEACHERS("teachers", "Teachers and assignments", "Teachers, period structure, class-subject assignments, and subject rules"),
+    ATTENDANCE("attendance", "Attendance", "Daily student attendance, school calendar, and attendance reports"),
     SETTINGS("settings", "Settings", "Organisation settings, sessions, schools, and backups"),
     MEMBERS("members", "Members", "Member directory, join requests, roles, and access control");
 
@@ -70,6 +71,7 @@ data class MemberPermissions(
     val reports: AccessLevel = AccessLevel.NONE,
     val timetable: AccessLevel = AccessLevel.NONE,
     val teachers: AccessLevel = AccessLevel.NONE,
+    val attendance: AccessLevel = AccessLevel.NONE,
     val settings: AccessLevel = AccessLevel.NONE,
     val members: AccessLevel = AccessLevel.NONE
 ) {
@@ -80,6 +82,7 @@ data class MemberPermissions(
         AppModule.REPORTS -> reports
         AppModule.TIMETABLE -> timetable
         AppModule.TEACHERS -> teachers
+        AppModule.ATTENDANCE -> attendance
         AppModule.SETTINGS -> settings
         AppModule.MEMBERS -> members
     }
@@ -91,6 +94,7 @@ data class MemberPermissions(
         AppModule.REPORTS -> copy(reports = level)
         AppModule.TIMETABLE -> copy(timetable = level)
         AppModule.TEACHERS -> copy(teachers = level)
+        AppModule.ATTENDANCE -> copy(attendance = level)
         AppModule.SETTINGS -> copy(settings = level)
         AppModule.MEMBERS -> copy(members = level)
     }
@@ -102,6 +106,7 @@ data class MemberPermissions(
         AppModule.REPORTS.key to reports.wireValue,
         AppModule.TIMETABLE.key to timetable.wireValue,
         AppModule.TEACHERS.key to teachers.wireValue,
+        AppModule.ATTENDANCE.key to attendance.wireValue,
         AppModule.SETTINGS.key to settings.wireValue,
         AppModule.MEMBERS.key to members.wireValue
     )
@@ -115,6 +120,7 @@ data class MemberPermissions(
                 reports = AccessLevel.EDIT,
                 timetable = AccessLevel.EDIT,
                 teachers = AccessLevel.EDIT,
+                attendance = AccessLevel.EDIT,
                 settings = AccessLevel.EDIT,
                 members = AccessLevel.EDIT
             )
@@ -125,6 +131,7 @@ data class MemberPermissions(
                 reports = AccessLevel.EDIT,
                 timetable = AccessLevel.VIEW,
                 teachers = AccessLevel.NONE,
+                attendance = AccessLevel.EDIT,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -135,6 +142,7 @@ data class MemberPermissions(
                 reports = AccessLevel.VIEW,
                 timetable = AccessLevel.VIEW,
                 teachers = AccessLevel.NONE,
+                attendance = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -145,6 +153,7 @@ data class MemberPermissions(
                 reports = AccessLevel.NONE,
                 timetable = AccessLevel.VIEW,
                 teachers = AccessLevel.NONE,
+                attendance = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -159,6 +168,7 @@ data class MemberPermissions(
                 reports = AccessLevel.fromRaw(raw[AppModule.REPORTS.key] as? String),
                 timetable = AccessLevel.fromRaw(raw[AppModule.TIMETABLE.key] as? String),
                 teachers = AccessLevel.fromRaw(raw[AppModule.TEACHERS.key] as? String),
+                attendance = AccessLevel.fromRaw(raw[AppModule.ATTENDANCE.key] as? String),
                 settings = AccessLevel.fromRaw(raw[AppModule.SETTINGS.key] as? String),
                 members = AccessLevel.fromRaw(raw[AppModule.MEMBERS.key] as? String)
             )

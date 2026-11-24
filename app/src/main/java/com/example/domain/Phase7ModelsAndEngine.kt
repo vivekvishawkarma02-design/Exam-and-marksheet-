@@ -37,6 +37,11 @@ data class TeacherAccessScope(
         "updatedAt" to updatedAtValue
     )
 
+    fun isClassTeacherOf(schoolId: String, className: String, section: String): Boolean {
+        val key = makeClassTeacherSectionKey(schoolId, className, section)
+        return classTeacherSections.any { it.equals(key, ignoreCase = true) }
+    }
+
     companion object {
         fun makeSubjectScopeKey(
             schoolId: String,

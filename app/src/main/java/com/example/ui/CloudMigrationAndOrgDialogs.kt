@@ -102,6 +102,7 @@ fun SyncStatusChip(
 fun SyncStatusChip(
     syncUiState: SyncUiState,
     onClick: (() -> Unit)? = null,
+    isHindi: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val (bg, fg, icon) = when (syncUiState.status) {
@@ -109,6 +110,16 @@ fun SyncStatusChip(
         SyncStatus.OFFLINE -> Triple(AbsentAmberContainer, AbsentAmber, Icons.Default.CloudOff)
         SyncStatus.SYNCING -> Triple(AbsentAmberContainer, AbsentAmber, Icons.Default.CloudSync)
         SyncStatus.ERROR -> Triple(FailRedContainer, FailRed, Icons.Default.ErrorOutline)
+    }
+    val label = if (isHindi) {
+        when (syncUiState.status) {
+            SyncStatus.ONLINE -> "ऑनलाइन"
+            SyncStatus.OFFLINE -> if (syncUiState.pendingCount > 0) "ऑफ़लाइन (${syncUiState.pendingCount})" else "ऑफ़लाइन"
+            SyncStatus.SYNCING -> if (syncUiState.pendingCount > 0) "सिंक (${syncUiState.pendingCount})" else "सिंक…"
+            SyncStatus.ERROR -> "सिंक त्रुटि"
+        }
+    } else {
+        syncUiState.chipLabel
     }
     Surface(
         shape = RoundedCornerShape(20.dp),
@@ -133,12 +144,12 @@ fun SyncStatusChip(
         ) {
             Icon(
                 imageVector = icon,
-                contentDescription = syncUiState.chipLabel,
+                contentDescription = label,
                 tint = fg,
                 modifier = Modifier.size(14.dp)
             )
             Text(
-                text = syncUiState.chipLabel,
+                text = label,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 color = fg,

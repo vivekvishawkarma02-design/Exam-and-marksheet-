@@ -295,12 +295,42 @@ All Phase 11 modules follow the same mobile-first (`>= 48 dp` touch targets), Hi
 
 ---
 
+## Phase 12: Staff Salary (Sensitive Owner-First Access)
+
+All Phase 12 features follow the same mobile-first (`>= 48 dp` touch targets), Hindi-friendly (`हिन्दी / EN` toggle), offline-first Firestore sync architecture while keeping Phases 1–11 working unchanged.
+
+1. **Sensitive 18th Access Module (`Salary` — Owner-Only by Default)**
+   - Added `salary` (`No access` / `View only` / `View & edit`) as the **18th module** in the member access matrix, enforced in both the Compose UI and `firestore.rules` (with emulator rules tests).
+   - **Owner-Only Default & Explicit Admin Grant:** Unlike other modules where Admins automatically receive access, **only the `Owner` has `Salary` access by default**. An `Admin` sees nothing of `Salary` unless the **Owner** explicitly grants `View only` or `View & edit` on that Admin's member permissions (and only the Owner can grant or change the `Salary` permission key).
+   - **Missing-Key Rule:** Any member document without the `salary` key evaluates to `No access` (sees nothing).
+   - **Teacher Own Salary Slips (Owner Toggle):** When the Owner turns on **"Allow Teachers to View Own Salary Slips"** in **Salary -> Rules & Audit**, linked teachers see a **"My Salary Slips"** card on their Home screen and can download/print **only their own** A4 or A5 salary slips (never any other staff member's salary or setup).
+
+2. **Staff Salary Setup (`staffSalaryProfiles`)**
+   - Configure salary profiles for both **teaching staff** (1-tap **"Sync Phase 4 Teachers"**) and **non-teaching staff** (accountant, clerk, driver, peon, guard, etc.).
+   - Per staff member: **Basic monthly salary**, **editable Allowances list** (HRA, DA, Conveyance, etc.), **editable Fixed Deductions list** (PF, TDS, Professional Tax, etc.), **joining date**, bank/UPI note, and **Per-School or All-Schools assignment**.
+
+3. **Monthly Salary Sheet & Phase 7 Attendance Rules (`salaryMonthlyRecords`, `salaryRuleConfigs`)**
+   - **1-Tap Pull from Phase 7 Teacher Attendance:** Pulls each staff member's **Present**, **Absent**, **Approved Leave**, **Half-Day**, and **Late** days for the selected month (`YYYY-MM`).
+   - **Clearly Shown Per-School Attendance Deduction Rule:** Editable per school — choose per-day deduction basis (**Basic ÷ 30 days**, **Basic ÷ Working days in month**, or a fixed ₹/day override), **free leaves per month** (default `1`), whether approved Phase 6 leaves count as paid, **half-day deduction %** (default `50%`), and **late-day penalty** (e.g., every `3` late days = `1` day deduction or fixed ₹/late day). The active rule summary banner is shown clearly at the top of the Monthly Sheet.
+   - **Manual Hand Adjustment with Remark:** Any staff member's monthly salary can be adjusted up or down (`+₹` bonus/arrear or `-₹` fine/deduction) with a mandatory **Remark** printed on the slip and logged.
+
+4. **Advances & Loans (`staffSalaryAdvances`)**
+   - Give an advance/loan to a staff member with date, principal amount, payment mode, reason, and **monthly instalment amount** (with automatic monthly deduction toggle).
+   - Record manual repayments at any time or let the Monthly Salary Sheet automatically deduct `min(monthlyInstalment, remainingBalance)` when salary is marked paid, showing the live remaining balance and auto-closing when the balance reaches `₹0`.
+
+5. **Pay, A4/A5 Salary Slip PDFs, Month Locking & Automatic Cash Book Expense**
+   - **Mark Paid & Offline PDFs / CSV:** Mark any staff member paid with date, mode (`Cash`/`UPI`/`Cheque`/`Other`), and reference. Generate **A4 or A5 Salary Slip PDF** per staff member (with school name & logo, month, attendance days, earnings, deductions, advance instalment, adjustment remark, net salary in words, and signature lines), **A4 Month Summary PDF**, and **CSV export**.
+   - **Owner Month Locking (`salaryMonthLocks`, `salaryAuditLogs`):** Once a month is finished, the **Owner** can lock it. Any change after locking requires a mandatory override reason and is recorded in the append-only **Salary Audit Log**.
+   - **Automatic Phase 10 Cash Book Expense Integration:** Every salary marked `PAID` automatically appears as a `"Salary"` expense in the Phase 10 **Cash Book** on its `paidDateIso` with its payment mode — never typed twice and never double-counted.
+
+---
+
 ## How Each Role Uses the App
 
-- **Owner:** Creates the organisation (and first school), can add/edit multiple schools, manage all academic/timetable/attendance/fees/certificates/cash book/enquiry/exams/stock/transport modules, approve members & set granular per-school/per-module access (all 17 modules), configure report card links, attendance auto-fill, cash book approval limits & open exams, export JSON backups, transfer ownership, or delete the organisation (requires a backup first).
-- **Admin:** Day-to-day head across assigned schools — manages members & invite codes, teachers, period structures, class-subject assignments, timetables, auto-generate, leave approvals, daily substitutions, staff & student attendance, fees & concessions, certificates, cash book (including approving large expenses and editing limits), admission enquiries, exam schedules/rooms/invigilators/admit card overrides, stock & below-zero overrides, transport routes, and batch A4 report cards.
-- **Office Operator:** Handles daily administrative operations for their assigned school(s) based on the exact modules granted by the Admin (defaulting to Students, Marks, Co-Scholastic, Reports, Timetable, Attendance, Fees, Student Register, Certificates, Cash Book, Admission Enquiry, Exams, Stock, and Transport).
-- **Teacher:** Signs in and lands on **"My Day"**, **"My Class Attendance (Today)"**, and **"My Exam Duties"** showing today's periods, assigned substitutions, upcoming invigilator duties, weekly timetable, Class Teacher section(s), and own pending marks. Enters marks **only** for their assigned class-section-subject combinations during open exams, enters co-scholastic/attendance/remarks and takes daily **Student Attendance** **only** for their own Class Teacher section, and can submit or cancel their own `PENDING` leave requests.
+- **Owner:** Creates the organisation (and first school), has exclusive default access to **Staff Salary** (can explicitly grant `Salary` view/edit to trusted Admins, enable teacher self-slip viewing, and lock finished salary months), manages all 18 modules across schools, exports JSON backups, transfers ownership, or deletes the organisation.
+- **Admin:** Day-to-day head across assigned schools — manages members & invite codes, teachers, period structures, class-subject assignments, timetables, auto-generate, leave approvals, daily substitutions, staff & student attendance, fees & concessions, certificates, cash book, admission enquiries, exam schedules/rooms/invigilators/admit card overrides, stock, transport routes, and batch A4 report cards. Sees **Staff Salary** only if explicitly granted by the Owner.
+- **Office Operator:** Handles daily administrative operations for their assigned school(s) based on the exact modules granted (defaulting to Students, Marks, Co-Scholastic, Reports, Timetable, Attendance, Fees, Student Register, Certificates, Cash Book, Admission Enquiry, Exams, Stock, and Transport; `Salary` defaults to `No access`).
+- **Teacher:** Signs in and lands on **"My Day"**, **"My Class Attendance (Today)"**, **"My Exam Duties"**, and (when enabled by the Owner) **"My Salary Slips"** for viewing/printing their own A4/A5 payslips. Enters marks **only** for assigned class-section-subject combinations during open exams, enters co-scholastic/attendance/remarks and takes daily **Student Attendance** **only** for their own Class Teacher section, and submits/cancels their own `PENDING` leave requests.
 
 ---
 
@@ -363,6 +393,32 @@ Google Play requires a release-signed **Android App Bundle (`.aab`)** rather tha
    - **Data Safety Form:** Declare collection of user account identifiers (name, email), school & student educational records, and optional photos stored in Google Cloud Firestore, encrypted in transit, and not sold to third parties.
    - **Account Deletion Support:** Declare that users can delete their account in-app (**Settings -> Delete My Account** — requires re-authentication via the same sign-in method used, and is blocked if they still own an organisation until ownership is transferred or the organisation is deleted) and provide a matching web deletion-request URL in Play Console.
    - **Target Audience & Content Rating:** Complete the IARC questionnaire and declare the app is designed for school staff/administrators (not directed to children).
+
+---
+
+## Phase 13: "Today" Home Screen & First-Time Setup Guide
+
+Phase 13 makes the home experience immediately useful and friendly for every school role without changing any Phase 1–12 data schemas, calculations, or report layouts:
+
+1. **Role-Aware "Today" Home (Strict Module Visibility)**
+   - **Owner & Admin:** Displays tappable live Today cards (hidden automatically for any module the member cannot access):
+     - Today's student attendance per school (`sections taken / total`, `% present`) plus clickable chips for **classes/sections where attendance is not yet taken** (1-tap jump straight to that section).
+     - Today's fee collection total & receipts count, and today's expenses (including auto-merged Phase 12 paid salaries without double entry).
+     - Guardians with dues (1-tap opens Fee Reports & Dues).
+     - Teachers absent today & substitutions pending (1-tap opens Staff Attendance / Substitutions).
+     - Admission Enquiry follow-ups due today (overdue + today).
+     - Low-stock items (unified with Phase 9/11 optional item catalogue).
+     - Exams & invigilator duties coming up this week (next 7 days).
+   - **Teacher:** Sees only their own items — a big **"Take Attendance / हाज़िरी लें"** button for their own Class Teacher section(s), their periods today, pending marks entry, my exam duties, my leave status (pending/approved/rejected), and own salary slips (when enabled by the Owner).
+   - **Fee Clerk (Office Operator / Staff with `Fees` access):** Opens directly to a large **Student Search Box** (by name, admission number, or mobile digits) that starts Fee Collection for that student in **one tap**, paired with Today's Collection total and Unsent Dues in the Send Queue.
+2. **Role-Specific Quick Actions Bar:** A floating 3-button bottom shortcut bar tailored to the user's top 3 daily actions (filtered strictly by permissions, with ≥48 dp touch targets).
+3. **Friendliness & Clear Sync Status:**
+   - Instant **`हिन्दी / EN`** toggle right on the Home header (persisted across restarts in `OfflinePrefsStore`).
+   - Clear bilingual **Sync Status** indicator (**Online**, **Offline**, **Syncing** with pending write count), plain-language actionable error messages telling the user what to do next, helpful empty states, confirmation dialogs for risky actions, and **Undo** snackbar support (e.g., when skipping the First-Time Setup Guide).
+4. **First-Time Setup Guide (8 Auto-Ticking Steps):**
+   - Guides a brand-new school from empty to its first receipt: *(1) Create school -> (2) Add logo -> (3) Create classes & sections -> (4) Add students -> (5) Set fee structure -> (6) Add teachers -> (7) Set timetable -> (8) Add a first fee receipt*.
+   - Each step opens the exact screen/tab and ticks itself off automatically once the data exists. Can be skipped anytime (with **Undo**) and reopened from the Home header until all 8 steps are complete.
+5. **Fast Offline Rendering:** All Today metrics are computed purely in memory from cached Firestore state via `Phase13TodayHomeEngine` with zero extra network queries.
 
 ---
 

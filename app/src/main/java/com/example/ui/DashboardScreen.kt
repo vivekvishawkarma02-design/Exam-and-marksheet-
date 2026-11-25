@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HowToReg
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
@@ -71,15 +72,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.StudentEntity
 import com.example.domain.AppModule
+import com.example.domain.FirstTimeGuideStepId
 import com.example.domain.OrgRole
 import com.example.domain.PendingMarksItem
+import com.example.domain.Phase6DateUtils
+import com.example.domain.SalaryMonthlyRecord
+import com.example.domain.SalarySlipPageSize
+import com.example.domain.TodayHomePersona
+import com.example.domain.TodayQuickActionId
 import com.example.ui.theme.AbsentAmber
 import com.example.ui.theme.AbsentAmberContainer
 import com.example.ui.theme.FailRed
 import com.example.ui.theme.FailRedContainer
-import com.example.ui.theme.NavyDark
-import com.example.ui.theme.NavyPrimary
-import com.example.ui.theme.SteelSecondary
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -127,15 +131,30 @@ fun DashboardScreen(
     onNavigateToExams: () -> Unit = {},
     onNavigateToStock: () -> Unit = {},
     onNavigateToTransport: () -> Unit = {},
+    onNavigateToSalary: () -> Unit = {},
+    onPrintOwnSalarySlip: (SalaryMonthlyRecord, SalarySlipPageSize) -> Unit = { _, _ -> },
     onOpenPendingMarksItem: (PendingMarksItem) -> Unit = {},
     onOpenCoScholasticSection: (String, String, String) -> Unit = { _, _, _ -> },
     onEditOwnTeacherProfile: () -> Unit = {},
+    onOpenFeeManagementTab: (Int, StudentEntity?) -> Unit = { _, _ -> },
+    onOpenTimetableSubstitutions: (String) -> Unit = {},
+    onToggleHindiLabels: () -> Unit = {},
+    onSyncStatusClick: () -> Unit = {},
+    onSkipFirstTimeGuide: () -> Unit = {},
+    onReopenFirstTimeGuide: () -> Unit = {},
+    todayIsoOverride: String? = null,
     modifier: Modifier = Modifier
 ) {
     val filtered = uiState.filteredStudents
     val selectedStudent = uiState.selectedStudent
     val activeSchool = uiState.activeSchool
     val activeClassName = uiState.effectiveClassName
+    val isHindi = uiState.phase10HindiLabels
+    val todayIso = remember(todayIsoOverride) { todayIsoOverride ?: Phase6DateUtils.todayIso() }
+    val todaySnapshot = remember(uiState, todayIso) {
+        uiState.buildTodayHomeSnapshot(todayIso)
+    }
+
     var showLegacyConfirm by remember { mutableStateOf(false) }
     var studentSearchQuery by remember { mutableStateOf("") }
     var statusFilter by remember { mutableStateOf(DashboardStatusFilter.ALL) }
@@ -343,6 +362,18 @@ fun DashboardScreen(
                 )
             )
         }
+        if (uiState.canViewSalary) {
+            add(
+                QuickActionSpec(
+                    title = "Staff Salary",
+                    subtitle = if (uiState.canEditSalary) "Setup, sheet, advances & slips" else "View salary sheet & slips",
+                    icon = Icons.Default.Payments,
+                    accent = primaryColor,
+                    testTag = "tile_salary",
+                    onClick = onNavigateToSalary
+                )
+            )
+        }
         if (uiState.canAccessStudentAttendance) {
             add(
                 QuickActionSpec(
@@ -500,122 +531,187 @@ fun DashboardScreen(
         )
     }
 
-    LazyColumn(
+    val hasBottomQuickBar = todaySnapshot.quickActions.isNotEmpty()
+
+    Column(
         modifier = modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .background(MaterialTheme.colorScheme.background)
     ) {
-        // Active School Header Card
-        item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(NavyDark, NavyPrimary, SteelSecondary)
-                        )
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = 14.dp,
+                bottom = 20.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Phase 13: Today Hero Header (School + Date + Role + Bilingual Sync Status + Language Toggle)
+            item {
+                val classBadge = if (canViewAcademicDirectory) {
+                    p10Label(
+                        isHindi,
+                        "कक्षा ${activeClassName.ifBlank { "—" }}-${uiState.filter.section}",
+                        "Class ${activeClassName.ifBlank { "—" }}-${uiState.filter.section}"
                     )
-                    .padding(18.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    SchoolLogoAvatar(
-                        school = activeSchool,
-                        size = 60.dp
+                } else ""
+                TodayHeroHeaderCard(
+                    activeSchool = activeSchool,
+                    activeClassLabel = classBadge,
+                    session = uiState.filter.session,
+                    dateIso = todayIso,
+                    persona = todaySnapshot.persona,
+                    syncUiState = uiState.syncUiState,
+                    isHindi = isHindi,
+                    guideState = todaySnapshot.firstTimeGuide,
+                    onToggleLanguage = onToggleHindiLabels,
+                    onSyncStatusClick = onSyncStatusClick,
+                    onReopenSetupGuide = onReopenFirstTimeGuide
+                )
+            }
+
+            // Phase 13: First-Time Setup Guide (8 auto-ticking steps, shown until all done or skipped)
+            if (todaySnapshot.firstTimeGuide.shouldShowExpandedCard) {
+                item {
+                    FirstTimeSetupGuideCard(
+                        guideState = todaySnapshot.firstTimeGuide,
+                        isHindi = isHindi,
+                        onStepClick = { stepId ->
+                            when (stepId) {
+                                FirstTimeGuideStepId.CREATE_SCHOOL,
+                                FirstTimeGuideStepId.ADD_LOGO,
+                                FirstTimeGuideStepId.CREATE_CLASSES_SECTIONS -> onNavigateToSchools()
+                                FirstTimeGuideStepId.ADD_STUDENTS -> onNavigateToStudents()
+                                FirstTimeGuideStepId.SET_FEE_STRUCTURE -> onOpenFeeManagementTab(1, null)
+                                FirstTimeGuideStepId.ADD_TEACHERS -> onNavigateToTeachers()
+                                FirstTimeGuideStepId.SET_TIMETABLE -> onNavigateToTimetable()
+                                FirstTimeGuideStepId.ADD_FIRST_FEE_RECEIPT -> onOpenFeeManagementTab(0, null)
+                            }
+                        },
+                        onSkipGuide = onSkipFirstTimeGuide
                     )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = activeSchool.name,
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                }
+            }
+
+            // Phase 13: Role-Aware Today Home Section
+            when (todaySnapshot.persona) {
+                TodayHomePersona.OWNER_ADMIN, TodayHomePersona.GENERAL_STAFF -> {
+                    item {
+                        OwnerAdminTodaySection(
+                            tiles = todaySnapshot.ownerAdminTiles,
+                            dateIso = todayIso,
+                            isHindi = isHindi,
+                            onOpenStudentAttendance = onNavigateToStudentAttendance,
+                            onTakeAttendanceForSection = { sec ->
+                                onTakeStudentAttendanceSection(sec.schoolDocId, sec.className, sec.section, todayIso)
+                            },
+                            onOpenFeeCollection = { onOpenFeeManagementTab(0, null) },
+                            onOpenFeeDuesReport = { onOpenFeeManagementTab(2, null) },
+                            onOpenCashBook = onNavigateToCashBook,
+                            onOpenTeacherSubstitutions = { onOpenTimetableSubstitutions(todayIso) },
+                            onOpenTeacherAttendance = onNavigateToTeacherAttendance,
+                            onOpenEnquiry = onNavigateToEnquiry,
+                            onOpenStock = onNavigateToStock,
+                            onOpenExams = onNavigateToExams
                         )
-                        if (activeSchool.address.isNotBlank()) {
-                            Text(
-                                text = activeSchool.address,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.White.copy(alpha = 0.88f),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
+                    }
+                }
+                TodayHomePersona.FEE_CLERK -> {
+                    val clerkData = todaySnapshot.feeClerkData
+                    if (clerkData != null) {
+                        item {
+                            FeeClerkTodayHeroSection(
+                                feeClerkData = clerkData,
+                                students = uiState.sessionStudents,
+                                isHindi = isHindi,
+                                onCollectFeeForStudent = { student ->
+                                    onOpenFeeManagementTab(0, student)
+                                },
+                                onOpenFeeCollection = { onOpenFeeManagementTab(0, null) },
+                                onOpenSendQueue = { onOpenFeeManagementTab(3, null) }
                             )
                         }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = Color.White.copy(alpha = 0.16f)
-                        ) {
-                            Text(
-                                text = "Class ${activeClassName.ifBlank { "—" }}-${uiState.filter.section}  •  Session ${uiState.filter.session}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    }
+                }
+                TodayHomePersona.TEACHER -> {
+                    val tData = todaySnapshot.teacherData
+                    if (tData != null) {
+                        item {
+                            TeacherTodayHeroSection(
+                                teacherData = tData,
+                                dateIso = todayIso,
+                                isHindi = isHindi,
+                                canViewMarks = canViewMarks,
+                                canViewTimetable = canViewTimetable,
+                                onTakeAttendance = onTakeStudentAttendanceSection,
+                                onOpenPendingMarks = onNavigateToPendingMarks,
+                                onOpenLeaveTab = { onOpenTimetableSubstitutions(todayIso) }
                             )
                         }
                     }
                 }
             }
-        }
 
-        // Phase 7: Teacher "My Day" Home Card (for any member linked to a Phase 4 Teacher profile)
-        if (uiState.resolveOwnLinkedTeacher() != null) {
-            item {
-                TeacherMyDayHomeCard(
-                    uiState = uiState,
-                    onOpenTimetable = onNavigateToTimetable,
-                    onOpenPendingMarks = onNavigateToPendingMarks,
-                    onOpenMarksForItem = onOpenPendingMarksItem,
-                    onOpenCoScholasticForSection = onOpenCoScholasticSection
-                )
+            // Phase 7: Teacher "My Day" Home Card (for any member linked to a Phase 4 Teacher profile)
+            if (uiState.resolveOwnLinkedTeacher() != null) {
+                item {
+                    TeacherMyDayHomeCard(
+                        uiState = uiState,
+                        onOpenTimetable = onNavigateToTimetable,
+                        onOpenPendingMarks = onNavigateToPendingMarks,
+                        onOpenMarksForItem = onOpenPendingMarksItem,
+                        onOpenCoScholasticForSection = onOpenCoScholasticSection
+                    )
+                }
             }
-        }
 
-        // Phase 11: Teacher "My Exam Duties" Home Card (visible whenever this teacher has invigilator duties)
-        if (uiState.ownExamDuties.isNotEmpty()) {
-            item {
-                TeacherMyExamDutiesHomeCard(
-                    duties = uiState.ownExamDuties,
-                    isHindi = uiState.phase10HindiLabels
-                )
+            // Phase 11: Teacher "My Exam Duties" Home Card (visible whenever this teacher has invigilator duties)
+            if (uiState.ownExamDuties.isNotEmpty()) {
+                item {
+                    TeacherMyExamDutiesHomeCard(
+                        duties = uiState.ownExamDuties,
+                        isHindi = uiState.phase10HindiLabels
+                    )
+                }
             }
-        }
 
-        // Phase 8: Class Teacher Student Attendance Home Card (1-tap "Take Attendance" for own section)
-        if (uiState.effectiveOwnTeacherScope?.classTeacherSections?.isNotEmpty() == true) {
-            item {
-                ClassTeacherAttendanceHomeCard(
-                    uiState = uiState,
-                    onTakeAttendance = onTakeStudentAttendanceSection
-                )
+            // Phase 12: Teacher "My Salary Slips" Home Card (visible only when Owner enables teacher self-view and this teacher has slips)
+            if (uiState.ownTeacherSalarySlips.isNotEmpty()) {
+                item {
+                    TeacherOwnSalarySlipsCard(
+                        slips = uiState.ownTeacherSalarySlips,
+                        isHindi = uiState.phase10HindiLabels,
+                        onPrintSlip = onPrintOwnSalarySlip
+                    )
+                }
             }
-        }
 
-        // Phase 8: Admin / Attendance Viewer Today's Student Attendance Summary per School
-        if (uiState.canAccessStudentAttendance && (uiState.isAdmin || uiState.canView(AppModule.ATTENDANCE))) {
-            item {
-                AdminStudentAttendanceSummaryCard(
-                    uiState = uiState,
-                    onOpenStudentAttendance = { schDocId, dateIso ->
-                        onNavigateToStudentAttendance(schDocId, dateIso)
-                    }
-                )
+            // Phase 8: Class Teacher Student Attendance Home Card (for non-Teacher personas who also happen to be class teacher;
+            // Teachers already have the big Take Attendance CTA in TeacherTodayHeroSection above)
+            if (todaySnapshot.persona != TodayHomePersona.TEACHER &&
+                uiState.effectiveOwnTeacherScope?.classTeacherSections?.isNotEmpty() == true
+            ) {
+                item {
+                    ClassTeacherAttendanceHomeCard(
+                        uiState = uiState,
+                        onTakeAttendance = onTakeStudentAttendanceSection
+                    )
+                }
             }
-        }
 
-        // Phase 7: Admin / Non-restricted Pending Marks Summary Tile by Exam
-        if (canViewMarks && !uiState.isTeacherRestricted) {
-            item {
-                AdminPendingMarksSummaryCard(
-                    uiState = uiState,
-                    onOpenPendingMarks = onNavigateToPendingMarks
-                )
+            // Phase 7: Admin / Non-restricted Pending Marks Summary Tile by Exam
+            if (canViewMarks && !uiState.isTeacherRestricted && todaySnapshot.persona == TodayHomePersona.OWNER_ADMIN) {
+                item {
+                    AdminPendingMarksSummaryCard(
+                        uiState = uiState,
+                        onOpenPendingMarks = onNavigateToPendingMarks
+                    )
+                }
             }
-        }
 
         // Teacher Own Profile Summary Card (visible to Teachers so they can view/update their own profile)
         val member = uiState.currentMember
@@ -953,11 +1049,12 @@ fun DashboardScreen(
             }
         }
 
-        // Quick Action Tiles (strictly filtered to modules this member can view)
+        // All Accessible Module Tiles (strictly filtered to modules this member can view)
         item {
             Text(
-                text = "Quick Actions",
+                text = p10Label(isHindi, "सभी मॉड्यूल", "All Modules"),
                 style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground
             )
             Spacer(modifier = Modifier.height(8.dp))
@@ -1034,6 +1131,46 @@ fun DashboardScreen(
                     )
                 }
             }
+        }
+        }
+
+        // Phase 13: Role-Aware Floating Quick Actions Bar (Top 3 Most-Used Actions)
+        if (hasBottomQuickBar) {
+            Phase13QuickActionsBar(
+                actions = todaySnapshot.quickActions,
+                isHindi = isHindi,
+                onActionClick = { actionId ->
+                    when (actionId) {
+                        TodayQuickActionId.TAKE_STUDENT_ATTENDANCE -> {
+                            val firstTarget = todaySnapshot.teacherData?.classAttendanceTargets?.firstOrNull()
+                            if (todaySnapshot.persona == TodayHomePersona.TEACHER && firstTarget != null) {
+                                onTakeStudentAttendanceSection(
+                                    firstTarget.schoolDocId,
+                                    firstTarget.className,
+                                    firstTarget.section,
+                                    todayIso
+                                )
+                            } else {
+                                onNavigateToStudentAttendance(uiState.activeSchoolDocId, todayIso)
+                            }
+                        }
+                        TodayQuickActionId.COLLECT_FEE -> onOpenFeeManagementTab(0, null)
+                        TodayQuickActionId.SEND_FEE_QUEUE -> onOpenFeeManagementTab(3, null)
+                        TodayQuickActionId.ENTER_MARKS -> onNavigateToMarks()
+                        TodayQuickActionId.PENDING_MARKS -> onNavigateToPendingMarks()
+                        TodayQuickActionId.TIMETABLE -> onNavigateToTimetable()
+                        TodayQuickActionId.TEACHER_LEAVE -> onOpenTimetableSubstitutions(todayIso)
+                        TodayQuickActionId.CASH_BOOK -> onNavigateToCashBook()
+                        TodayQuickActionId.ENQUIRY -> onNavigateToEnquiry()
+                        TodayQuickActionId.STOCK -> onNavigateToStock()
+                        TodayQuickActionId.EXAMS -> onNavigateToExams()
+                        TodayQuickActionId.STUDENT_REGISTER -> onNavigateToStudentRegister()
+                        TodayQuickActionId.CERTIFICATES -> onNavigateToCertificates()
+                        TodayQuickActionId.SCHOOLS -> onNavigateToSchools()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 

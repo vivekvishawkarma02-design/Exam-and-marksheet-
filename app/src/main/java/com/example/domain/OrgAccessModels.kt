@@ -46,6 +46,7 @@ enum class AppModule(val key: String, val label: String, val description: String
     EXAMS("exams", "Exams", "Exam schedules, rooms, seating, invigilator duties, and admit cards"),
     STOCK("stock", "Stock", "School item inventory, purchases, fee-receipt stock out, and low-stock alerts"),
     TRANSPORT("transport", "Transport", "Bus/van routes, stops, drivers, student assignments, and route lists"),
+    SALARY("salary", "Salary", "Staff salary setup, monthly sheets, attendance deductions, advances, slips, and month locking"),
     SETTINGS("settings", "Settings", "Organisation settings, sessions, schools, and backups"),
     MEMBERS("members", "Members", "Member directory, join requests, roles, and access control");
 
@@ -88,6 +89,7 @@ data class MemberPermissions(
     val exams: AccessLevel = AccessLevel.NONE,
     val stock: AccessLevel = AccessLevel.NONE,
     val transport: AccessLevel = AccessLevel.NONE,
+    val salary: AccessLevel = AccessLevel.NONE,
     val settings: AccessLevel = AccessLevel.NONE,
     val members: AccessLevel = AccessLevel.NONE
 ) {
@@ -107,6 +109,7 @@ data class MemberPermissions(
         AppModule.EXAMS -> exams
         AppModule.STOCK -> stock
         AppModule.TRANSPORT -> transport
+        AppModule.SALARY -> salary
         AppModule.SETTINGS -> settings
         AppModule.MEMBERS -> members
     }
@@ -127,6 +130,7 @@ data class MemberPermissions(
         AppModule.EXAMS -> copy(exams = level)
         AppModule.STOCK -> copy(stock = level)
         AppModule.TRANSPORT -> copy(transport = level)
+        AppModule.SALARY -> copy(salary = level)
         AppModule.SETTINGS -> copy(settings = level)
         AppModule.MEMBERS -> copy(members = level)
     }
@@ -147,13 +151,14 @@ data class MemberPermissions(
         AppModule.EXAMS.key to exams.wireValue,
         AppModule.STOCK.key to stock.wireValue,
         AppModule.TRANSPORT.key to transport.wireValue,
+        AppModule.SALARY.key to salary.wireValue,
         AppModule.SETTINGS.key to settings.wireValue,
         AppModule.MEMBERS.key to members.wireValue
     )
 
     companion object {
         fun presetFor(role: OrgRole): MemberPermissions = when (role) {
-            OrgRole.OWNER, OrgRole.ADMIN -> MemberPermissions(
+            OrgRole.OWNER -> MemberPermissions(
                 students = AccessLevel.EDIT,
                 marks = AccessLevel.EDIT,
                 coScholastic = AccessLevel.EDIT,
@@ -169,6 +174,27 @@ data class MemberPermissions(
                 exams = AccessLevel.EDIT,
                 stock = AccessLevel.EDIT,
                 transport = AccessLevel.EDIT,
+                salary = AccessLevel.EDIT,
+                settings = AccessLevel.EDIT,
+                members = AccessLevel.EDIT
+            )
+            OrgRole.ADMIN -> MemberPermissions(
+                students = AccessLevel.EDIT,
+                marks = AccessLevel.EDIT,
+                coScholastic = AccessLevel.EDIT,
+                reports = AccessLevel.EDIT,
+                timetable = AccessLevel.EDIT,
+                teachers = AccessLevel.EDIT,
+                attendance = AccessLevel.EDIT,
+                fees = AccessLevel.EDIT,
+                studentRegister = AccessLevel.EDIT,
+                certificates = AccessLevel.EDIT,
+                cashBook = AccessLevel.EDIT,
+                enquiry = AccessLevel.EDIT,
+                exams = AccessLevel.EDIT,
+                stock = AccessLevel.EDIT,
+                transport = AccessLevel.EDIT,
+                salary = AccessLevel.NONE,
                 settings = AccessLevel.EDIT,
                 members = AccessLevel.EDIT
             )
@@ -188,6 +214,7 @@ data class MemberPermissions(
                 exams = AccessLevel.EDIT,
                 stock = AccessLevel.EDIT,
                 transport = AccessLevel.EDIT,
+                salary = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -207,6 +234,7 @@ data class MemberPermissions(
                 exams = AccessLevel.NONE,
                 stock = AccessLevel.NONE,
                 transport = AccessLevel.NONE,
+                salary = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -226,6 +254,7 @@ data class MemberPermissions(
                 exams = AccessLevel.NONE,
                 stock = AccessLevel.NONE,
                 transport = AccessLevel.NONE,
+                salary = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -249,6 +278,7 @@ data class MemberPermissions(
                 exams = AccessLevel.fromRaw(raw[AppModule.EXAMS.key] as? String),
                 stock = AccessLevel.fromRaw(raw[AppModule.STOCK.key] as? String),
                 transport = AccessLevel.fromRaw(raw[AppModule.TRANSPORT.key] as? String),
+                salary = AccessLevel.fromRaw(raw[AppModule.SALARY.key] as? String),
                 settings = AccessLevel.fromRaw(raw[AppModule.SETTINGS.key] as? String),
                 members = AccessLevel.fromRaw(raw[AppModule.MEMBERS.key] as? String)
             )
@@ -312,10 +342,14 @@ object OrgAccessEvaluator {
     fun isAdmin(member: MemberAccessProfile?): Boolean =
         isActive(member) && (member!!.role == OrgRole.OWNER || member.role == OrgRole.ADMIN)
 
+    fun canGrantSalaryAccess(actor: MemberAccessProfile?): Boolean =
+        isOwner(actor)
+
     fun canViewModule(member: MemberAccessProfile?, module: AppModule): Boolean {
         if (!isActive(member)) return false
         val m = member!!
-        if (m.role == OrgRole.OWNER || m.role == OrgRole.ADMIN) return true
+        if (m.role == OrgRole.OWNER) return true
+        if (module != AppModule.SALARY && m.role == OrgRole.ADMIN) return true
         val lvl = m.permissions.levelFor(module)
         return lvl == AccessLevel.VIEW || lvl == AccessLevel.EDIT
     }
@@ -323,7 +357,8 @@ object OrgAccessEvaluator {
     fun canEditModule(member: MemberAccessProfile?, module: AppModule): Boolean {
         if (!isActive(member)) return false
         val m = member!!
-        if (m.role == OrgRole.OWNER || m.role == OrgRole.ADMIN) return true
+        if (m.role == OrgRole.OWNER) return true
+        if (module != AppModule.SALARY && m.role == OrgRole.ADMIN) return true
         return m.permissions.levelFor(module) == AccessLevel.EDIT
     }
 

@@ -40,13 +40,14 @@ service cloud.firestore {
 
     function isValidPermissionsMap(perms) {
       return perms is map &&
-        perms.size() >= 8 && perms.size() <= 17 &&
+        perms.size() >= 8 && perms.size() <= 18 &&
         perms.keys().hasAll(['students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members']) &&
         perms.keys().hasOnly([
           'students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members',
           'attendance', 'fees', 'studentRegister',
           'certificates', 'cashBook', 'enquiry',
-          'exams', 'stock', 'transport'
+          'exams', 'stock', 'transport',
+          'salary'
         ]) &&
         perms.students in ['none', 'view', 'edit'] &&
         perms.marks in ['none', 'view', 'edit'] &&
@@ -64,7 +65,8 @@ service cloud.firestore {
         (!('enquiry' in perms) || perms.enquiry in ['none', 'view', 'edit']) &&
         (!('exams' in perms) || perms.exams in ['none', 'view', 'edit']) &&
         (!('stock' in perms) || perms.stock in ['none', 'view', 'edit']) &&
-        (!('transport' in perms) || perms.transport in ['none', 'view', 'edit']);
+        (!('transport' in perms) || perms.transport in ['none', 'view', 'edit']) &&
+        (!('salary' in perms) || perms.salary in ['none', 'view', 'edit']);
     }
 
     function isValidStringList(listVal, maxLen) {
@@ -136,6 +138,35 @@ service cloud.firestore {
       return memberExists(orgId) && m.status == 'active' && (
         m.role in ['OWNER', 'ADMIN'] || m.allSchools == true || schoolId in m.schools
       );
+    }
+
+    // Phase 12: Sensitive Salary Module Helpers
+    // By default ONLY OWNER has Salary access. ADMIN gets Salary access ONLY if explicitly granted 'view' or 'edit'.
+    function hasSalaryView(orgId) {
+      let m = memberData(orgId);
+      return memberExists(orgId) && m.status == 'active' && (
+        m.role == 'OWNER' ||
+        ('salary' in m.permissions && m.permissions.salary in ['view', 'edit'])
+      );
+    }
+
+    function hasSalaryEdit(orgId) {
+      let m = memberData(orgId);
+      return memberExists(orgId) && m.status == 'active' && (
+        m.role == 'OWNER' ||
+        ('salary' in m.permissions && m.permissions.salary == 'edit')
+      );
+    }
+
+    function salaryPrivilegeNoneOrOwner(orgId, incomingPerms) {
+      return isOrgOwner(orgId) ||
+        (!('salary' in incomingPerms) || incomingPerms.salary == 'none');
+    }
+
+    function salaryPrivilegeUnchangedOrOwner(orgId, incomingPerms, existingPerms) {
+      let incSal = ('salary' in incomingPerms) ? incomingPerms.salary : 'none';
+      let exSal = ('salary' in existingPerms) ? existingPerms.salary : 'none';
+      return isOrgOwner(orgId) || incSal == exSal;
     }
 
     function canUpdateStudent(orgId, schoolId) {
@@ -306,6 +337,7 @@ service cloud.firestore {
       let isAdminManage = actorCanManage &&
         ex.role != 'OWNER' &&
         inc.role != 'OWNER' &&
+        salaryPrivilegeUnchangedOrOwner(orgId, inc.permissions, ex.permissions) &&
         diffKeys.hasOnly([
           'role', 'status', 'allSchools', 'schools', 'permissions',
           'assignedClassSubjects', 'updatedAt'
@@ -1526,6 +1558,189 @@ service cloud.firestore {
     }
 
     // =========================================================================
+    // PHASE 12 VALIDATORS & HELPERS: STAFF SALARY ('salary' - Owner-First Access)
+    // =========================================================================
+
+    function salaryRuleConfigPath(orgId, schoolId) {
+      return /databases/$(database)/documents/organisations/$(orgId)/salaryRuleConfigs/$('salcfg_' + schoolId);
+    }
+
+    function isTeacherSelfViewEnabledForSchool(orgId, schoolId) {
+      return exists(salaryRuleConfigPath(orgId, schoolId)) &&
+        get(salaryRuleConfigPath(orgId, schoolId)).data.allowTeachersToViewOwnSlips == true;
+    }
+
+    function salaryMonthLockPath(orgId, schoolId, yearMonth) {
+      return /databases/$(database)/documents/organisations/$(orgId)/salaryMonthLocks/$('sallock_' + schoolId + '_' + yearMonth);
+    }
+
+    function isSalaryMonthLockedInRules(orgId, schoolId, yearMonth) {
+      return exists(salaryMonthLockPath(orgId, schoolId, yearMonth)) &&
+        get(salaryMonthLockPath(orgId, schoolId, yearMonth)).data.locked == true;
+    }
+
+    function isValidYearMonth(ym) {
+      return ym is string && ym.size() == 7 && ym.matches('^\\d{4}-\\d{2}$');
+    }
+
+    function isValidSalaryRuleConfig(data) {
+      return data.size() == 14 &&
+        data.keys().hasAll([
+          'schoolId', 'perDayBasis', 'freeLeavesPerMonth',
+          'halfDayAbsenceWeight', 'halfDayConsumesFreeLeave', 'lateDaysPerHalfDayPenalty',
+          'fixedPerAbsentDayDeductionRs', 'defaultAllowances', 'defaultDeductions',
+          'allowTeachersToViewOwnSlips', 'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.perDayBasis in ['FIXED_30_DAYS', 'WORKING_DAYS_IN_MONTH'] &&
+        data.freeLeavesPerMonth is int && data.freeLeavesPerMonth >= 0 && data.freeLeavesPerMonth <= 31 &&
+        data.halfDayAbsenceWeight is number && data.halfDayAbsenceWeight >= 0.0 && data.halfDayAbsenceWeight <= 1.0 &&
+        data.halfDayConsumesFreeLeave is bool &&
+        data.lateDaysPerHalfDayPenalty is int && data.lateDaysPerHalfDayPenalty >= 0 && data.lateDaysPerHalfDayPenalty <= 31 &&
+        data.fixedPerAbsentDayDeductionRs is int && data.fixedPerAbsentDayDeductionRs >= 0 && data.fixedPerAbsentDayDeductionRs <= 500000 &&
+        data.defaultAllowances is list && data.defaultAllowances.size() <= 40 &&
+        data.defaultDeductions is list && data.defaultDeductions.size() <= 40 &&
+        data.allowTeachersToViewOwnSlips is bool &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStaffSalaryProfile(data) {
+      return data.size() == 17 &&
+        data.keys().hasAll([
+          'staffId', 'staffName', 'designation', 'isTeachingStaff', 'linkedMemberUid',
+          'joiningDateIso', 'allSchools', 'schoolIds', 'primarySchoolId',
+          'basicMonthlySalaryRs', 'allowances', 'fixedDeductions', 'active',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.staffId) &&
+        data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120 &&
+        data.designation is string && data.designation.size() >= 1 && data.designation.size() <= 80 &&
+        data.isTeachingStaff is bool &&
+        data.linkedMemberUid is string && data.linkedMemberUid.size() <= 128 &&
+        data.joiningDateIso is string && data.joiningDateIso.size() <= 20 &&
+        data.allSchools is bool &&
+        data.schoolIds is list && data.schoolIds.size() <= 50 &&
+        data.primarySchoolId is string && data.primarySchoolId.size() <= 128 &&
+        (data.allSchools == true || isValidId(data.primarySchoolId)) &&
+        data.basicMonthlySalaryRs is int && data.basicMonthlySalaryRs >= 0 && data.basicMonthlySalaryRs <= 10000000 &&
+        data.allowances is list && data.allowances.size() <= 40 &&
+        data.fixedDeductions is list && data.fixedDeductions.size() <= 40 &&
+        data.active is bool &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSalaryMonthlyRecord(data) {
+      return data.size() == 38 &&
+        data.keys().hasAll([
+          'schoolId', 'yearMonth', 'staffId', 'staffName', 'designation', 'staffUid', 'joiningDateIso',
+          'workingDaysInMonth', 'presentDays', 'absentDays', 'onLeaveDays', 'halfDays', 'lateDays',
+          'freeLeavesApplied', 'unpaidAbsenceDays', 'perDayRateRs',
+          'basicSalaryRs', 'allowances', 'totalAllowancesRs', 'grossEarningsRs',
+          'attendanceDeductionRs', 'fixedDeductions', 'totalFixedDeductionsRs',
+          'advanceDeductionRs', 'linkedAdvanceIds', 'manualAdjustmentRs', 'adjustmentRemark',
+          'netPayableRs', 'status', 'paidDateIso', 'paymentMode', 'paymentReference',
+          'teacherSelfViewEnabled', 'lastLockOverrideReason',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        isValidYearMonth(data.yearMonth) &&
+        isValidId(data.staffId) &&
+        data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120 &&
+        data.staffUid is string && data.staffUid.size() <= 128 &&
+        data.basicSalaryRs is int && data.basicSalaryRs >= 0 &&
+        data.grossEarningsRs is int && data.grossEarningsRs >= 0 &&
+        data.attendanceDeductionRs is int && data.attendanceDeductionRs >= 0 &&
+        data.advanceDeductionRs is int && data.advanceDeductionRs >= 0 &&
+        data.manualAdjustmentRs is int &&
+        data.adjustmentRemark is string &&
+        (data.manualAdjustmentRs == 0 || data.adjustmentRemark.size() >= 1) &&
+        data.netPayableRs is int && data.netPayableRs >= 0 &&
+        data.status in ['PENDING', 'PAID'] &&
+        data.paymentMode in ['CASH', 'UPI', 'CHEQUE', 'OTHER'] &&
+        data.teacherSelfViewEnabled is bool &&
+        data.lastLockOverrideReason is string &&
+        data.updatedByUid == request.auth.uid &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStaffSalaryAdvance(data) {
+      return data.size() in [17, 18] &&
+        data.keys().hasAll([
+          'schoolId', 'staffId', 'staffName', 'staffUid', 'advanceDateIso', 'principalAmountRs',
+          'monthlyInstalmentRs', 'repaidAmountRs', 'repayments', 'paymentMode', 'note',
+          'status', 'createdByUid', 'createdByName', 'updatedByUid', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'staffId', 'staffName', 'staffUid', 'advanceDateIso', 'principalAmountRs',
+          'monthlyInstalmentRs', 'repaidAmountRs', 'repayments', 'paymentMode', 'note',
+          'status', 'createdByUid', 'createdByName', 'updatedByUid', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        isValidId(data.staffId) &&
+        data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120 &&
+        data.staffUid is string && data.staffUid.size() <= 128 &&
+        isValidIsoDate(data.advanceDateIso) &&
+        data.principalAmountRs is int && data.principalAmountRs > 0 && data.principalAmountRs <= 50000000 &&
+        data.monthlyInstalmentRs is int && data.monthlyInstalmentRs >= 0 && data.monthlyInstalmentRs <= data.principalAmountRs &&
+        data.repaidAmountRs is int && data.repaidAmountRs >= 0 && data.repaidAmountRs <= data.principalAmountRs &&
+        data.repayments is list && data.repayments.size() <= 240 &&
+        data.paymentMode in ['CASH', 'UPI', 'CHEQUE', 'OTHER'] &&
+        data.note is string && data.note.size() <= 300 &&
+        data.status in ['ACTIVE', 'CLOSED'] &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+        data.createdByName is string && data.createdByName.size() <= 120 &&
+        data.updatedByUid == request.auth.uid &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        (!('createdAt' in data) || isValidTimestamp(data.createdAt)) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSalaryMonthLock(data) {
+      return data.size() == 10 &&
+        data.keys().hasAll([
+          'schoolId', 'yearMonth', 'locked', 'lockedByUid', 'lockedByName', 'lockedAtMs',
+          'note', 'updatedByUid', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        isValidYearMonth(data.yearMonth) &&
+        data.locked is bool &&
+        data.lockedByUid == request.auth.uid &&
+        data.lockedByName is string && data.lockedByName.size() <= 120 &&
+        data.lockedAtMs is int && data.lockedAtMs >= 0 &&
+        data.note is string && data.note.size() <= 300 &&
+        data.updatedByUid == request.auth.uid &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSalaryAuditLog(data) {
+      return data.size() == 12 &&
+        data.keys().hasAll([
+          'schoolId', 'yearMonth', 'staffId', 'staffName', 'action',
+          'reason', 'summary', 'amountRs', 'actorUid', 'actorName', 'clientCreatedAtMs', 'createdAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.yearMonth is string && data.yearMonth.size() <= 12 &&
+        data.staffId is string && data.staffId.size() <= 128 &&
+        data.staffName is string && data.staffName.size() <= 120 &&
+        data.action is string && data.action.size() >= 1 && data.action.size() <= 60 &&
+        data.reason is string && data.reason.size() <= 300 &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 400 &&
+        data.amountRs is int && data.amountRs >= 0 &&
+        data.actorUid == request.auth.uid &&
+        data.actorName is string && data.actorName.size() <= 120 &&
+        data.clientCreatedAtMs is int && data.clientCreatedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    // =========================================================================
     // 1. PRIVATE USER ACCOUNT & MEMBERSHIPS INDEX
     // =========================================================================
     match /users/{uid} {
@@ -1642,10 +1857,12 @@ service cloud.firestore {
               getAfter(orgPath(orgId)).data.ownerUid == request.auth.uid
             ) ||
             // Action 2: Admin or Members-editor approving a join request / adding a non-owner member
+            // Only the Owner can grant 'salary' permission on create.
             (
               (isOrgAdmin(orgId) || hasModuleEdit(orgId, 'members')) &&
               incoming().role != 'OWNER' &&
-              incoming().status == 'active'
+              incoming().status == 'active' &&
+              salaryPrivilegeNoneOrOwner(orgId, incoming().permissions)
             ) ||
             // Action 3: One-time invite code redemption in an atomic transaction
             (
@@ -1745,6 +1962,7 @@ service cloud.firestore {
           isValidId(inviteCode) &&
           isValidInviteCode(incoming(), orgId, inviteCode) &&
           isOrgAdmin(orgId) &&
+          salaryPrivilegeNoneOrOwner(orgId, incoming().permissions) &&
           incoming().createdByUid == request.auth.uid &&
           incoming().usedByUid == '' &&
           incoming().expiresAt > request.time;
@@ -2001,6 +2219,7 @@ service cloud.firestore {
           hasModuleView(orgId, 'teachers') ||
           hasModuleEdit(orgId, 'timetable') ||
           hasModuleView(orgId, 'exams') ||
+          hasSalaryView(orgId) ||
           ((hasModuleView(orgId, 'timetable') || hasModuleView(orgId, 'marks')) && resource.data.linkedMemberUid == request.auth.uid)
         );
 
@@ -2173,7 +2392,8 @@ service cloud.firestore {
       match /teacherLeaves/{leaveId} {
         allow get, list: if isSignedIn() && (
           hasModuleView(orgId, 'timetable') ||
-          hasModuleView(orgId, 'exams')
+          hasModuleView(orgId, 'exams') ||
+          hasSalaryView(orgId)
         );
 
         allow create: if isSignedIn() &&
@@ -2289,7 +2509,7 @@ service cloud.firestore {
       }
 
       match /teacherAttendance/{attId} {
-        allow get, list: if isSignedIn() && hasModuleView(orgId, 'timetable');
+        allow get, list: if isSignedIn() && (hasModuleView(orgId, 'timetable') || hasSalaryView(orgId));
 
         allow create: if isSignedIn() &&
           isValidId(attId) &&
@@ -2896,6 +3116,138 @@ service cloud.firestore {
           isValidId(routeId) &&
           hasModuleEdit(orgId, 'transport') &&
           canAccessSchool(orgId, existing().schoolId);
+      }
+
+      // -----------------------------------------------------------------------
+      // 3n. PHASE 12: STAFF SALARY ('salary') — SENSITIVE OWNER-FIRST ACCESS
+      // - By default ONLY the OWNER has access.
+      // - ADMIN does NOT automatically have access; Owner must explicitly grant 'salary' ('view' or 'edit').
+      // - Teachers can read ONLY their own salary slips (staffUid == request.auth.uid) ONLY when
+      //   the Owner enables allowTeachersToViewOwnSlips on the school's salaryRuleConfig.
+      // - Missing key = no access. Other members cannot read any salary document.
+      // -----------------------------------------------------------------------
+
+      match /salaryRuleConfigs/{configId} {
+        allow get, list: if isSignedIn() && hasSalaryView(orgId);
+
+        allow create: if isSignedIn() &&
+          isValidId(configId) &&
+          isValidSalaryRuleConfig(incoming()) &&
+          hasSalaryEdit(orgId) &&
+          canAccessSchool(orgId, incoming().schoolId) &&
+          (incoming().allowTeachersToViewOwnSlips == false || isOrgOwner(orgId));
+
+        allow update: if isSignedIn() &&
+          isValidId(configId) &&
+          isValidSalaryRuleConfig(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          hasSalaryEdit(orgId) &&
+          canAccessSchool(orgId, existing().schoolId) &&
+          (incoming().allowTeachersToViewOwnSlips == existing().allowTeachersToViewOwnSlips || isOrgOwner(orgId));
+
+        allow delete: if isSignedIn() &&
+          isValidId(configId) &&
+          isOrgOwner(orgId);
+      }
+
+      match /staffSalaryProfiles/{profileId} {
+        allow get, list: if isSignedIn() && hasSalaryView(orgId);
+
+        allow create, update: if isSignedIn() &&
+          isValidId(profileId) &&
+          isValidStaffSalaryProfile(incoming()) &&
+          hasSalaryEdit(orgId) &&
+          (incoming().allSchools == true || canAccessSchool(orgId, incoming().primarySchoolId));
+
+        allow delete: if isSignedIn() &&
+          isValidId(profileId) && (
+            isOrgOwner(orgId) ||
+            (hasSalaryEdit(orgId) && (existing().allSchools == true || canAccessSchool(orgId, existing().primarySchoolId)))
+          );
+      }
+
+      match /salaryMonthlyRecords/{recordId} {
+        // Salary viewers see all slips; linked teachers can read ONLY their own slip when teacherSelfViewEnabled == true
+        allow get, list: if isSignedIn() && (
+          hasSalaryView(orgId) ||
+          (
+            isActiveMember(orgId) &&
+            resource.data.staffUid == request.auth.uid &&
+            resource.data.teacherSelfViewEnabled == true
+          )
+        );
+
+        allow create: if isSignedIn() &&
+          isValidId(recordId) &&
+          isValidSalaryMonthlyRecord(incoming()) &&
+          hasSalaryEdit(orgId) &&
+          canAccessSchool(orgId, incoming().schoolId) && (
+            !isSalaryMonthLockedInRules(orgId, incoming().schoolId, incoming().yearMonth) ||
+            (incoming().lastLockOverrideReason is string && incoming().lastLockOverrideReason.size() >= 1)
+          );
+
+        allow update: if isSignedIn() &&
+          isValidId(recordId) &&
+          isValidSalaryMonthlyRecord(incoming()) &&
+          hasSalaryEdit(orgId) &&
+          canAccessSchool(orgId, incoming().schoolId) && (
+            !isSalaryMonthLockedInRules(orgId, incoming().schoolId, incoming().yearMonth) ||
+            (incoming().lastLockOverrideReason is string && incoming().lastLockOverrideReason.size() >= 1) ||
+            (
+              isOrgOwner(orgId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'teacherSelfViewEnabled', 'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+              ])
+            )
+          );
+
+        allow delete: if isSignedIn() &&
+          isValidId(recordId) &&
+          isOrgOwner(orgId);
+      }
+
+      match /staffSalaryAdvances/{advanceId} {
+        allow get, list: if isSignedIn() && hasSalaryView(orgId);
+
+        allow create, update: if isSignedIn() &&
+          isValidId(advanceId) &&
+          isValidStaffSalaryAdvance(incoming()) &&
+          hasSalaryEdit(orgId) &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(advanceId) &&
+          isOrgOwner(orgId);
+      }
+
+      match /salaryMonthLocks/{lockId} {
+        allow get, list: if isSignedIn() && hasSalaryView(orgId);
+
+        // Only the OWNER can lock or unlock a finished salary month
+        allow create, update: if isSignedIn() &&
+          isValidId(lockId) &&
+          isValidSalaryMonthLock(incoming()) &&
+          isOrgOwner(orgId) &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(lockId) &&
+          isOrgOwner(orgId);
+      }
+
+      match /salaryAuditLogs/{logId} {
+        allow get, list: if isSignedIn() && hasSalaryView(orgId);
+
+        allow create: if isSignedIn() &&
+          isValidId(logId) &&
+          isValidSalaryAuditLog(incoming()) &&
+          hasSalaryEdit(orgId) &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if false;
+        allow delete: if isSignedIn() &&
+          isValidId(logId) &&
+          isOrgOwner(orgId);
       }
     }
   }

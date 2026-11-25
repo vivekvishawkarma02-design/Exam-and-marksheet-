@@ -49,6 +49,7 @@ import com.example.data.cloud.CloudPhase8Snapshot
 import com.example.data.cloud.CloudPhase9Snapshot
 import com.example.data.cloud.CloudPhase10Snapshot
 import com.example.data.cloud.CloudPhase11Snapshot
+import com.example.data.cloud.CloudPhase12Snapshot
 import com.example.data.cloud.Phase4Repository
 import com.example.data.cloud.Phase6Repository
 import com.example.data.cloud.Phase7Repository
@@ -56,6 +57,7 @@ import com.example.data.cloud.Phase8Repository
 import com.example.data.cloud.Phase9Repository
 import com.example.data.cloud.Phase10Repository
 import com.example.data.cloud.Phase11Repository
+import com.example.data.cloud.Phase12Repository
 import com.example.data.cloud.StableDocId
 import com.example.data.cloud.TermAttendanceRecalcItem
 import com.example.data.cloud.TimetableRepository
@@ -72,7 +74,18 @@ import com.example.domain.ExamScheduleRecord
 import com.example.domain.ExamSeatingRecord
 import com.example.domain.Phase10AccessEvaluator
 import com.example.domain.Phase11AccessEvaluator
+import com.example.domain.Phase12AccessEvaluator
+import com.example.domain.Phase13TodayHomeEngine
+import com.example.domain.TodayHomePermissions
+import com.example.domain.TodayHomeSnapshot
+import com.example.domain.SalaryAuditLogRecord
+import com.example.domain.SalaryMonthLockRecord
+import com.example.domain.SalaryMonthlyRecord
+import com.example.domain.SalaryRuleConfig
 import com.example.domain.SchoolCertificateRecord
+import com.example.domain.StaffSalaryAdvanceRecord
+import com.example.domain.StaffSalaryEngine
+import com.example.domain.StaffSalaryProfileRecord
 import com.example.domain.StockEngine
 import com.example.domain.StockItemSummary
 import com.example.domain.StockTransactionRecord
@@ -369,7 +382,20 @@ data class SchoolUiState(
     val phase11FeeReceipts: List<FeeReceiptRecord> = emptyList(),
     val phase11FeeOverrides: List<StudentFeeOverride> = emptyList(),
     val phase11Teachers: List<TeacherProfile> = emptyList(),
-    val phase11TeacherLeaves: List<TeacherLeaveRecord> = emptyList()
+    val phase11TeacherLeaves: List<TeacherLeaveRecord> = emptyList(),
+    // Phase 12: Staff Salary (Owner-only by default; explicit Owner grant for Admin; optional self-slip view for Teachers)
+    val salaryRuleConfigs: List<SalaryRuleConfig> = emptyList(),
+    val staffSalaryProfiles: List<StaffSalaryProfileRecord> = emptyList(),
+    val salaryMonthlyRecords: List<SalaryMonthlyRecord> = emptyList(),
+    val staffSalaryAdvances: List<StaffSalaryAdvanceRecord> = emptyList(),
+    val salaryMonthLocks: List<SalaryMonthLockRecord> = emptyList(),
+    val salaryAuditLogs: List<SalaryAuditLogRecord> = emptyList(),
+    val ownTeacherSalarySlips: List<SalaryMonthlyRecord> = emptyList(),
+    val phase12Teachers: List<TeacherProfile> = emptyList(),
+    val phase12TeacherAttendance: List<TeacherAttendanceRecord> = emptyList(),
+    val phase12TeacherLeaves: List<TeacherLeaveRecord> = emptyList(),
+    // Phase 13: "Today" Home Screen & First-Time Setup Guide
+    val isFirstTimeGuideSkipped: Boolean = false
 ) {
     val canViewFees: Boolean
         get() = activeOrg == null || Phase9AccessEvaluator.canViewFees(accessProfile)
@@ -419,6 +445,15 @@ data class SchoolUiState(
     val canEditTransport: Boolean
         get() = activeOrg == null || Phase11AccessEvaluator.canEditTransport(accessProfile)
 
+    val canViewSalary: Boolean
+        get() = activeOrg == null || Phase12AccessEvaluator.canViewSalary(accessProfile)
+
+    val canEditSalary: Boolean
+        get() = activeOrg == null || Phase12AccessEvaluator.canEditSalary(accessProfile)
+
+    val isSalaryOwner: Boolean
+        get() = activeOrg == null || OrgAccessEvaluator.isOwner(accessProfile)
+
     val effectiveCashBookFeeReceipts: List<FeeReceiptRecord>
         get() = (feeReceipts + cashBookFeeReceipts).distinctBy { it.id }
 
@@ -436,6 +471,25 @@ data class SchoolUiState(
 
     val effectivePhase11TeacherLeaves: List<TeacherLeaveRecord>
         get() = (teacherLeaves + phase11TeacherLeaves).distinctBy { it.id }
+
+    val effectivePhase12Teachers: List<TeacherProfile>
+        get() = (teachers + phase11Teachers + phase12Teachers).distinctBy { it.id }
+
+    val effectivePhase12TeacherAttendance: List<TeacherAttendanceRecord>
+        get() = (teacherAttendanceRecords + phase12TeacherAttendance).distinctBy { it.id }
+
+    val effectivePhase12TeacherLeaves: List<TeacherLeaveRecord>
+        get() = (teacherLeaves + phase11TeacherLeaves + phase12TeacherLeaves).distinctBy { it.id }
+
+    fun salaryRuleConfigForSchool(schoolDocId: String = activeSchoolDocId): SalaryRuleConfig =
+        salaryRuleConfigs.firstOrNull { it.schoolId == schoolDocId }
+            ?: SalaryRuleConfig(
+                id = SalaryRuleConfig.defaultdocId(schoolDocId),
+                schoolId = schoolDocId
+            )
+
+    fun isSalaryMonthLocked(schoolDocId: String = activeSchoolDocId, yearMonth: String): Boolean =
+        salaryMonthLocks.firstOrNull { it.schoolId == schoolDocId && it.yearMonth == yearMonth }?.locked == true
 
     val ownExamDuties: List<ExamInvigilatorDutyRecord>
         get() {
@@ -471,6 +525,96 @@ data class SchoolUiState(
             catalogue = structure.optionalCatalogue,
             transactions = stockTransactions,
             feeReceipts = effectivePhase11FeeReceipts
+        )
+    }
+
+    /**
+     * Phase 13: Builds the role-aware Today Home snapshot purely from cached in-memory state.
+     * Reuses Phases 6–12 engines directly without modifying any calculation or issuing network calls.
+     */
+    fun buildTodayHomeSnapshot(todayIso: String = Phase6DateUtils.todayIso()): TodayHomeSnapshot {
+        val activeSchDocId = activeSchoolDocId
+        val activeSch = activeSchool
+        val activeCls = classesForSchool(activeSch.id)
+        val activeStu = sessionStudents
+        val activeStuWithDocIds = activeStu.map { st -> studentDocIdFor(st.id) to st }
+
+        val permissions = TodayHomePermissions(
+            isOwnerOrAdmin = activeOrg == null || isAdmin,
+            isTeacher = currentMember?.orgRole == OrgRole.TEACHER,
+            canAccessStudentAttendance = canAccessStudentAttendance,
+            canViewAttendanceOverview = activeOrg == null || isAdmin || canView(AppModule.ATTENDANCE),
+            canViewFees = canViewFees,
+            canEditFees = canEditFees,
+            canViewCashBook = canViewCashBook,
+            canViewTimetable = canView(AppModule.TIMETABLE),
+            canViewTeachers = canView(AppModule.TEACHERS),
+            canViewEnquiry = canViewEnquiry,
+            canViewStock = canViewStock,
+            canViewExams = canViewExams,
+            canViewMarks = canView(AppModule.MARKS),
+            canEditMarks = canEdit(AppModule.MARKS),
+            canViewStudents = canView(AppModule.STUDENTS),
+            canEditStudents = canEdit(AppModule.STUDENTS),
+            canViewStudentRegister = canViewStudentRegister,
+            canViewCertificates = canViewCertificates,
+            canEditSettings = canEdit(AppModule.SETTINGS)
+        )
+
+        val attendanceSummaries = if (permissions.canAccessStudentAttendance) {
+            computeTodayAttendanceSummaries(todayIso)
+        } else {
+            emptyList()
+        }
+
+        val ownTeacher = resolveOwnLinkedTeacher()
+        val ownScope = effectiveOwnTeacherScope
+        val ownPendingCount = if (permissions.canViewMarks && (permissions.isTeacher || ownTeacher != null)) {
+            computePendingMarksItems().size
+        } else {
+            0
+        }
+
+        return Phase13TodayHomeEngine.buildSnapshot(
+            todayIso = todayIso,
+            member = accessProfile,
+            permissions = permissions,
+            schools = schools,
+            activeSchool = if (schools.isNotEmpty()) activeSch else null,
+            activeSchoolDocId = activeSchDocId,
+            schoolNamesByDocId = schoolNamesByDocId,
+            session = filter.session,
+            schoolClassesForActiveSchool = activeCls,
+            sessionStudentsForActiveSchool = activeStu,
+            studentsWithDocIdsForActiveSchool = activeStuWithDocIds,
+            todayAttendanceSummaries = attendanceSummaries,
+            feeStructures = effectivePhase11FeeStructures,
+            activeFeeStructure = feeStructureForPhase11(activeSchDocId, filter.session),
+            studentFeeOverrides = effectivePhase11FeeOverrides,
+            feeReceipts = effectivePhase11FeeReceipts,
+            feeMessageSentLogs = feeMessageSentLogs,
+            cashBookEntries = cashBookEntries,
+            cashBookDayClosings = cashBookDayClosings,
+            cashBookSettings = cashBookSettingsForSchool(activeSchDocId),
+            salaryMonthlyRecords = salaryMonthlyRecords,
+            admissionEnquiries = admissionEnquiries,
+            enquirySettings = enquirySettingsForSchool(activeSchDocId),
+            teachers = effectivePhase12Teachers,
+            teacherLeaves = effectivePhase12TeacherLeaves,
+            teacherAttendanceRecords = effectivePhase12TeacherAttendance,
+            timetableCells = timetableCells,
+            substitutions = substitutions,
+            periodStructuresBySchool = effectivePeriodStructuresBySchool,
+            classAssignments = classAssignments,
+            ownLinkedTeacher = ownTeacher,
+            ownTeacherScope = ownScope,
+            ownPendingMarksCount = ownPendingCount,
+            ownExamDuties = ownExamDuties,
+            ownSalarySlipsCount = ownTeacherSalarySlips.size,
+            examSchedules = examSchedules,
+            examDuties = examDuties,
+            stockTransactions = stockTransactions,
+            isFirstTimeGuideSkipped = isFirstTimeGuideSkipped
         )
     }
 
@@ -1398,7 +1542,8 @@ class SchoolViewModel(
     internal val offlinePrefs: OfflinePrefsStore,
     internal val phase9Repo: Phase9Repository = Phase9Repository(orgRepo),
     internal val phase10Repo: Phase10Repository = Phase10Repository(orgRepo),
-    internal val phase11Repo: Phase11Repository = Phase11Repository(orgRepo)
+    internal val phase11Repo: Phase11Repository = Phase11Repository(orgRepo),
+    internal val phase12Repo: Phase12Repository = Phase12Repository(orgRepo)
 ) : ViewModel() {
 
     internal val _filter = MutableStateFlow(FilterSelection())
@@ -1455,7 +1600,9 @@ class SchoolViewModel(
     private val _phase9Snapshot = MutableStateFlow(CloudPhase9Snapshot())
     private val _phase10Snapshot = MutableStateFlow(CloudPhase10Snapshot())
     private val _phase11Snapshot = MutableStateFlow(CloudPhase11Snapshot())
-    internal val _phase10HindiLabels = MutableStateFlow(true)
+    private val _phase12Snapshot = MutableStateFlow(CloudPhase12Snapshot())
+    internal val _phase10HindiLabels = MutableStateFlow(offlinePrefs.getHindiLabelsEnabled(true))
+    internal val _firstTimeGuideSkipped = MutableStateFlow(offlinePrefs.isFirstTimeGuideSkipped(currentUserId, orgId))
     private val _attendanceConflicts = MutableStateFlow<List<AttendanceConflictNotice>>(emptyList())
     private val _multiSchoolPendingBundles = MutableStateFlow<List<SchoolAcademicBundleForPending>>(emptyList())
     private val _orgMembers = MutableStateFlow<List<CloudMember>>(emptyList())
@@ -1490,8 +1637,8 @@ class SchoolViewModel(
     private val combinedSyncErrorFlow = combine(
         combine(academicRepo.syncError, phase4Repo.syncError, timetableRepo.syncError) { a, b, c -> a ?: b ?: c },
         combine(phase6Repo.syncError, phase7Repo.syncError, phase8Repo.syncError) { d, e, f -> d ?: e ?: f },
-        combine(phase9Repo.syncError, phase10Repo.syncError, phase11Repo.syncError) { p9, p10, p11 -> p9 ?: p10 ?: p11 }
-    ) { left, right, p911Err -> left ?: right ?: p911Err }
+        combine(phase9Repo.syncError, phase10Repo.syncError, phase11Repo.syncError, phase12Repo.syncError) { p9, p10, p11, p12 -> p9 ?: p10 ?: p11 ?: p12 }
+    ) { left, right, p912Err -> left ?: right ?: p912Err }
 
     private val phase4To6Flow = combine(
         _phase4Snapshot,
@@ -1506,9 +1653,11 @@ class SchoolViewModel(
     private val phase10And11Flow = combine(
         _phase10Snapshot,
         _phase11Snapshot,
-        _phase10HindiLabels
-    ) { p10, p11, hindiLabels ->
-        Triple(p10, p11, hindiLabels)
+        _phase12Snapshot,
+        _phase10HindiLabels,
+        _firstTimeGuideSkipped
+    ) { p10, p11, p12, hindiLabels, guideSkipped ->
+        Phase10To12Slice(p10, p11, p12, hindiLabels, guideSkipped)
     }
 
     private val phase8To10Flow = combine(
@@ -1516,8 +1665,8 @@ class SchoolViewModel(
         _attendanceConflicts,
         _phase9Snapshot,
         phase10And11Flow
-    ) { p8, attConflicts, p9, p1011 ->
-        Phase8To10Bundle(p8, attConflicts, p9, p1011.first, p1011.second, p1011.third)
+    ) { p8, attConflicts, p9, p1012 ->
+        Phase8To10Bundle(p8, attConflicts, p9, p1012.phase10, p1012.phase11, p1012.phase12, p1012.phase10HindiLabels, p1012.firstTimeGuideSkipped)
     }
 
     private val phase4To8Flow = combine(
@@ -1535,7 +1684,9 @@ class SchoolViewModel(
             phase9 = p810.phase9,
             phase10 = p810.phase10,
             phase11 = p810.phase11,
-            phase10HindiLabels = p810.phase10HindiLabels
+            phase12 = p810.phase12,
+            phase10HindiLabels = p810.phase10HindiLabels,
+            firstTimeGuideSkipped = p810.firstTimeGuideSkipped
         )
     }
 
@@ -1573,7 +1724,9 @@ class SchoolViewModel(
             phase9 = p78.phase9,
             phase10 = p78.phase10,
             phase11 = p78.phase11,
-            phase10HindiLabels = p78.phase10HindiLabels
+            phase12 = p78.phase12,
+            phase10HindiLabels = p78.phase10HindiLabels,
+            firstTimeGuideSkipped = p78.firstTimeGuideSkipped
         )
     }
 
@@ -1617,7 +1770,8 @@ class SchoolViewModel(
             admin.phase8.pendingWriteCount +
             admin.phase9.pendingWriteCount +
             admin.phase10.pendingWriteCount +
-            admin.phase11.pendingWriteCount
+            admin.phase11.pendingWriteCount +
+            admin.phase12.pendingWriteCount
 
         val syncUi = OfflineSyncEngine.computeSyncUiState(
             isOnline = core.isOnline,
@@ -1691,7 +1845,11 @@ class SchoolViewModel(
             deviceNodeCode = offlinePrefs.getOrCreateDeviceNodeCode(currentUserId),
             schoolCertificates = admin.phase10.certificates,
             cashBookSettingsList = admin.phase10.cashBookSettings,
-            cashBookEntries = admin.phase10.cashBookEntries,
+            cashBookEntries = StaffSalaryEngine.mergeCashBookEntriesWithPaidSalaries(
+                schoolId = "",
+                cashBookEntries = admin.phase10.cashBookEntries,
+                salaryRecords = admin.phase12.salaryMonthlyRecords
+            ),
             cashBookDayClosings = admin.phase10.cashBookDayClosings,
             cashBookAuditLogs = admin.phase10.cashBookAuditLogs,
             cashBookFeeReceipts = admin.phase10.cashBookFeeReceipts,
@@ -1708,7 +1866,18 @@ class SchoolViewModel(
             phase11FeeReceipts = admin.phase11.sharedFeeReceipts,
             phase11FeeOverrides = admin.phase11.sharedFeeOverrides,
             phase11Teachers = admin.phase11.sharedTeachers,
-            phase11TeacherLeaves = admin.phase11.sharedTeacherLeaves
+            phase11TeacherLeaves = admin.phase11.sharedTeacherLeaves,
+            salaryRuleConfigs = admin.phase12.salaryRuleConfigs,
+            staffSalaryProfiles = admin.phase12.staffSalaryProfiles,
+            salaryMonthlyRecords = admin.phase12.salaryMonthlyRecords,
+            staffSalaryAdvances = admin.phase12.staffSalaryAdvances,
+            salaryMonthLocks = admin.phase12.salaryMonthLocks,
+            salaryAuditLogs = admin.phase12.salaryAuditLogs,
+            ownTeacherSalarySlips = admin.phase12.ownTeacherSalarySlips,
+            phase12Teachers = admin.phase12.sharedTeachers,
+            phase12TeacherAttendance = admin.phase12.sharedTeacherAttendance,
+            phase12TeacherLeaves = admin.phase12.sharedTeacherLeaves,
+            isFirstTimeGuideSkipped = admin.firstTimeGuideSkipped
         )
     }.stateIn(
         scope = viewModelScope,
@@ -2235,6 +2404,33 @@ class SchoolViewModel(
                     _phase11Snapshot.value = snap
                 }
         }
+
+        // 13. Phase 12 Staff Salary (Owner-only by default; explicit grant for Admin; optional self-slips for Teachers)
+        viewModelScope.launch {
+            combine(_observerRestartTick, _ownMember.map { it?.toAccessProfile() }) { tick, profile ->
+                tick to profile
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { (_, profile) ->
+                    if (profile == null || !OrgAccessEvaluator.isActive(profile)) {
+                        flowOf(CloudPhase12Snapshot())
+                    } else {
+                        phase12Repo.observePhase12Data(orgId, profile)
+                            .catch { e ->
+                                val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
+                                if (cause != null) {
+                                    handleFirestoreError(cause, OperationType.LIST, "organisations/$orgId/salaryMonthlyRecords")
+                                    emit(CloudPhase12Snapshot())
+                                    return@catch
+                                }
+                                if (e is CancellationException) throw e
+                            }
+                    }
+                }
+                .collect { snap ->
+                    _phase12Snapshot.value = snap
+                }
+        }
     }
 
     private fun evaluatePhase6Conflicts(snap: CloudPhase6Snapshot) {
@@ -2367,9 +2563,10 @@ class SchoolViewModel(
         val retriedPhase9 = phase9Repo.retrySync()
         val retriedPhase10 = phase10Repo.retrySync()
         val retriedPhase11 = phase11Repo.retrySync()
+        val retriedPhase12 = phase12Repo.retrySync()
         academicRepo.retrySync { msg ->
             emitMessage(
-                if (retriedPhase4 || retriedPhase5 || retriedPhase6 || retriedPhase7 || retriedPhase8 || retriedPhase9 || retriedPhase10 || retriedPhase11) {
+                if (retriedPhase4 || retriedPhase5 || retriedPhase6 || retriedPhase7 || retriedPhase8 || retriedPhase9 || retriedPhase10 || retriedPhase11 || retriedPhase12) {
                     "Retrying pending sync…"
                 } else {
                     msg
@@ -2388,6 +2585,7 @@ class SchoolViewModel(
         phase9Repo.clearSyncError()
         phase10Repo.clearSyncError()
         phase11Repo.clearSyncError()
+        phase12Repo.clearSyncError()
     }
 
     private fun handleListenerError(e: Throwable, sub: String) {
@@ -6025,13 +6223,23 @@ private data class Phase4And5Bundle(
     val phase6Conflicts: List<Phase6ConflictNotice>
 )
 
+private data class Phase10To12Slice(
+    val phase10: CloudPhase10Snapshot,
+    val phase11: CloudPhase11Snapshot,
+    val phase12: CloudPhase12Snapshot,
+    val phase10HindiLabels: Boolean,
+    val firstTimeGuideSkipped: Boolean
+)
+
 private data class Phase8To10Bundle(
     val phase8: CloudPhase8Snapshot,
     val attendanceConflicts: List<AttendanceConflictNotice>,
     val phase9: CloudPhase9Snapshot,
     val phase10: CloudPhase10Snapshot,
     val phase11: CloudPhase11Snapshot,
-    val phase10HindiLabels: Boolean
+    val phase12: CloudPhase12Snapshot,
+    val phase10HindiLabels: Boolean,
+    val firstTimeGuideSkipped: Boolean
 )
 
 private data class Phase7And8Bundle(
@@ -6043,7 +6251,9 @@ private data class Phase7And8Bundle(
     val phase9: CloudPhase9Snapshot,
     val phase10: CloudPhase10Snapshot,
     val phase11: CloudPhase11Snapshot,
-    val phase10HindiLabels: Boolean
+    val phase12: CloudPhase12Snapshot,
+    val phase10HindiLabels: Boolean,
+    val firstTimeGuideSkipped: Boolean
 )
 
 private data class AdminAndPhase4Bundle(
@@ -6063,7 +6273,9 @@ private data class AdminAndPhase4Bundle(
     val phase9: CloudPhase9Snapshot,
     val phase10: CloudPhase10Snapshot,
     val phase11: CloudPhase11Snapshot,
-    val phase10HindiLabels: Boolean
+    val phase12: CloudPhase12Snapshot,
+    val phase10HindiLabels: Boolean,
+    val firstTimeGuideSkipped: Boolean
 )
 
 private data class CloudCoreBundle(

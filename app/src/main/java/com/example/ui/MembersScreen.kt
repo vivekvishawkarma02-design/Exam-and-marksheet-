@@ -353,6 +353,7 @@ fun MembersScreen(
             initialSelectedSchools = member.schools,
             initialPermissions = member.parsedPermissions,
             availableSchools = schoolItems,
+            actorIsOwner = isOwner,
             confirmLabel = "Save Access",
             onConfirm = { role, allSchools, schools, perms ->
                 viewModel.updateMemberAccess(
@@ -380,6 +381,7 @@ fun MembersScreen(
             initialSelectedSchools = schoolItems.firstOrNull()?.first?.let { listOf(it) } ?: emptyList(),
             initialPermissions = MemberPermissions.presetFor(defaultRole),
             availableSchools = schoolItems,
+            actorIsOwner = isOwner,
             confirmLabel = "Approve & Grant Access",
             onConfirm = { role, allSchools, schools, perms ->
                 viewModel.approveJoinRequest(
@@ -797,6 +799,7 @@ private fun MemberAccessEditorDialog(
     initialSelectedSchools: List<String>,
     initialPermissions: MemberPermissions,
     availableSchools: List<Pair<String, String>>,
+    actorIsOwner: Boolean = false,
     confirmLabel: String,
     onConfirm: (OrgRole, Boolean, List<String>, MemberPermissions) -> Unit,
     onDismiss: () -> Unit
@@ -892,14 +895,29 @@ private fun MemberAccessEditorDialog(
 
                 Text("Module Permissions", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                 AppModule.entries.forEach { module ->
-                    val currentLvl = if (role == OrgRole.ADMIN) AccessLevel.EDIT else permissions.levelFor(module)
+                    val isSalaryModule = module == AppModule.SALARY
+                    val currentLvl = if (role == OrgRole.ADMIN && !isSalaryModule) {
+                        AccessLevel.EDIT
+                    } else {
+                        permissions.levelFor(module)
+                    }
+                    val canChangeThisModule = if (isSalaryModule) {
+                        actorIsOwner
+                    } else {
+                        role != OrgRole.ADMIN
+                    }
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(module.label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                        val headerText = if (isSalaryModule) {
+                            "${module.label} (Owner-Only Grant)"
+                        } else {
+                            module.label
+                        }
+                        Text(headerText, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             AccessLevel.entries.forEach { lvl ->
                                 FilterChip(
                                     selected = currentLvl == lvl,
-                                    enabled = role != OrgRole.ADMIN,
+                                    enabled = canChangeThisModule,
                                     onClick = { permissions = permissions.withModule(module, lvl) },
                                     label = {
                                         Text(
@@ -921,7 +939,17 @@ private fun MemberAccessEditorDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val effectivePerms = if (role == OrgRole.ADMIN) MemberPermissions.presetFor(OrgRole.ADMIN) else permissions
+                    val basePerms = if (role == OrgRole.ADMIN) {
+                        MemberPermissions.presetFor(OrgRole.ADMIN)
+                            .withModule(AppModule.SALARY, permissions.salary)
+                    } else {
+                        permissions
+                    }
+                    val effectivePerms = if (actorIsOwner) {
+                        basePerms
+                    } else {
+                        basePerms.withModule(AppModule.SALARY, initialPermissions.salary)
+                    }
                     onConfirm(role, allSchools || role == OrgRole.ADMIN, selectedSchools.toList(), effectivePerms)
                 },
                 modifier = Modifier.testTag("confirm_member_access_button")

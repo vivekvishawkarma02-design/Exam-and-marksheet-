@@ -3510,6 +3510,389 @@ test("Phase 11: Exams, Stock & Transport RBAC, teacher self-duty read, stock cat
   await assertFails(transEdOrg.collection("stockTransactions").get());
 });
 
+// =============================================================================
+// 19. PHASE 12: STAFF SALARY ('salary') — SENSITIVE OWNER-FIRST ACCESS
+//     - By default ONLY the OWNER has access.
+//     - An ADMIN without an explicit 'salary' grant CANNOT read or write any salary doc,
+//       and CANNOT self-grant 'salary' permission on themselves or any other member.
+//     - When the OWNER explicitly grants 'salary: edit' to an ADMIN, that ADMIN can
+//       manage salary setup, monthly sheets, and advances, but still CANNOT lock a
+//       month or enable teacher self-slip viewing (Owner-only operations).
+//     - Teachers can read ONLY their own salary slips (staffUid == request.auth.uid)
+//       ONLY when the Owner enables allowTeachersToViewOwnSlips on salaryRuleConfigs.
+//     - Locked month blocks updating salaryMonthlyRecords unless lastLockOverrideReason is non-empty.
+//     - Missing key = no access; other members cannot read any salary document.
+// =============================================================================
+test("Phase 12: Staff Salary Owner-only default, Admin blocked without Owner grant, non-Owner cannot grant salary access, Teacher self-slip toggle & isolation, and Owner month locking", async () => {
+  const ADMIN_NO_GRANT = "uid_p12_admin_no_grant";
+  const ADMIN_GRANTED_VIEW = "uid_p12_admin_view";
+  const TEACHER_A = "uid_p12_teacher_a";
+  const TEACHER_B = "uid_p12_teacher_b";
+  const OFFICE_CLERK = "uid_p12_office_clerk";
+  const LEGACY_8KEY = "uid_p12_legacy_8key";
+  const OUTSIDER = "uid_p12_outsider";
+
+  await seedOrgWithOwnerAndSchools();
+  const ts = pastDate();
+
+  const full17NoSalary = {
+    students: "edit",
+    marks: "edit",
+    coScholastic: "edit",
+    reports: "edit",
+    timetable: "edit",
+    teachers: "edit",
+    settings: "edit",
+    members: "edit",
+    attendance: "edit",
+    fees: "edit",
+    studentRegister: "edit",
+    certificates: "edit",
+    cashBook: "edit",
+    enquiry: "edit",
+    exams: "edit",
+    stock: "edit",
+    transport: "edit",
+    salary: "none",
+  };
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const orgRef = ctx.firestore().collection("organisations").doc(ORG_ID);
+    const seedMember = async (uid, role, perms, allSchools = true, schools = [SCHOOL_1]) => {
+      await orgRef.collection("members").doc(uid).set({
+        uid,
+        name: uid,
+        email: `${uid}@org1.com`,
+        mobile: "9999912000",
+        role,
+        status: "active",
+        allSchools,
+        schools,
+        permissions: perms,
+        teacherProfileCompleted: true,
+        teacherPhotoBase64: "",
+        requestedSubjects: [],
+        requestedClasses: [],
+        assignedClassSubjects: [],
+        lastActiveAt: ts,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    };
+
+    // Admin with full access to Phases 1-11, but salary: 'none' (default for ADMIN)
+    await seedMember(ADMIN_NO_GRANT, "ADMIN", { ...full17NoSalary, salary: "none" }, true, [SCHOOL_1, SCHOOL_2]);
+    // Admin with salary: 'view' granted
+    await seedMember(ADMIN_GRANTED_VIEW, "ADMIN", { ...full17NoSalary, salary: "view" }, true, [SCHOOL_1, SCHOOL_2]);
+    // Teachers A & B (no salary module access)
+    await seedMember(TEACHER_A, "TEACHER", { ...full17NoSalary, members: "none", settings: "none", salary: "none" }, false, [SCHOOL_1]);
+    await seedMember(TEACHER_B, "TEACHER", { ...full17NoSalary, members: "none", settings: "none", salary: "none" }, false, [SCHOOL_1]);
+    // Office Clerk
+    await seedMember(OFFICE_CLERK, "OFFICE_OPERATOR", { ...full17NoSalary, members: "none", salary: "none" }, false, [SCHOOL_1]);
+    // Legacy 8-key member (missing 'salary' key -> no access)
+    await seedMember(LEGACY_8KEY, "ADMIN", {
+      students: "edit",
+      marks: "edit",
+      coScholastic: "edit",
+      reports: "edit",
+      timetable: "edit",
+      teachers: "edit",
+      settings: "edit",
+      members: "edit",
+    }, true, [SCHOOL_1]);
+  });
+
+  const authedOrg = (uid) => testEnv.authenticatedContext(uid).firestore().collection("organisations").doc(ORG_ID);
+  const ownerOrg = authedOrg(OWNER_UID);
+  const adminNoGrantOrg = authedOrg(ADMIN_NO_GRANT);
+  const adminViewOrg = authedOrg(ADMIN_GRANTED_VIEW);
+  const teacherAOrg = authedOrg(TEACHER_A);
+  const teacherBOrg = authedOrg(TEACHER_B);
+  const clerkOrg = authedOrg(OFFICE_CLERK);
+  const legacyAdminOrg = authedOrg(LEGACY_8KEY);
+  const outsiderOrg = authedOrg(OUTSIDER);
+
+  // =========================================================================
+  // 1. OWNER CAN CREATE SALARY RULE CONFIG, STAFF PROFILE, MONTHLY RECORD & ADVANCE
+  // =========================================================================
+  const ruleCfgId = `salcfg_${SCHOOL_1}`;
+  const makeRuleConfig = (uid, allowTeachers = false) => ({
+    schoolId: SCHOOL_1,
+    perDayBasis: "FIXED_30_DAYS",
+    freeLeavesPerMonth: 1,
+    halfDayAbsenceWeight: 0.5,
+    halfDayConsumesFreeLeave: true,
+    lateDaysPerHalfDayPenalty: 3,
+    fixedPerAbsentDayDeductionRs: 0,
+    defaultAllowances: [
+      { id: "hra", name: "HRA / मकान भत्ता", amountRs: 0 },
+      { id: "transport", name: "Transport / वाहन भत्ता", amountRs: 0 },
+    ],
+    defaultDeductions: [
+      { id: "pf", name: "PF / भविष्य निधि", amountRs: 0 },
+    ],
+    allowTeachersToViewOwnSlips: allowTeachers,
+    updatedByUid: uid,
+    updatedByName: "Principal Owner",
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  });
+
+  await assertSucceeds(ownerOrg.collection("salaryRuleConfigs").doc(ruleCfgId).set(makeRuleConfig(OWNER_UID, false)));
+
+  const staffIdA = "tchr_a";
+  const profileIdA = `salprof_${staffIdA}`;
+  const makeProfilePayload = (uid) => ({
+    staffId: staffIdA,
+    staffName: "Mrs. Sunita Verma",
+    designation: "Senior Teacher",
+    isTeachingStaff: true,
+    linkedMemberUid: TEACHER_A,
+    joiningDateIso: "2024-04-01",
+    allSchools: false,
+    schoolIds: [SCHOOL_1],
+    primarySchoolId: SCHOOL_1,
+    basicMonthlySalaryRs: 18000,
+    allowances: [{ id: "alw_1", name: "HRA", amountRs: 2000 }],
+    fixedDeductions: [{ id: "ded_1", name: "PF", amountRs: 1000 }],
+    active: true,
+    updatedByUid: uid,
+    updatedByName: "Owner",
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  });
+  await assertSucceeds(ownerOrg.collection("staffSalaryProfiles").doc(profileIdA).set(makeProfilePayload(OWNER_UID)));
+
+  const advanceIdA = `saladv_${SCHOOL_1}_01`;
+  const makeAdvancePayload = (uid, includeCreatedAt = true) => ({
+    schoolId: SCHOOL_1,
+    staffId: staffIdA,
+    staffName: "Mrs. Sunita Verma",
+    staffUid: TEACHER_A,
+    advanceDateIso: "2026-10-05",
+    principalAmountRs: 6000,
+    monthlyInstalmentRs: 2000,
+    repaidAmountRs: 0,
+    repayments: [],
+    paymentMode: "CASH",
+    note: "Festival advance",
+    status: "ACTIVE",
+    createdByUid: uid,
+    createdByName: "Owner",
+    updatedByUid: uid,
+    clientEditedAtMs: Date.now(),
+    ...(includeCreatedAt ? { createdAt: ts } : {}),
+    updatedAt: ts,
+  });
+  await assertSucceeds(ownerOrg.collection("staffSalaryAdvances").doc(advanceIdA).set(makeAdvancePayload(OWNER_UID, true)));
+  // Subsequent overwrite on repayment (without createdAt, matching Phase12Repository) also succeeds
+  await assertSucceeds(ownerOrg.collection("staffSalaryAdvances").doc(advanceIdA).set({
+    ...makeAdvancePayload(OWNER_UID, false),
+    repaidAmountRs: 2000,
+    repayments: [{ id: "rep_1", dateIso: "2026-10-31", yearMonth: "2026-10", amountRs: 2000, mode: "SALARY_SLIP_UPI", isAutoFromSalarySlip: true, note: "Oct" }],
+  }));
+
+  const slipIdA = `salslip_${SCHOOL_1}_2026-10_${staffIdA}`;
+  const slipIdB = `salslip_${SCHOOL_1}_2026-10_tchr_b`;
+  const makeMonthlyPayload = (uid, staffUid, staffId, selfView = false, overrides = {}) => ({
+    schoolId: SCHOOL_1,
+    yearMonth: "2026-10",
+    staffId,
+    staffName: staffUid === TEACHER_A ? "Mrs. Sunita Verma" : "Mr. Rajesh Singh",
+    designation: "Teacher",
+    staffUid,
+    joiningDateIso: "2024-04-01",
+    workingDaysInMonth: 26,
+    presentDays: 24,
+    absentDays: 2,
+    onLeaveDays: 0,
+    halfDays: 0,
+    lateDays: 0,
+    freeLeavesApplied: 1.0,
+    unpaidAbsenceDays: 1.0,
+    perDayRateRs: 600,
+    basicSalaryRs: 18000,
+    allowances: [{ id: "alw_1", name: "HRA", amountRs: 2000 }],
+    totalAllowancesRs: 2000,
+    grossEarningsRs: 20000,
+    attendanceDeductionRs: 600,
+    fixedDeductions: [{ id: "ded_1", name: "PF", amountRs: 1000 }],
+    totalFixedDeductionsRs: 1000,
+    advanceDeductionRs: 2000,
+    linkedAdvanceIds: [advanceIdA],
+    manualAdjustmentRs: 0,
+    adjustmentRemark: "",
+    netPayableRs: 16400,
+    status: "PAID",
+    paidDateIso: "2026-10-31",
+    paymentMode: "UPI",
+    paymentReference: "UTR12345",
+    teacherSelfViewEnabled: selfView,
+    lastLockOverrideReason: "",
+    updatedByUid: uid,
+    updatedByName: "Owner",
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+    ...overrides,
+  });
+
+  await assertSucceeds(ownerOrg.collection("salaryMonthlyRecords").doc(slipIdA).set(makeMonthlyPayload(OWNER_UID, TEACHER_A, staffIdA, false)));
+  await assertSucceeds(ownerOrg.collection("salaryMonthlyRecords").doc(slipIdB).set(makeMonthlyPayload(OWNER_UID, TEACHER_B, "tchr_b", false)));
+
+  // =========================================================================
+  // 2. ADMIN WITHOUT GRANT & LEGACY 8-KEY ADMIN SEE NOTHING OF SALARY
+  // =========================================================================
+  for (const deniedOrg of [adminNoGrantOrg, legacyAdminOrg, clerkOrg, outsiderOrg]) {
+    await assertFails(deniedOrg.collection("salaryRuleConfigs").doc(ruleCfgId).get());
+    await assertFails(deniedOrg.collection("salaryRuleConfigs").get());
+    await assertFails(deniedOrg.collection("staffSalaryProfiles").doc(profileIdA).get());
+    await assertFails(deniedOrg.collection("staffSalaryProfiles").get());
+    await assertFails(deniedOrg.collection("salaryMonthlyRecords").doc(slipIdA).get());
+    await assertFails(deniedOrg.collection("salaryMonthlyRecords").get());
+    await assertFails(deniedOrg.collection("staffSalaryAdvances").doc(advanceIdA).get());
+    await assertFails(deniedOrg.collection("staffSalaryAdvances").get());
+    await assertFails(deniedOrg.collection("salaryMonthLocks").get());
+    await assertFails(deniedOrg.collection("salaryAuditLogs").get());
+  }
+
+  // Non-Owner Admin CANNOT self-grant or grant 'salary: edit' to another member!
+  await assertFails(adminNoGrantOrg.collection("members").doc(ADMIN_GRANTED_VIEW).update({
+    permissions: { ...full17NoSalary, salary: "edit" },
+    updatedAt: ts,
+  }));
+  await assertFails(adminNoGrantOrg.collection("members").doc(OFFICE_CLERK).update({
+    permissions: { ...full17NoSalary, members: "none", salary: "view" },
+    updatedAt: ts,
+  }));
+
+  // =========================================================================
+  // 3. ADMIN WITH 'salary: view' CAN READ, CANNOT WRITE; OWNER GRANTS 'salary: edit'
+  // =========================================================================
+  await assertSucceeds(adminViewOrg.collection("staffSalaryProfiles").doc(profileIdA).get());
+  await assertSucceeds(adminViewOrg.collection("salaryMonthlyRecords").doc(slipIdA).get());
+  await assertFails(adminViewOrg.collection("staffSalaryProfiles").doc(profileIdA).set(makeProfilePayload(ADMIN_GRANTED_VIEW)));
+
+  // OWNER explicitly grants 'salary: edit' to ADMIN_NO_GRANT
+  await assertSucceeds(ownerOrg.collection("members").doc(ADMIN_NO_GRANT).update({
+    permissions: { ...full17NoSalary, salary: "edit" },
+    updatedAt: ts,
+  }));
+
+  // Now ADMIN_NO_GRANT can read & write staffSalaryProfiles, salaryMonthlyRecords, and staffSalaryAdvances
+  await assertSucceeds(adminNoGrantOrg.collection("staffSalaryProfiles").doc(profileIdA).get());
+  await assertSucceeds(adminNoGrantOrg.collection("staffSalaryProfiles").doc(profileIdA).set({
+    ...makeProfilePayload(ADMIN_NO_GRANT),
+    basicMonthlySalaryRs: 19000,
+  }));
+
+  // Manual adjustment without remark is REJECTED by rules
+  await assertFails(adminNoGrantOrg.collection("salaryMonthlyRecords").doc(slipIdA).set(
+    makeMonthlyPayload(ADMIN_NO_GRANT, TEACHER_A, staffIdA, false, {
+      manualAdjustmentRs: -500,
+      adjustmentRemark: "",
+    })
+  ));
+  // Manual adjustment WITH remark SUCCEEDS
+  await assertSucceeds(adminNoGrantOrg.collection("salaryMonthlyRecords").doc(slipIdA).set(
+    makeMonthlyPayload(ADMIN_NO_GRANT, TEACHER_A, staffIdA, false, {
+      manualAdjustmentRs: -500,
+      adjustmentRemark: "Half-day early exit deduction",
+    })
+  ));
+
+  // Even an Admin with 'salary: edit' CANNOT toggle allowTeachersToViewOwnSlips (Owner-only) or lock a month (Owner-only)
+  await assertFails(adminNoGrantOrg.collection("salaryRuleConfigs").doc(ruleCfgId).set(makeRuleConfig(ADMIN_NO_GRANT, true)));
+  const lockId = `sallock_${SCHOOL_1}_2026-10`;
+  await assertFails(adminNoGrantOrg.collection("salaryMonthLocks").doc(lockId).set({
+    schoolId: SCHOOL_1,
+    yearMonth: "2026-10",
+    locked: true,
+    lockedByUid: ADMIN_NO_GRANT,
+    lockedByName: "Admin",
+    lockedAtMs: Date.now(),
+    note: "Try lock",
+    updatedByUid: ADMIN_NO_GRANT,
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  }));
+
+  // =========================================================================
+  // 4. TEACHER SELF-VIEW OF OWN SALARY SLIPS (ONLY WHEN OWNER ENABLES TOGGLE)
+  // =========================================================================
+  // While allowTeachersToViewOwnSlips == false, Teacher A CANNOT read own slip
+  await assertFails(teacherAOrg.collection("salaryMonthlyRecords").doc(slipIdA).get());
+
+  // Owner enables allowTeachersToViewOwnSlips == true on salaryRuleConfig AND teacherSelfViewEnabled == true on slips
+  await assertSucceeds(ownerOrg.collection("salaryRuleConfigs").doc(ruleCfgId).set(makeRuleConfig(OWNER_UID, true)));
+  await assertSucceeds(ownerOrg.collection("salaryMonthlyRecords").doc(slipIdA).set(
+    makeMonthlyPayload(OWNER_UID, TEACHER_A, staffIdA, true)
+  ));
+  await assertSucceeds(ownerOrg.collection("salaryMonthlyRecords").doc(slipIdB).set(
+    makeMonthlyPayload(OWNER_UID, TEACHER_B, "tchr_b", true)
+  ));
+
+  // Now Teacher A CAN read own slip (by doc get and filtered query), CANNOT read Teacher B's slip or staffSalaryProfiles / advances
+  await assertSucceeds(teacherAOrg.collection("salaryMonthlyRecords").doc(slipIdA).get());
+  await assertSucceeds(
+    teacherAOrg.collection("salaryMonthlyRecords")
+      .where("staffUid", "==", TEACHER_A)
+      .where("teacherSelfViewEnabled", "==", true)
+      .get()
+  );
+  await assertFails(teacherAOrg.collection("salaryMonthlyRecords").doc(slipIdB).get());
+  await assertFails(teacherAOrg.collection("salaryMonthlyRecords").get());
+  await assertFails(teacherAOrg.collection("staffSalaryProfiles").doc(profileIdA).get());
+  await assertFails(teacherAOrg.collection("staffSalaryAdvances").doc(advanceIdA).get());
+
+  // =========================================================================
+  // 5. OWNER MONTH LOCKING & MANDATORY POST-LOCK OVERRIDE REASON
+  // =========================================================================
+  await assertSucceeds(ownerOrg.collection("salaryMonthLocks").doc(lockId).set({
+    schoolId: SCHOOL_1,
+    yearMonth: "2026-10",
+    locked: true,
+    lockedByUid: OWNER_UID,
+    lockedByName: "Principal Owner",
+    lockedAtMs: Date.now(),
+    note: "October 2026 salary disbursed and verified",
+    updatedByUid: OWNER_UID,
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  }));
+
+  // Once 2026-10 is locked, updating a 2026-10 salaryMonthlyRecord WITHOUT lastLockOverrideReason FAILS (even for Owner/Granted Admin)
+  await assertFails(adminNoGrantOrg.collection("salaryMonthlyRecords").doc(slipIdA).set(
+    makeMonthlyPayload(ADMIN_NO_GRANT, TEACHER_A, staffIdA, true, {
+      lastLockOverrideReason: "",
+    })
+  ));
+
+  // Updating a locked month WITH a non-empty lastLockOverrideReason SUCCEEDS and audit log is append-only
+  await assertSucceeds(adminNoGrantOrg.collection("salaryMonthlyRecords").doc(slipIdA).set(
+    makeMonthlyPayload(ADMIN_NO_GRANT, TEACHER_A, staffIdA, true, {
+      manualAdjustmentRs: 500,
+      adjustmentRemark: "Arrear bonus",
+      lastLockOverrideReason: "Approved arrear adjustment after lock",
+    })
+  ));
+  await assertSucceeds(adminNoGrantOrg.collection("salaryAuditLogs").doc("salaudit_01").set({
+    schoolId: SCHOOL_1,
+    yearMonth: "2026-10",
+    staffId: staffIdA,
+    staffName: "Mrs. Sunita Verma",
+    action: "LOCKED_MONTH_EDITED",
+    reason: "Approved arrear adjustment after lock",
+    summary: "Adjusted net salary after lock",
+    amountRs: 16900,
+    actorUid: ADMIN_NO_GRANT,
+    actorName: "Admin",
+    clientCreatedAtMs: Date.now(),
+    createdAt: ts,
+  }));
+  await assertFails(adminNoGrantOrg.collection("salaryAuditLogs").doc("salaudit_01").update({ summary: "Tamper" }));
+});
+
+
 
 
 

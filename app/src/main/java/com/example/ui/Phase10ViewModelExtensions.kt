@@ -33,11 +33,19 @@ import kotlinx.coroutines.launch
 // =============================================================================
 
 fun SchoolViewModel.togglePhase10HindiLabels() {
-    _phase10HindiLabels.value = !_phase10HindiLabels.value
+    val next = !_phase10HindiLabels.value
+    _phase10HindiLabels.value = next
+    offlinePrefs.setHindiLabelsEnabled(next)
 }
 
 fun SchoolViewModel.setPhase10HindiLabels(useHindi: Boolean) {
     _phase10HindiLabels.value = useHindi
+    offlinePrefs.setHindiLabelsEnabled(useHindi)
+}
+
+fun SchoolViewModel.setFirstTimeGuideSkipped(skipped: Boolean) {
+    _firstTimeGuideSkipped.value = skipped
+    offlinePrefs.setFirstTimeGuideSkipped(currentUserId, orgId, skipped)
 }
 
 // =============================================================================

@@ -147,8 +147,8 @@ class Phase10DomainAndAccessTest {
         assertEquals(AccessLevel.NONE, parsed.certificates)
         assertEquals(AccessLevel.NONE, parsed.cashBook)
         assertEquals(AccessLevel.NONE, parsed.enquiry)
-        assertEquals(17, AppModule.entries.size)
-        assertEquals(17, parsed.toFirestoreMap().size)
+        assertEquals(18, AppModule.entries.size)
+        assertEquals(18, parsed.toFirestoreMap().size)
 
         val legacyStaff = makeMember(uid = "u_legacy", role = OrgRole.OFFICE_OPERATOR, permissions = parsed)
         assertFalse(Phase10AccessEvaluator.canViewCertificates(legacyStaff, "sch_1"))

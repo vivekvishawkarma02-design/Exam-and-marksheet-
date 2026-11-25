@@ -35,8 +35,10 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +48,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -109,6 +112,7 @@ object AppRoutes {
     const val ROUTE_EXAMS = "exams"
     const val ROUTE_STOCK = "stock"
     const val ROUTE_TRANSPORT = "transport"
+    const val ROUTE_SALARY = "salary"
 }
 
 private enum class OnboardingSubScreen {
@@ -477,6 +481,7 @@ private fun OrganisationWorkspace(
 
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
+    val appScope = rememberCoroutineScope()
     var focusBackupSection by remember { mutableStateOf(false) }
     var showMigrationDialog by remember(shouldAutoPromptMigration) { mutableStateOf(shouldAutoPromptMigration) }
     var showDeleteOrgDialog by remember { mutableStateOf(false) }
@@ -829,6 +834,14 @@ private fun OrganisationWorkspace(
                                             navController.navigate(AppRoutes.ROUTE_TRANSPORT) { launchSingleTop = true }
                                         }
                                     },
+                                    onNavigateToSalary = {
+                                        if (uiState.canViewSalary) {
+                                            navController.navigate(AppRoutes.ROUTE_SALARY) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onPrintOwnSalarySlip = { slip, pageSize ->
+                                        viewModel.generateSalarySlipPdfAndPreview(slip, pageSize)
+                                    },
                                     onOpenPendingMarksItem = { item ->
                                         if (uiState.canView(AppModule.MARKS)) {
                                             viewModel.focusSchoolClassSection(item.schoolDocId, item.className, item.section)
@@ -870,6 +883,44 @@ private fun OrganisationWorkspace(
                                             viewModel.focusStudent(student)
                                             navigateTopLevel(AppRoutes.ROUTE_REPORTS)
                                         }
+                                    },
+                                    onOpenFeeManagementTab = { tabIdx, preselected ->
+                                        if (uiState.canViewFees) {
+                                            feeJumpInitialTab = tabIdx
+                                            feeJumpPreselectedStudent = preselected
+                                            navController.navigate(AppRoutes.ROUTE_FEE_MANAGEMENT) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onOpenTimetableSubstitutions = { dateIso ->
+                                        if (uiState.canView(AppModule.TIMETABLE)) {
+                                            timetableJumpTab = 4 // TimetableTab.LEAVE_SUBS
+                                            timetableJumpSubsDate = dateIso
+                                            navController.navigate(AppRoutes.ROUTE_TIMETABLE) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onToggleHindiLabels = viewModel::togglePhase10HindiLabels,
+                                    onSyncStatusClick = { showSyncDetailDialog = true },
+                                    onSkipFirstTimeGuide = {
+                                        viewModel.setFirstTimeGuideSkipped(true)
+                                        val isHi = uiState.phase10HindiLabels
+                                        appScope.launch {
+                                            snackbarHostState.currentSnackbarData?.dismiss()
+                                            val result = snackbarHostState.showSnackbar(
+                                                message = p10Label(
+                                                    isHi,
+                                                    "सेटअप गाइड छुपा दी गई। ऊपर से कभी भी फिर खोलें।",
+                                                    "Setup guide hidden. Reopen anytime from the header."
+                                                ),
+                                                actionLabel = p10Label(isHi, "वापस लाएँ", "Undo"),
+                                                duration = SnackbarDuration.Short
+                                            )
+                                            if (result == SnackbarResult.ActionPerformed) {
+                                                viewModel.setFirstTimeGuideSkipped(false)
+                                            }
+                                        }
+                                    },
+                                    onReopenFirstTimeGuide = {
+                                        viewModel.setFirstTimeGuideSkipped(false)
                                     }
                                 )
                             }
@@ -1209,6 +1260,20 @@ private fun OrganisationWorkspace(
                             composable(AppRoutes.ROUTE_TRANSPORT) {
                                 if (uiState.canViewTransport) {
                                     Phase11TransportScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_SALARY) {
+                                if (uiState.canViewSalary) {
+                                    Phase12SalaryScreen(
                                         uiState = uiState,
                                         viewModel = viewModel,
                                         onBack = { navController.popBackStack() }

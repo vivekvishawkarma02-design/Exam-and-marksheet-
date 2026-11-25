@@ -139,7 +139,8 @@ fun SchoolSwitcherBar(
                     }
                     SyncStatusChip(
                         syncUiState = uiState.syncUiState,
-                        onClick = onSyncStatusClick
+                        onClick = onSyncStatusClick,
+                        isHindi = uiState.phase10HindiLabels
                     )
                 }
                 if (uiState.markConflicts.isNotEmpty()) {

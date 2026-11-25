@@ -970,6 +970,24 @@
     },
     "/organisations/{orgId}/transportRoutes/{routeId}": {
       "description": "School transport routes, vehicles, drivers, stops, and monthly fees controlled by the 17th Transport module."
+    },
+    "/organisations/{orgId}/salaryRuleConfigs/{configId}": {
+      "description": "Per-school attendance deduction rules, free leaves per month, half-day fraction, late penalty, and Owner-controlled allowTeachersToViewOwnSlips toggle controlled by the sensitive 18th Salary module."
+    },
+    "/organisations/{orgId}/staffSalaryProfiles/{profileId}": {
+      "description": "Staff salary profiles (teaching & non-teaching) with basic salary, allowances, fixed deductions, joining date, and per-school or all-school assignment controlled by the 18th Salary module (Owner-only by default; explicit Owner grant required for Admin)."
+    },
+    "/organisations/{orgId}/salaryMonthlyRecords/{recordId}": {
+      "description": "Monthly salary sheet and payslip records with Phase 7 attendance counts, earnings, deductions, advance instalments, hand adjustment with remark, and payment status. Readable by Salary viewers, or by the linked teacher for ONLY their own slip when allowTeachersToViewOwnSlips is enabled by the Owner."
+    },
+    "/organisations/{orgId}/staffSalaryAdvances/{advanceId}": {
+      "description": "Staff salary advances and loans with automatic monthly instalment deductions, manual repayments, and live balance tracking controlled by the 18th Salary module."
+    },
+    "/organisations/{orgId}/salaryMonthLocks/{lockId}": {
+      "description": "Owner-only monthly salary lock records; edits after locking require a mandatory reason and are logged in salaryAuditLogs."
+    },
+    "/organisations/{orgId}/salaryAuditLogs/{logId}": {
+      "description": "Append-only staff salary audit log recording setup changes, sheet calculations, hand adjustments, payments, advances, month locking, and post-lock overrides."
     }
   }
 }

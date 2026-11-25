@@ -169,6 +169,20 @@ class OfflinePrefsStore(context: Context) {
         prefs.edit().putInt(keyReceiptSeq(orgId, schoolId, session, deviceNodeCode), seq.coerceAtLeast(0)).apply()
     }
 
+    fun getHindiLabelsEnabled(defaultValue: Boolean = true): Boolean =
+        prefs.getBoolean(KEY_HINDI_LABELS_ENABLED, defaultValue)
+
+    fun setHindiLabelsEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_HINDI_LABELS_ENABLED, enabled).apply()
+    }
+
+    fun isFirstTimeGuideSkipped(uid: String, orgId: String): Boolean =
+        prefs.getBoolean(keyFirstTimeGuideSkipped(uid, orgId), false)
+
+    fun setFirstTimeGuideSkipped(uid: String, orgId: String, skipped: Boolean) {
+        prefs.edit().putBoolean(keyFirstTimeGuideSkipped(uid, orgId), skipped).apply()
+    }
+
     fun clearAll() {
         prefs.edit().clear().apply()
     }
@@ -335,8 +349,11 @@ class OfflinePrefsStore(context: Context) {
     private fun keyPendingPhase6(uid: String) = "pending_phase6_$uid"
     private fun keyReceiptSeq(orgId: String, schoolId: String, session: String, node: String) =
         "rcp_seq_${orgId}_${schoolId}_${session}_$node"
+    private fun keyFirstTimeGuideSkipped(uid: String, orgId: String) =
+        "p13_guide_skipped_${uid.ifBlank { "default" }}_${orgId.ifBlank { "default" }}"
 
     companion object {
         private const val PREFS_NAME = "school_report_offline_sync_prefs"
+        private const val KEY_HINDI_LABELS_ENABLED = "p13_hindi_labels_enabled"
     }
 }

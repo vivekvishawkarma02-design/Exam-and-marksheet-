@@ -47,15 +47,36 @@ import com.example.data.cloud.CloudPhase6Snapshot
 import com.example.data.cloud.CloudPhase7Snapshot
 import com.example.data.cloud.CloudPhase8Snapshot
 import com.example.data.cloud.CloudPhase9Snapshot
+import com.example.data.cloud.CloudPhase10Snapshot
+import com.example.data.cloud.CloudPhase11Snapshot
 import com.example.data.cloud.Phase4Repository
 import com.example.data.cloud.Phase6Repository
 import com.example.data.cloud.Phase7Repository
 import com.example.data.cloud.Phase8Repository
 import com.example.data.cloud.Phase9Repository
+import com.example.data.cloud.Phase10Repository
+import com.example.data.cloud.Phase11Repository
 import com.example.data.cloud.StableDocId
 import com.example.data.cloud.TermAttendanceRecalcItem
 import com.example.data.cloud.TimetableRepository
+import com.example.domain.AdmissionEnquiryRecord
 import com.example.domain.AppModule
+import com.example.domain.CashBookAuditLogRecord
+import com.example.domain.CashBookDayClosingRecord
+import com.example.domain.CashBookEntryRecord
+import com.example.domain.CashBookSettingsConfig
+import com.example.domain.EnquirySettingsConfig
+import com.example.domain.ExamInvigilatorDutyRecord
+import com.example.domain.ExamRoomRecord
+import com.example.domain.ExamScheduleRecord
+import com.example.domain.ExamSeatingRecord
+import com.example.domain.Phase10AccessEvaluator
+import com.example.domain.Phase11AccessEvaluator
+import com.example.domain.SchoolCertificateRecord
+import com.example.domain.StockEngine
+import com.example.domain.StockItemSummary
+import com.example.domain.StockTransactionRecord
+import com.example.domain.TransportRouteRecord
 import com.example.domain.AssignmentWarning
 import com.example.domain.AttendanceConflictNotice
 import com.example.domain.AttendanceSummary
@@ -326,7 +347,29 @@ data class SchoolUiState(
     val feeMessageSentLogs: List<FeeMessageSentLog> = emptyList(),
     val schoolNotices: List<SchoolNoticeRecord> = emptyList(),
     val feeAuditLogs: List<FeeAuditLogRecord> = emptyList(),
-    val deviceNodeCode: String = "A1"
+    val deviceNodeCode: String = "A1",
+    // Phase 10: Certificates, Cash Book & Admission Enquiry
+    val schoolCertificates: List<SchoolCertificateRecord> = emptyList(),
+    val cashBookSettingsList: List<CashBookSettingsConfig> = emptyList(),
+    val cashBookEntries: List<CashBookEntryRecord> = emptyList(),
+    val cashBookDayClosings: List<CashBookDayClosingRecord> = emptyList(),
+    val cashBookAuditLogs: List<CashBookAuditLogRecord> = emptyList(),
+    val cashBookFeeReceipts: List<FeeReceiptRecord> = emptyList(),
+    val admissionEnquiries: List<AdmissionEnquiryRecord> = emptyList(),
+    val enquirySettingsList: List<EnquirySettingsConfig> = emptyList(),
+    val phase10HindiLabels: Boolean = true,
+    // Phase 11: Exam Schedule & Admit Cards, Stock, Transport Routes
+    val examSchedules: List<ExamScheduleRecord> = emptyList(),
+    val examRooms: List<ExamRoomRecord> = emptyList(),
+    val examSeatings: List<ExamSeatingRecord> = emptyList(),
+    val examDuties: List<ExamInvigilatorDutyRecord> = emptyList(),
+    val stockTransactions: List<StockTransactionRecord> = emptyList(),
+    val transportRoutes: List<TransportRouteRecord> = emptyList(),
+    val phase11FeeStructures: List<FeeStructureConfig> = emptyList(),
+    val phase11FeeReceipts: List<FeeReceiptRecord> = emptyList(),
+    val phase11FeeOverrides: List<StudentFeeOverride> = emptyList(),
+    val phase11Teachers: List<TeacherProfile> = emptyList(),
+    val phase11TeacherLeaves: List<TeacherLeaveRecord> = emptyList()
 ) {
     val canViewFees: Boolean
         get() = activeOrg == null || Phase9AccessEvaluator.canViewFees(accessProfile)
@@ -339,6 +382,105 @@ data class SchoolUiState(
 
     val canEditStudentRegister: Boolean
         get() = activeOrg == null || Phase9AccessEvaluator.canEditStudentRegister(accessProfile)
+
+    val canViewCertificates: Boolean
+        get() = activeOrg == null || Phase10AccessEvaluator.canViewCertificates(accessProfile)
+
+    val canEditCertificates: Boolean
+        get() = activeOrg == null || Phase10AccessEvaluator.canEditCertificates(accessProfile)
+
+    val canViewCashBook: Boolean
+        get() = activeOrg == null || Phase10AccessEvaluator.canViewCashBook(accessProfile)
+
+    val canEditCashBook: Boolean
+        get() = activeOrg == null || Phase10AccessEvaluator.canEditCashBook(accessProfile)
+
+    val canViewEnquiry: Boolean
+        get() = activeOrg == null || Phase10AccessEvaluator.canViewEnquiry(accessProfile)
+
+    val canEditEnquiry: Boolean
+        get() = activeOrg == null || Phase10AccessEvaluator.canEditEnquiry(accessProfile)
+
+    val canViewExams: Boolean
+        get() = activeOrg == null || Phase11AccessEvaluator.canViewExams(accessProfile)
+
+    val canEditExams: Boolean
+        get() = activeOrg == null || Phase11AccessEvaluator.canEditExams(accessProfile)
+
+    val canViewStock: Boolean
+        get() = activeOrg == null || Phase11AccessEvaluator.canViewStock(accessProfile)
+
+    val canEditStock: Boolean
+        get() = activeOrg == null || Phase11AccessEvaluator.canEditStock(accessProfile)
+
+    val canViewTransport: Boolean
+        get() = activeOrg == null || Phase11AccessEvaluator.canViewTransport(accessProfile)
+
+    val canEditTransport: Boolean
+        get() = activeOrg == null || Phase11AccessEvaluator.canEditTransport(accessProfile)
+
+    val effectiveCashBookFeeReceipts: List<FeeReceiptRecord>
+        get() = (feeReceipts + cashBookFeeReceipts).distinctBy { it.id }
+
+    val effectivePhase11FeeStructures: List<FeeStructureConfig>
+        get() = (feeStructures + phase11FeeStructures).distinctBy { it.id }
+
+    val effectivePhase11FeeReceipts: List<FeeReceiptRecord>
+        get() = (feeReceipts + cashBookFeeReceipts + phase11FeeReceipts).distinctBy { it.id }
+
+    val effectivePhase11FeeOverrides: List<StudentFeeOverride>
+        get() = (studentFeeOverrides + phase11FeeOverrides).distinctBy { it.id }
+
+    val effectivePhase11Teachers: List<TeacherProfile>
+        get() = (teachers + phase11Teachers).distinctBy { it.id }
+
+    val effectivePhase11TeacherLeaves: List<TeacherLeaveRecord>
+        get() = (teacherLeaves + phase11TeacherLeaves).distinctBy { it.id }
+
+    val ownExamDuties: List<ExamInvigilatorDutyRecord>
+        get() {
+            val myUid = currentMember?.uid.orEmpty()
+            val myTeacherId = ownLinkedTeacher?.id.orEmpty()
+            if (myUid.isBlank() && myTeacherId.isBlank()) return emptyList()
+            return examDuties
+                .filter { d ->
+                    (myUid.isNotBlank() && d.teacherUid == myUid) ||
+                        (myTeacherId.isNotBlank() && d.teacherId == myTeacherId)
+                }
+                .sortedWith(compareBy({ it.dateIso }, { it.startTime }, { it.roomName }))
+        }
+
+    fun feeStructureForPhase11(
+        schoolDocId: String = activeSchoolDocId,
+        session: String = filter.session
+    ): FeeStructureConfig {
+        val saved = effectivePhase11FeeStructures.firstOrNull {
+            it.schoolId == schoolDocId && it.session.equals(session, ignoreCase = true)
+        }
+        return saved ?: feeStructureForSchool(schoolDocId, session)
+    }
+
+    fun stockSummariesForSchool(
+        schoolDocId: String = activeSchoolDocId,
+        session: String = filter.session
+    ): List<StockItemSummary> {
+        val structure = feeStructureForPhase11(schoolDocId, session)
+        return StockEngine.computeStockSummary(
+            schoolId = schoolDocId,
+            session = session,
+            catalogue = structure.optionalCatalogue,
+            transactions = stockTransactions,
+            feeReceipts = effectivePhase11FeeReceipts
+        )
+    }
+
+    fun cashBookSettingsForSchool(schoolDocId: String = activeSchoolDocId): CashBookSettingsConfig =
+        cashBookSettingsList.firstOrNull { it.schoolId == schoolDocId }
+            ?: CashBookSettingsConfig.buildDefault(schoolDocId)
+
+    fun enquirySettingsForSchool(schoolDocId: String = activeSchoolDocId): EnquirySettingsConfig =
+        enquirySettingsList.firstOrNull { it.schoolId == schoolDocId }
+            ?: EnquirySettingsConfig.buildDefault(schoolDocId)
 
     fun feeStructureForSchool(
         schoolDocId: String = activeSchoolDocId,
@@ -1254,7 +1396,9 @@ class SchoolViewModel(
     private val localRepo: ReportCardRepository,
     internal val connectivityMonitor: NetworkConnectivityMonitor,
     internal val offlinePrefs: OfflinePrefsStore,
-    internal val phase9Repo: Phase9Repository = Phase9Repository(orgRepo)
+    internal val phase9Repo: Phase9Repository = Phase9Repository(orgRepo),
+    internal val phase10Repo: Phase10Repository = Phase10Repository(orgRepo),
+    internal val phase11Repo: Phase11Repository = Phase11Repository(orgRepo)
 ) : ViewModel() {
 
     internal val _filter = MutableStateFlow(FilterSelection())
@@ -1309,6 +1453,9 @@ class SchoolViewModel(
     private val _phase7Snapshot = MutableStateFlow(CloudPhase7Snapshot())
     private val _phase8Snapshot = MutableStateFlow(CloudPhase8Snapshot())
     private val _phase9Snapshot = MutableStateFlow(CloudPhase9Snapshot())
+    private val _phase10Snapshot = MutableStateFlow(CloudPhase10Snapshot())
+    private val _phase11Snapshot = MutableStateFlow(CloudPhase11Snapshot())
+    internal val _phase10HindiLabels = MutableStateFlow(true)
     private val _attendanceConflicts = MutableStateFlow<List<AttendanceConflictNotice>>(emptyList())
     private val _multiSchoolPendingBundles = MutableStateFlow<List<SchoolAcademicBundleForPending>>(emptyList())
     private val _orgMembers = MutableStateFlow<List<CloudMember>>(emptyList())
@@ -1343,8 +1490,8 @@ class SchoolViewModel(
     private val combinedSyncErrorFlow = combine(
         combine(academicRepo.syncError, phase4Repo.syncError, timetableRepo.syncError) { a, b, c -> a ?: b ?: c },
         combine(phase6Repo.syncError, phase7Repo.syncError, phase8Repo.syncError) { d, e, f -> d ?: e ?: f },
-        phase9Repo.syncError
-    ) { left, right, p9Err -> left ?: right ?: p9Err }
+        combine(phase9Repo.syncError, phase10Repo.syncError, phase11Repo.syncError) { p9, p10, p11 -> p9 ?: p10 ?: p11 }
+    ) { left, right, p911Err -> left ?: right ?: p911Err }
 
     private val phase4To6Flow = combine(
         _phase4Snapshot,
@@ -1356,21 +1503,40 @@ class SchoolViewModel(
         Phase4And5Bundle(p4, tt, ttConflicts, p6, p6Conflicts)
     }
 
-    private val phase8And9Flow = combine(
+    private val phase10And11Flow = combine(
+        _phase10Snapshot,
+        _phase11Snapshot,
+        _phase10HindiLabels
+    ) { p10, p11, hindiLabels ->
+        Triple(p10, p11, hindiLabels)
+    }
+
+    private val phase8To10Flow = combine(
         _phase8Snapshot,
         _attendanceConflicts,
-        _phase9Snapshot
-    ) { p8, attConflicts, p9 ->
-        Triple(p8, attConflicts, p9)
+        _phase9Snapshot,
+        phase10And11Flow
+    ) { p8, attConflicts, p9, p1011 ->
+        Phase8To10Bundle(p8, attConflicts, p9, p1011.first, p1011.second, p1011.third)
     }
 
     private val phase4To8Flow = combine(
         phase4To6Flow,
         _phase7Snapshot,
         _multiSchoolPendingBundles,
-        phase8And9Flow
-    ) { p46, p7, pendingBundles, (p8, attConflicts, p9) ->
-        Phase7And8Bundle(p46, p7, pendingBundles, p8, attConflicts, p9)
+        phase8To10Flow
+    ) { p46, p7, pendingBundles, p810 ->
+        Phase7And8Bundle(
+            p46 = p46,
+            phase7 = p7,
+            multiSchoolPendingBundles = pendingBundles,
+            phase8 = p810.phase8,
+            attendanceConflicts = p810.attendanceConflicts,
+            phase9 = p810.phase9,
+            phase10 = p810.phase10,
+            phase11 = p810.phase11,
+            phase10HindiLabels = p810.phase10HindiLabels
+        )
     }
 
     private val syncExtrasFlow = combine(
@@ -1404,7 +1570,10 @@ class SchoolViewModel(
             multiSchoolPendingBundles = p78.multiSchoolPendingBundles,
             phase8 = p78.phase8,
             attendanceConflicts = p78.attendanceConflicts,
-            phase9 = p78.phase9
+            phase9 = p78.phase9,
+            phase10 = p78.phase10,
+            phase11 = p78.phase11,
+            phase10HindiLabels = p78.phase10HindiLabels
         )
     }
 
@@ -1446,7 +1615,9 @@ class SchoolViewModel(
             admin.phase6.pendingWriteCount +
             admin.phase7.pendingWriteCount +
             admin.phase8.pendingWriteCount +
-            admin.phase9.pendingWriteCount
+            admin.phase9.pendingWriteCount +
+            admin.phase10.pendingWriteCount +
+            admin.phase11.pendingWriteCount
 
         val syncUi = OfflineSyncEngine.computeSyncUiState(
             isOnline = core.isOnline,
@@ -1517,7 +1688,27 @@ class SchoolViewModel(
             feeMessageSentLogs = admin.phase9.messageSentLogs,
             schoolNotices = admin.phase9.schoolNotices,
             feeAuditLogs = admin.phase9.feeAuditLogs,
-            deviceNodeCode = offlinePrefs.getOrCreateDeviceNodeCode(currentUserId)
+            deviceNodeCode = offlinePrefs.getOrCreateDeviceNodeCode(currentUserId),
+            schoolCertificates = admin.phase10.certificates,
+            cashBookSettingsList = admin.phase10.cashBookSettings,
+            cashBookEntries = admin.phase10.cashBookEntries,
+            cashBookDayClosings = admin.phase10.cashBookDayClosings,
+            cashBookAuditLogs = admin.phase10.cashBookAuditLogs,
+            cashBookFeeReceipts = admin.phase10.cashBookFeeReceipts,
+            admissionEnquiries = admin.phase10.enquiries,
+            enquirySettingsList = admin.phase10.enquirySettings,
+            phase10HindiLabels = admin.phase10HindiLabels,
+            examSchedules = admin.phase11.examSchedules,
+            examRooms = admin.phase11.examRooms,
+            examSeatings = admin.phase11.examSeatings,
+            examDuties = admin.phase11.examDuties,
+            stockTransactions = admin.phase11.stockTransactions,
+            transportRoutes = admin.phase11.transportRoutes,
+            phase11FeeStructures = admin.phase11.sharedFeeStructures,
+            phase11FeeReceipts = admin.phase11.sharedFeeReceipts,
+            phase11FeeOverrides = admin.phase11.sharedFeeOverrides,
+            phase11Teachers = admin.phase11.sharedTeachers,
+            phase11TeacherLeaves = admin.phase11.sharedTeacherLeaves
         )
     }.stateIn(
         scope = viewModelScope,
@@ -1984,6 +2175,66 @@ class SchoolViewModel(
                     _phase9Snapshot.value = snap
                 }
         }
+
+        // 17. Phase 10: Certificates, Cash Book & Admission Enquiry
+        viewModelScope.launch {
+            combine(
+                _observerRestartTick,
+                _ownMember.map { it?.toAccessProfile() }
+            ) { tick, profile ->
+                tick to profile
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { (_, profile) ->
+                    if (profile == null || !OrgAccessEvaluator.isActive(profile)) {
+                        flowOf(CloudPhase10Snapshot())
+                    } else {
+                        phase10Repo.observePhase10Data(orgId, profile, currentUserId)
+                            .catch { e ->
+                                val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
+                                if (cause != null) {
+                                    handleFirestoreError(cause, OperationType.LIST, "organisations/$orgId/schoolCertificates")
+                                    emit(CloudPhase10Snapshot())
+                                    return@catch
+                                }
+                                if (e is CancellationException) throw e
+                            }
+                    }
+                }
+                .collect { snap ->
+                    _phase10Snapshot.value = snap
+                }
+        }
+
+        // 18. Observe Phase 11 (Exams, Stock, Transport & teacher self-duties)
+        viewModelScope.launch {
+            combine(
+                _observerRestartTick,
+                _ownMember.map { it?.toAccessProfile() }
+            ) { tick, profile ->
+                tick to profile
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { (_, profile) ->
+                    if (profile == null || !OrgAccessEvaluator.isActive(profile)) {
+                        flowOf(CloudPhase11Snapshot())
+                    } else {
+                        phase11Repo.observePhase11Data(orgId, profile, currentUserId)
+                            .catch { e ->
+                                val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
+                                if (cause != null) {
+                                    handleFirestoreError(cause, OperationType.LIST, "organisations/$orgId/examSchedules")
+                                    emit(CloudPhase11Snapshot())
+                                    return@catch
+                                }
+                                if (e is CancellationException) throw e
+                            }
+                    }
+                }
+                .collect { snap ->
+                    _phase11Snapshot.value = snap
+                }
+        }
     }
 
     private fun evaluatePhase6Conflicts(snap: CloudPhase6Snapshot) {
@@ -2114,9 +2365,11 @@ class SchoolViewModel(
         val retriedPhase7 = phase7Repo.retrySync()
         val retriedPhase8 = phase8Repo.retrySync()
         val retriedPhase9 = phase9Repo.retrySync()
+        val retriedPhase10 = phase10Repo.retrySync()
+        val retriedPhase11 = phase11Repo.retrySync()
         academicRepo.retrySync { msg ->
             emitMessage(
-                if (retriedPhase4 || retriedPhase5 || retriedPhase6 || retriedPhase7 || retriedPhase8 || retriedPhase9) {
+                if (retriedPhase4 || retriedPhase5 || retriedPhase6 || retriedPhase7 || retriedPhase8 || retriedPhase9 || retriedPhase10 || retriedPhase11) {
                     "Retrying pending sync…"
                 } else {
                     msg
@@ -2133,6 +2386,8 @@ class SchoolViewModel(
         phase7Repo.clearSyncError()
         phase8Repo.clearSyncError()
         phase9Repo.clearSyncError()
+        phase10Repo.clearSyncError()
+        phase11Repo.clearSyncError()
     }
 
     private fun handleListenerError(e: Throwable, sub: String) {
@@ -5770,13 +6025,25 @@ private data class Phase4And5Bundle(
     val phase6Conflicts: List<Phase6ConflictNotice>
 )
 
+private data class Phase8To10Bundle(
+    val phase8: CloudPhase8Snapshot,
+    val attendanceConflicts: List<AttendanceConflictNotice>,
+    val phase9: CloudPhase9Snapshot,
+    val phase10: CloudPhase10Snapshot,
+    val phase11: CloudPhase11Snapshot,
+    val phase10HindiLabels: Boolean
+)
+
 private data class Phase7And8Bundle(
     val p46: Phase4And5Bundle,
     val phase7: CloudPhase7Snapshot,
     val multiSchoolPendingBundles: List<SchoolAcademicBundleForPending>,
     val phase8: CloudPhase8Snapshot,
     val attendanceConflicts: List<AttendanceConflictNotice>,
-    val phase9: CloudPhase9Snapshot
+    val phase9: CloudPhase9Snapshot,
+    val phase10: CloudPhase10Snapshot,
+    val phase11: CloudPhase11Snapshot,
+    val phase10HindiLabels: Boolean
 )
 
 private data class AdminAndPhase4Bundle(
@@ -5793,7 +6060,10 @@ private data class AdminAndPhase4Bundle(
     val multiSchoolPendingBundles: List<SchoolAcademicBundleForPending>,
     val phase8: CloudPhase8Snapshot,
     val attendanceConflicts: List<AttendanceConflictNotice>,
-    val phase9: CloudPhase9Snapshot
+    val phase9: CloudPhase9Snapshot,
+    val phase10: CloudPhase10Snapshot,
+    val phase11: CloudPhase11Snapshot,
+    val phase10HindiLabels: Boolean
 )
 
 private data class CloudCoreBundle(

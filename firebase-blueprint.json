@@ -45,7 +45,7 @@
     },
     "OrgMember": {
       "title": "OrgMember",
-      "description": "Member record with role, allowed schools, 9-module permissions (including Phase 8 Attendance with backward-compatible 8-key support), teacher profile fields, and activity timestamp.",
+      "description": "Member record with role, allowed schools, 14-module permissions (including Phase 10 Certificates, Cash Book, and Enquiry with backward-compatible missing-key = none), teacher profile fields, and activity timestamp.",
       "type": "object",
       "properties": {
         "uid": { "type": "string" },
@@ -680,6 +680,116 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["schoolId", "session", "action", "targetId", "studentId", "studentName", "summary", "actorUid", "actorName", "clientCreatedAtMs", "createdAt"]
+    },
+    "SchoolCertificate": {
+      "title": "SchoolCertificate",
+      "description": "Immutable TC, Bonafide, or Character certificate with offline-safe running number per school, session, type, and device node. Can only transition ISSUED -> CANCELLED with a mandatory reason; never deleted.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "session": { "type": "string" },
+        "certificateType": { "type": "string", "enum": ["TC", "BONAFIDE", "CHARACTER"] },
+        "certificateNumber": { "type": "string" },
+        "deviceNodeCode": { "type": "string" },
+        "sequenceNo": { "type": "integer" },
+        "issueDateIso": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentAdmNo": { "type": "string" },
+        "status": { "type": "string", "enum": ["ISSUED", "CANCELLED"] },
+        "issuedByUid": { "type": "string" },
+        "issuedByName": { "type": "string" },
+        "cancelReason": { "type": "string" },
+        "reissuedFromCertNumber": { "type": "string" }
+      },
+      "required": ["schoolId", "session", "certificateType", "certificateNumber", "deviceNodeCode", "sequenceNo", "issueDateIso", "studentId", "studentName", "status", "issuedByUid", "issuedByName", "createdAt", "updatedAt"]
+    },
+    "CashBookSettings": {
+      "title": "CashBookSettings",
+      "description": "Per-school editable expense/other-income categories, default opening balance, and Admin-only large expense approval limit (default Rs. 5000).",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "expenseCategories": { "type": "array" },
+        "otherIncomeCategories": { "type": "array" },
+        "expenseApprovalLimitRs": { "type": "integer" },
+        "defaultOpeningBalanceRs": { "type": "integer" }
+      },
+      "required": ["schoolId", "expenseCategories", "otherIncomeCategories", "expenseApprovalLimitRs", "defaultOpeningBalanceRs", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "CashBookEntry": {
+      "title": "CashBookEntry",
+      "description": "Daily expense or manual other-income entry with optional bill photo, admin approval for large expenses, edit/cancel with mandatory reason, and no silent delete.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "dateIso": { "type": "string" },
+        "entryType": { "type": "string", "enum": ["EXPENSE", "OTHER_INCOME"] },
+        "category": { "type": "string" },
+        "amount": { "type": "integer" },
+        "paymentMode": { "type": "string", "enum": ["CASH", "UPI", "CHEQUE", "OTHER"] },
+        "status": { "type": "string", "enum": ["ACTIVE", "CANCELLED"] },
+        "approvedByAdminUid": { "type": "string" }
+      },
+      "required": ["schoolId", "dateIso", "entryType", "category", "amount", "paymentMode", "status", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "CashBookDayClosing": {
+      "title": "CashBookDayClosing",
+      "description": "Daily cash reconciliation record storing opening cash, expected closing cash, actual cash counted, and cash difference.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "dateIso": { "type": "string" },
+        "openingCashBalance": { "type": "integer" },
+        "expectedClosingCash": { "type": "integer" },
+        "countedCash": { "type": "integer" },
+        "cashDifference": { "type": "integer" }
+      },
+      "required": ["schoolId", "dateIso", "openingCashBalance", "expectedClosingCash", "countedCash", "cashDifference", "closedByUid", "createdAt", "updatedAt"]
+    },
+    "CashBookAuditLog": {
+      "title": "CashBookAuditLog",
+      "description": "Append-only Cash Book audit log recording every entry add, edit (with reason), cancellation (with reason), day closing, and settings update.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "action": { "type": "string" },
+        "targetId": { "type": "string" },
+        "dateIso": { "type": "string" },
+        "amount": { "type": "integer" },
+        "reason": { "type": "string" },
+        "summary": { "type": "string" }
+      },
+      "required": ["schoolId", "action", "targetId", "dateIso", "amount", "summary", "actorUid", "createdAt"]
+    },
+    "EnquirySettings": {
+      "title": "EnquirySettings",
+      "description": "Per-school editable enquiry sources list and WhatsApp follow-up message template.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "sources": { "type": "array" },
+        "whatsappTemplate": { "type": "string" }
+      },
+      "required": ["schoolId", "sources", "whatsappTemplate", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "AdmissionEnquiry": {
+      "title": "AdmissionEnquiry",
+      "description": "Admission enquiry tracking child, class wanted, guardian, mobile, source, follow-up date, status (NEW/CONTACTED/VISIT_PLANNED/ADMITTED/LOST), and link to converted Student Register record.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "childName": { "type": "string" },
+        "classWanted": { "type": "string" },
+        "guardianName": { "type": "string" },
+        "mobile": { "type": "string" },
+        "source": { "type": "string" },
+        "nextFollowUpDateIso": { "type": "string" },
+        "status": { "type": "string", "enum": ["NEW", "CONTACTED", "VISIT_PLANNED", "ADMITTED", "LOST"] },
+        "convertedStudentDocId": { "type": "string" },
+        "convertedStudentAdmNo": { "type": "string" }
+      },
+      "required": ["schoolId", "session", "childName", "guardianName", "source", "enquiryDateIso", "nextFollowUpDateIso", "status", "createdByUid", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -814,6 +924,52 @@
     "/organisations/{orgId}/feeAuditLogs/{auditId}": {
       "schema": { "$ref": "#/entities/FeeAuditLog" },
       "description": "Append-only fee audit trail controlled by the 10th Fees module."
+    },
+    "/organisations/{orgId}/schoolCertificates/{certId}": {
+      "schema": { "$ref": "#/entities/SchoolCertificate" },
+      "description": "Issued and cancelled TC, Bonafide, and Character certificates controlled by the 12th Certificates module."
+    },
+    "/organisations/{orgId}/cashBookSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/CashBookSettings" },
+      "description": "Per-school Cash Book categories and Admin approval limit controlled by the 13th Cash Book module."
+    },
+    "/organisations/{orgId}/cashBookEntries/{entryId}": {
+      "schema": { "$ref": "#/entities/CashBookEntry" },
+      "description": "Daily Cash Book expenses and manual other-income entries controlled by the 13th Cash Book module."
+    },
+    "/organisations/{orgId}/cashBookDayClosings/{closingId}": {
+      "schema": { "$ref": "#/entities/CashBookDayClosing" },
+      "description": "Daily Cash Book opening/closing cash reconciliation records controlled by the 13th Cash Book module."
+    },
+    "/organisations/{orgId}/cashBookAuditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/CashBookAuditLog" },
+      "description": "Append-only Cash Book audit log controlled by the 13th Cash Book module."
+    },
+    "/organisations/{orgId}/enquirySettings/{settingId}": {
+      "schema": { "$ref": "#/entities/EnquirySettings" },
+      "description": "Per-school Admission Enquiry sources and WhatsApp template controlled by the 14th Enquiry module."
+    },
+    "/organisations/{orgId}/admissionEnquiries/{enquiryId}": {
+      "schema": { "$ref": "#/entities/AdmissionEnquiry" },
+      "description": "Admission enquiries and Student Register conversion links controlled by the 14th Enquiry module."
+    },
+    "/organisations/{orgId}/examSchedules/{examId}": {
+      "description": "Per-school exam schedules, class papers, and admit card fee-dues threshold controlled by the 15th Exams module."
+    },
+    "/organisations/{orgId}/examRooms/{roomId}": {
+      "description": "Exam rooms with seating capacity controlled by the 15th Exams module."
+    },
+    "/organisations/{orgId}/examSeatings/{seatingId}": {
+      "description": "Auto-allocated and manually adjusted exam seating plans controlled by the 15th Exams module."
+    },
+    "/organisations/{orgId}/examInvigilatorDuties/{dutyId}": {
+      "description": "Invigilator room-slot duties controlled by the 15th Exams module; linked teachers can read their own duties."
+    },
+    "/organisations/{orgId}/stockTransactions/{txId}": {
+      "description": "Append-only stock purchases (STOCK_IN) and reasoned manual adjustments (ADJUSTMENT) controlled by the 16th Stock module."
+    },
+    "/organisations/{orgId}/transportRoutes/{routeId}": {
+      "description": "School transport routes, vehicles, drivers, stops, and monthly fees controlled by the 17th Transport module."
     }
   }
 }

@@ -40,11 +40,13 @@ service cloud.firestore {
 
     function isValidPermissionsMap(perms) {
       return perms is map &&
-        perms.size() >= 8 && perms.size() <= 11 &&
+        perms.size() >= 8 && perms.size() <= 17 &&
         perms.keys().hasAll(['students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members']) &&
         perms.keys().hasOnly([
           'students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members',
-          'attendance', 'fees', 'studentRegister'
+          'attendance', 'fees', 'studentRegister',
+          'certificates', 'cashBook', 'enquiry',
+          'exams', 'stock', 'transport'
         ]) &&
         perms.students in ['none', 'view', 'edit'] &&
         perms.marks in ['none', 'view', 'edit'] &&
@@ -56,7 +58,13 @@ service cloud.firestore {
         perms.members in ['none', 'view', 'edit'] &&
         (!('attendance' in perms) || perms.attendance in ['none', 'view', 'edit']) &&
         (!('fees' in perms) || perms.fees in ['none', 'view', 'edit']) &&
-        (!('studentRegister' in perms) || perms.studentRegister in ['none', 'view', 'edit']);
+        (!('studentRegister' in perms) || perms.studentRegister in ['none', 'view', 'edit']) &&
+        (!('certificates' in perms) || perms.certificates in ['none', 'view', 'edit']) &&
+        (!('cashBook' in perms) || perms.cashBook in ['none', 'view', 'edit']) &&
+        (!('enquiry' in perms) || perms.enquiry in ['none', 'view', 'edit']) &&
+        (!('exams' in perms) || perms.exams in ['none', 'view', 'edit']) &&
+        (!('stock' in perms) || perms.stock in ['none', 'view', 'edit']) &&
+        (!('transport' in perms) || perms.transport in ['none', 'view', 'edit']);
     }
 
     function isValidStringList(listVal, maxLen) {
@@ -127,6 +135,35 @@ service cloud.firestore {
       let m = memberData(orgId);
       return memberExists(orgId) && m.status == 'active' && (
         m.role in ['OWNER', 'ADMIN'] || m.allSchools == true || schoolId in m.schools
+      );
+    }
+
+    function canUpdateStudent(orgId, schoolId) {
+      let m = memberData(orgId);
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let changed = incoming().diff(existing()).affectedKeys();
+      let canFullEdit = isAdmin ||
+        ('students' in m.permissions && m.permissions.students == 'edit') ||
+        ('studentRegister' in m.permissions && m.permissions.studentRegister == 'edit');
+      let canCertMarkLeft = !canFullEdit &&
+        'certificates' in m.permissions && m.permissions.certificates == 'edit' &&
+        incoming().status == 'LEFT' &&
+        changed.hasOnly(['status', 'leftDate', 'leftReason', 'updatedAt']);
+      let canTransportEdit = !canFullEdit &&
+        'transport' in m.permissions && m.permissions.transport == 'edit' &&
+        changed.hasOnly(['usesTransport', 'transportRouteId', 'transportRouteName', 'transportStopName', 'transportMonthlyAmount', 'updatedAt']);
+      return memberExists(orgId) && m.status == 'active' && inSchool && (
+        (canFullEdit && changed.hasOnly([
+          'classId', 'session', 'admNo', 'name', 'fatherName', 'motherName',
+          'dob', 'mobile', 'secondMobile', 'address', 'photoBase64', 'className', 'section',
+          'rollNo', 'admissionDate', 'previousSchool', 'siblingGroupId',
+          'usesTransport', 'transportRouteId', 'transportRouteName', 'transportStopName', 'transportMonthlyAmount',
+          'status', 'leftDate', 'leftReason',
+          'sample', 'updatedAt'
+        ])) ||
+        canCertMarkLeft ||
+        canTransportEdit
       );
     }
 
@@ -429,7 +466,7 @@ service cloud.firestore {
           'schoolId', 'classId', 'session', 'admNo', 'name', 'fatherName', 'motherName',
           'dob', 'mobile', 'secondMobile', 'address', 'photoBase64', 'className', 'section', 'rollNo',
           'admissionDate', 'previousSchool', 'siblingGroupId',
-          'usesTransport', 'transportRouteName', 'transportMonthlyAmount',
+          'usesTransport', 'transportRouteId', 'transportRouteName', 'transportStopName', 'transportMonthlyAmount',
           'status', 'leftDate', 'leftReason',
           'sample', 'createdAt', 'updatedAt'
         ]) &&
@@ -452,7 +489,9 @@ service cloud.firestore {
         (!('previousSchool' in data) || (data.previousSchool is string && data.previousSchool.size() <= 160)) &&
         (!('siblingGroupId' in data) || (data.siblingGroupId is string && data.siblingGroupId.size() <= 80)) &&
         (!('usesTransport' in data) || data.usesTransport is bool) &&
+        (!('transportRouteId' in data) || (data.transportRouteId is string && data.transportRouteId.size() <= 128)) &&
         (!('transportRouteName' in data) || (data.transportRouteName is string && data.transportRouteName.size() <= 120)) &&
+        (!('transportStopName' in data) || (data.transportStopName is string && data.transportStopName.size() <= 80)) &&
         (!('transportMonthlyAmount' in data) || (data.transportMonthlyAmount is int && data.transportMonthlyAmount >= 0 && data.transportMonthlyAmount <= 500000)) &&
         (!('status' in data) || data.status in ['ACTIVE', 'LEFT']) &&
         (!('leftDate' in data) || (data.leftDate is string && data.leftDate.size() <= 40)) &&
@@ -1073,6 +1112,419 @@ service cloud.firestore {
         isValidTimestamp(data.createdAt);
     }
 
+    // --- PHASE 10 VALIDATORS & HELPERS (Certificates, Cash Book, Admission Enquiry) ---
+    function isValidSchoolCertificateCreate(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'certificateType', 'certificateNumber', 'deviceNodeCode', 'sequenceNo',
+          'issueDateIso', 'studentId', 'studentName', 'studentAdmNo', 'fatherName', 'motherName', 'dob',
+          'className', 'section', 'rollNo', 'admissionDate', 'address',
+          'reasonForLeaving', 'lastAttendanceDateIso', 'conduct', 'promotionStatus', 'feeDuesStatus', 'remarks',
+          'status', 'issuedByUid', 'issuedByName', 'issuedAtMs',
+          'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason',
+          'reissuedFromCertId', 'reissuedFromCertNumber', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'certificateType', 'certificateNumber', 'deviceNodeCode', 'sequenceNo',
+          'issueDateIso', 'studentId', 'studentName', 'studentAdmNo', 'fatherName', 'motherName', 'dob',
+          'className', 'section', 'rollNo', 'admissionDate', 'address',
+          'reasonForLeaving', 'lastAttendanceDateIso', 'conduct', 'promotionStatus', 'feeDuesStatus', 'remarks',
+          'status', 'issuedByUid', 'issuedByName', 'issuedAtMs',
+          'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason',
+          'reissuedFromCertId', 'reissuedFromCertNumber', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.certificateType in ['TC', 'BONAFIDE', 'CHARACTER'] &&
+        data.certificateNumber is string && data.certificateNumber.size() >= 3 && data.certificateNumber.size() <= 60 &&
+        data.deviceNodeCode is string && data.deviceNodeCode.size() >= 1 && data.deviceNodeCode.size() <= 12 &&
+        data.sequenceNo is int && data.sequenceNo >= 1 &&
+        isValidIsoDate(data.issueDateIso) &&
+        data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 &&
+        data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120 &&
+        data.studentAdmNo is string && data.studentAdmNo.size() <= 60 &&
+        data.fatherName is string && data.fatherName.size() <= 120 &&
+        data.motherName is string && data.motherName.size() <= 120 &&
+        data.dob is string && data.dob.size() <= 30 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+        data.rollNo is int && data.rollNo >= 1 && data.rollNo <= 9999 &&
+        data.admissionDate is string && data.admissionDate.size() <= 30 &&
+        data.address is string && data.address.size() <= 300 &&
+        data.reasonForLeaving is string && data.reasonForLeaving.size() <= 300 &&
+        data.lastAttendanceDateIso is string && data.lastAttendanceDateIso.size() <= 20 &&
+        data.conduct is string && data.conduct.size() >= 1 && data.conduct.size() <= 80 &&
+        data.promotionStatus is string && data.promotionStatus.size() <= 120 &&
+        data.feeDuesStatus is string && data.feeDuesStatus.size() <= 120 &&
+        data.remarks is string && data.remarks.size() <= 300 &&
+        data.status == 'ISSUED' &&
+        data.issuedByUid == request.auth.uid &&
+        data.issuedByName is string && data.issuedByName.size() >= 1 && data.issuedByName.size() <= 120 &&
+        data.issuedAtMs is int && data.issuedAtMs >= 0 &&
+        data.cancelledAtMs == 0 &&
+        data.cancelledByUid == '' &&
+        data.cancelledByName == '' &&
+        data.cancelReason == '' &&
+        data.reissuedFromCertId is string && data.reissuedFromCertId.size() <= 128 &&
+        data.reissuedFromCertNumber is string && data.reissuedFromCertNumber.size() <= 60 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function cashBookSettingsPath(orgId, schoolId) {
+      return /databases/$(database)/documents/organisations/$(orgId)/cashBookSettings/$('cbset_' + schoolId);
+    }
+
+    function cashBookApprovalLimit(orgId, schoolId) {
+      let hasCfg = exists(cashBookSettingsPath(orgId, schoolId));
+      let cfg = hasCfg ? get(cashBookSettingsPath(orgId, schoolId)).data : {};
+      return (hasCfg && 'expenseApprovalLimitRs' in cfg && cfg.expenseApprovalLimitRs is int)
+        ? cfg.expenseApprovalLimitRs
+        : 5000;
+    }
+
+    function canRecordCashBookExpense(orgId, data) {
+      let limit = cashBookApprovalLimit(orgId, data.schoolId);
+      return data.entryType != 'EXPENSE' ||
+        limit <= 0 ||
+        data.amount <= limit ||
+        isOrgAdmin(orgId) ||
+        (
+          data.approvedByAdminUid != '' &&
+          exists(memberPath(orgId, data.approvedByAdminUid)) &&
+          get(memberPath(orgId, data.approvedByAdminUid)).data.status == 'active' &&
+          get(memberPath(orgId, data.approvedByAdminUid)).data.role in ['OWNER', 'ADMIN']
+        );
+    }
+
+    function isValidCashBookSettings(data) {
+      return data.keys().hasAll([
+          'schoolId', 'expenseCategories', 'otherIncomeCategories',
+          'expenseApprovalLimitRs', 'defaultOpeningBalanceRs',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'expenseCategories', 'otherIncomeCategories',
+          'expenseApprovalLimitRs', 'defaultOpeningBalanceRs',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        isValidStringList(data.expenseCategories, 40) && data.expenseCategories.size() >= 1 &&
+        isValidStringList(data.otherIncomeCategories, 30) && data.otherIncomeCategories.size() >= 1 &&
+        data.expenseApprovalLimitRs is int && data.expenseApprovalLimitRs >= 0 && data.expenseApprovalLimitRs <= 10000000 &&
+        data.defaultOpeningBalanceRs is int && data.defaultOpeningBalanceRs >= -10000000 && data.defaultOpeningBalanceRs <= 100000000 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCashBookEntryCreate(data) {
+      return data.keys().hasAll([
+          'schoolId', 'dateIso', 'entryType', 'category', 'amount', 'paymentMode', 'note', 'billPhotoBase64',
+          'status', 'approvedByAdminUid', 'approvedByAdminName', 'approvalNote',
+          'createdByUid', 'createdByName', 'createdAtMs',
+          'updatedByUid', 'updatedByName', 'lastEditReason', 'clientEditedAtMs',
+          'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'dateIso', 'entryType', 'category', 'amount', 'paymentMode', 'note', 'billPhotoBase64',
+          'status', 'approvedByAdminUid', 'approvedByAdminName', 'approvalNote',
+          'createdByUid', 'createdByName', 'createdAtMs',
+          'updatedByUid', 'updatedByName', 'lastEditReason', 'clientEditedAtMs',
+          'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        isValidIsoDate(data.dateIso) &&
+        data.entryType in ['EXPENSE', 'OTHER_INCOME'] &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.amount is int && data.amount > 0 && data.amount <= 100000000 &&
+        data.paymentMode in ['CASH', 'UPI', 'CHEQUE', 'OTHER'] &&
+        data.note is string && data.note.size() <= 300 &&
+        data.billPhotoBase64 is string && data.billPhotoBase64.size() <= 260000 &&
+        data.status == 'ACTIVE' &&
+        data.approvedByAdminUid is string && data.approvedByAdminUid.size() <= 128 &&
+        data.approvedByAdminName is string && data.approvedByAdminName.size() <= 120 &&
+        data.approvalNote is string && data.approvalNote.size() <= 200 &&
+        data.createdByUid == request.auth.uid &&
+        data.createdByName is string && data.createdByName.size() >= 1 && data.createdByName.size() <= 120 &&
+        data.createdAtMs is int && data.createdAtMs >= 0 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.lastEditReason == '' &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        data.cancelledAtMs == 0 &&
+        data.cancelledByUid == '' &&
+        data.cancelledByName == '' &&
+        data.cancelReason == '' &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCashBookDayClosing(data) {
+      return data.keys().hasAll([
+          'schoolId', 'dateIso', 'openingCashBalance', 'cashInTotal', 'cashOutTotal',
+          'expectedClosingCash', 'countedCash', 'cashDifference',
+          'nonCashInTotal', 'nonCashOutTotal', 'note',
+          'closedByUid', 'closedByName', 'closedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'dateIso', 'openingCashBalance', 'cashInTotal', 'cashOutTotal',
+          'expectedClosingCash', 'countedCash', 'cashDifference',
+          'nonCashInTotal', 'nonCashOutTotal', 'note',
+          'closedByUid', 'closedByName', 'closedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        isValidIsoDate(data.dateIso) &&
+        data.openingCashBalance is int &&
+        data.cashInTotal is int && data.cashInTotal >= 0 &&
+        data.cashOutTotal is int && data.cashOutTotal >= 0 &&
+        data.expectedClosingCash is int &&
+        data.countedCash is int &&
+        data.cashDifference is int &&
+        data.cashDifference == (data.countedCash - data.expectedClosingCash) &&
+        data.nonCashInTotal is int && data.nonCashInTotal >= 0 &&
+        data.nonCashOutTotal is int && data.nonCashOutTotal >= 0 &&
+        data.note is string && data.note.size() <= 300 &&
+        data.closedByUid == request.auth.uid &&
+        data.closedByName is string && data.closedByName.size() >= 1 && data.closedByName.size() <= 120 &&
+        data.closedAtMs is int && data.closedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCashBookAuditLog(data) {
+      return data.keys().hasAll([
+          'schoolId', 'action', 'targetId', 'dateIso', 'amount', 'reason', 'summary',
+          'actorUid', 'actorName', 'clientCreatedAtMs', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'action', 'targetId', 'dateIso', 'amount', 'reason', 'summary',
+          'actorUid', 'actorName', 'clientCreatedAtMs', 'createdAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.action is string && data.action.size() >= 1 && data.action.size() <= 60 &&
+        data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 &&
+        isValidIsoDate(data.dateIso) &&
+        data.amount is int &&
+        data.reason is string && data.reason.size() <= 300 &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 400 &&
+        data.actorUid == request.auth.uid &&
+        data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
+        data.clientCreatedAtMs is int && data.clientCreatedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidEnquirySettings(data) {
+      return data.keys().hasAll([
+          'schoolId', 'sources', 'whatsappTemplate',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'sources', 'whatsappTemplate',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        isValidStringList(data.sources, 30) && data.sources.size() >= 1 &&
+        data.whatsappTemplate is string && data.whatsappTemplate.size() >= 1 && data.whatsappTemplate.size() <= 500 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAdmissionEnquiry(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'childName', 'classWanted', 'guardianName', 'mobile', 'source', 'notes',
+          'enquiryDateIso', 'nextFollowUpDateIso', 'status', 'lostReason',
+          'convertedStudentDocId', 'convertedStudentAdmNo', 'convertedAtMs',
+          'createdByUid', 'createdByName', 'createdAtMs',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'childName', 'classWanted', 'guardianName', 'mobile', 'source', 'notes',
+          'enquiryDateIso', 'nextFollowUpDateIso', 'status', 'lostReason',
+          'convertedStudentDocId', 'convertedStudentAdmNo', 'convertedAtMs',
+          'createdByUid', 'createdByName', 'createdAtMs',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.childName is string && data.childName.size() >= 1 && data.childName.size() <= 120 &&
+        data.classWanted is string && data.classWanted.size() <= 40 &&
+        data.guardianName is string && data.guardianName.size() >= 1 && data.guardianName.size() <= 120 &&
+        data.mobile is string && data.mobile.size() <= 24 &&
+        data.source is string && data.source.size() >= 1 && data.source.size() <= 60 &&
+        data.notes is string && data.notes.size() <= 400 &&
+        isValidIsoDate(data.enquiryDateIso) &&
+        isValidIsoDate(data.nextFollowUpDateIso) &&
+        data.status in ['NEW', 'CONTACTED', 'VISIT_PLANNED', 'ADMITTED', 'LOST'] &&
+        data.lostReason is string && data.lostReason.size() <= 240 &&
+        (data.status != 'LOST' || data.lostReason.size() >= 1) &&
+        data.convertedStudentDocId is string && data.convertedStudentDocId.size() <= 128 &&
+        data.convertedStudentAdmNo is string && data.convertedStudentAdmNo.size() <= 60 &&
+        data.convertedAtMs is int && data.convertedAtMs >= 0 &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+        data.createdByName is string && data.createdByName.size() >= 1 && data.createdByName.size() <= 120 &&
+        data.createdAtMs is int && data.createdAtMs >= 0 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    // =========================================================================
+    // PHASE 11 VALIDATORS: EXAMS & ADMIT CARDS, STOCK, TRANSPORT ROUTES
+    // =========================================================================
+
+    function isValidExamSchedule(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'examType', 'title', 'entries',
+          'withholdAdmitCardAboveDuesRs', 'admitCardOverrideStudentIds', 'admitCardInstructions',
+          'createdByUid', 'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'examType', 'title', 'entries',
+          'withholdAdmitCardAboveDuesRs', 'admitCardOverrideStudentIds', 'admitCardInstructions',
+          'createdByUid', 'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.examType in ['UT_I', 'UT_II', 'HALF_YEARLY', 'YEARLY', 'CUSTOM'] &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+        data.entries is list && data.entries.size() <= 300 &&
+        data.withholdAdmitCardAboveDuesRs is int && data.withholdAdmitCardAboveDuesRs >= 0 && data.withholdAdmitCardAboveDuesRs <= 10000000 &&
+        isValidStringList(data.admitCardOverrideStudentIds, 500) &&
+        data.admitCardInstructions is string && data.admitCardInstructions.size() <= 500 &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidExamRoom(data) {
+      return data.keys().hasAll(['schoolId', 'roomName', 'capacity', 'active', 'updatedByUid', 'clientEditedAtMs', 'updatedAt']) &&
+        data.keys().hasOnly(['schoolId', 'roomName', 'capacity', 'active', 'updatedByUid', 'clientEditedAtMs', 'updatedAt']) &&
+        isValidId(data.schoolId) &&
+        data.roomName is string && data.roomName.size() >= 1 && data.roomName.size() <= 60 &&
+        data.capacity is int && data.capacity >= 1 && data.capacity <= 500 &&
+        data.active is bool &&
+        data.updatedByUid == request.auth.uid &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidExamSeating(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'examId', 'allocationMode', 'includedClasses',
+          'roomIds', 'allocations', 'unallocatedStudentIds', 'updatedByUid', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'examId', 'allocationMode', 'includedClasses',
+          'roomIds', 'allocations', 'unallocatedStudentIds', 'updatedByUid', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        isValidId(data.examId) &&
+        data.allocationMode in ['BY_ROLL_NUMBER', 'MIXED_BY_CLASS'] &&
+        isValidStringList(data.includedClasses, 60) &&
+        isValidStringList(data.roomIds, 100) &&
+        data.allocations is list && data.allocations.size() <= 2500 &&
+        isValidStringList(data.unallocatedStudentIds, 1000) &&
+        data.updatedByUid == request.auth.uid &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidExamInvigilatorDuty(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'examId', 'examTitle', 'dateIso', 'startTime', 'endTime',
+          'roomId', 'roomName', 'teacherId', 'teacherUid', 'teacherName',
+          'assignedManually', 'updatedByUid', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'examId', 'examTitle', 'dateIso', 'startTime', 'endTime',
+          'roomId', 'roomName', 'teacherId', 'teacherUid', 'teacherName',
+          'assignedManually', 'updatedByUid', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        isValidId(data.examId) &&
+        data.examTitle is string && data.examTitle.size() >= 1 && data.examTitle.size() <= 120 &&
+        isValidIsoDate(data.dateIso) &&
+        data.startTime is string && data.startTime.size() >= 4 && data.startTime.size() <= 8 &&
+        data.endTime is string && data.endTime.size() >= 4 && data.endTime.size() <= 8 &&
+        isValidId(data.roomId) &&
+        data.roomName is string && data.roomName.size() >= 1 && data.roomName.size() <= 60 &&
+        isValidId(data.teacherId) &&
+        data.teacherUid is string && data.teacherUid.size() <= 128 &&
+        data.teacherName is string && data.teacherName.size() >= 1 && data.teacherName.size() <= 120 &&
+        data.assignedManually is bool &&
+        data.updatedByUid == request.auth.uid &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStockTransaction(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'itemId', 'itemName', 'txType', 'dateIso', 'quantityDelta',
+          'unitCostRs', 'totalCostRs', 'supplier', 'reason',
+          'createdByUid', 'createdByName', 'createdAtMs', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'itemId', 'itemName', 'txType', 'dateIso', 'quantityDelta',
+          'unitCostRs', 'totalCostRs', 'supplier', 'reason',
+          'createdByUid', 'createdByName', 'createdAtMs', 'createdAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.itemId is string && data.itemId.size() >= 1 && data.itemId.size() <= 80 &&
+        data.itemName is string && data.itemName.size() >= 1 && data.itemName.size() <= 100 &&
+        data.txType in ['STOCK_IN', 'ADJUSTMENT'] &&
+        isValidIsoDate(data.dateIso) &&
+        data.quantityDelta is int && data.quantityDelta != 0 &&
+        (data.txType != 'STOCK_IN' || data.quantityDelta > 0) &&
+        data.unitCostRs is int && data.unitCostRs >= 0 && data.unitCostRs <= 1000000 &&
+        data.totalCostRs is int && data.totalCostRs >= 0 && data.totalCostRs <= 100000000 &&
+        data.supplier is string && data.supplier.size() <= 120 &&
+        data.reason is string && data.reason.size() <= 300 &&
+        (data.txType != 'ADJUSTMENT' || data.reason.size() >= 1) &&
+        data.createdByUid == request.auth.uid &&
+        data.createdByName is string && data.createdByName.size() >= 1 && data.createdByName.size() <= 120 &&
+        data.createdAtMs is int && data.createdAtMs >= 0 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidTransportRoute(data) {
+      return data.keys().hasAll([
+          'schoolId', 'routeName', 'vehicleNumber', 'vehicleType', 'seatCapacity',
+          'driverName', 'driverPhone', 'monthlyFeeRs', 'stops', 'active',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'routeName', 'vehicleNumber', 'vehicleType', 'seatCapacity',
+          'driverName', 'driverPhone', 'monthlyFeeRs', 'stops', 'active',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.routeName is string && data.routeName.size() >= 1 && data.routeName.size() <= 80 &&
+        data.vehicleNumber is string && data.vehicleNumber.size() <= 40 &&
+        data.vehicleType is string && data.vehicleType.size() >= 1 && data.vehicleType.size() <= 24 &&
+        data.seatCapacity is int && data.seatCapacity >= 1 && data.seatCapacity <= 200 &&
+        data.driverName is string && data.driverName.size() <= 100 &&
+        data.driverPhone is string && data.driverPhone.size() <= 24 &&
+        data.monthlyFeeRs is int && data.monthlyFeeRs >= 0 && data.monthlyFeeRs <= 500000 &&
+        data.stops is list && data.stops.size() <= 60 &&
+        data.active is bool &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
     // =========================================================================
     // 1. PRIVATE USER ACCOUNT & MEMBERSHIPS INDEX
     // =========================================================================
@@ -1370,13 +1822,17 @@ service cloud.firestore {
 
         allow delete: if isSignedIn() && isValidId(schoolId) && isOrgAdmin(orgId);
 
-        // --- STUDENTS (Controlled by 'students' OR Phase 9 11th module 'studentRegister'; readable also by 'fees') ---
+        // --- STUDENTS (Controlled by 'students' OR 'studentRegister'; readable by 'fees', 'certificates', 'enquiry'; create also by 'enquiry'; mark-left update also by 'certificates') ---
         match /students/{studentId} {
           allow get, list: if isSignedIn() &&
             canAccessSchool(orgId, schoolId) && (
               hasModuleView(orgId, 'students') ||
               hasModuleView(orgId, 'studentRegister') ||
               hasModuleView(orgId, 'fees') ||
+              hasModuleView(orgId, 'certificates') ||
+              hasModuleView(orgId, 'enquiry') ||
+              hasModuleView(orgId, 'exams') ||
+              hasModuleView(orgId, 'transport') ||
               hasModuleView(orgId, 'marks') ||
               hasModuleView(orgId, 'coScholastic') ||
               hasModuleView(orgId, 'reports') ||
@@ -1389,7 +1845,8 @@ service cloud.firestore {
             isValidStudent(incoming(), schoolId) &&
             canAccessSchool(orgId, schoolId) && (
               hasModuleEdit(orgId, 'students') ||
-              hasModuleEdit(orgId, 'studentRegister')
+              hasModuleEdit(orgId, 'studentRegister') ||
+              hasModuleEdit(orgId, 'enquiry')
             );
 
           allow update: if isSignedIn() &&
@@ -1397,18 +1854,7 @@ service cloud.firestore {
             isValidStudent(incoming(), schoolId) &&
             incoming().schoolId == existing().schoolId &&
             incoming().createdAt == existing().createdAt &&
-            canAccessSchool(orgId, schoolId) && (
-              hasModuleEdit(orgId, 'students') ||
-              hasModuleEdit(orgId, 'studentRegister')
-            ) &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'classId', 'session', 'admNo', 'name', 'fatherName', 'motherName',
-              'dob', 'mobile', 'secondMobile', 'address', 'photoBase64', 'className', 'section',
-              'rollNo', 'admissionDate', 'previousSchool', 'siblingGroupId',
-              'usesTransport', 'transportRouteName', 'transportMonthlyAmount',
-              'status', 'leftDate', 'leftReason',
-              'sample', 'updatedAt'
-            ]);
+            canUpdateStudent(orgId, schoolId);
 
           allow delete: if isSignedIn() &&
             isValidId(studentId) &&
@@ -1554,6 +2000,7 @@ service cloud.firestore {
         allow get, list: if isSignedIn() && (
           hasModuleView(orgId, 'teachers') ||
           hasModuleEdit(orgId, 'timetable') ||
+          hasModuleView(orgId, 'exams') ||
           ((hasModuleView(orgId, 'timetable') || hasModuleView(orgId, 'marks')) && resource.data.linkedMemberUid == request.auth.uid)
         );
 
@@ -1724,7 +2171,10 @@ service cloud.firestore {
       // PENDING leave, while approval/rejection and substitutions require Timetable edit.
       // -----------------------------------------------------------------------
       match /teacherLeaves/{leaveId} {
-        allow get, list: if isSignedIn() && hasModuleView(orgId, 'timetable');
+        allow get, list: if isSignedIn() && (
+          hasModuleView(orgId, 'timetable') ||
+          hasModuleView(orgId, 'exams')
+        );
 
         allow create: if isSignedIn() &&
           isValidId(leaveId) &&
@@ -1979,12 +2429,16 @@ service cloud.firestore {
       // - feeAuditLogs: append-only fee audit trail
       // -----------------------------------------------------------------------
       match /feeStructures/{structureId} {
-        allow get, list: if isSignedIn() && hasModuleView(orgId, 'fees');
+        allow get, list: if isSignedIn() && (
+          hasModuleView(orgId, 'fees') ||
+          hasModuleView(orgId, 'stock') ||
+          hasModuleView(orgId, 'exams')
+        );
 
         allow create: if isSignedIn() &&
           isValidId(structureId) &&
           isValidFeeStructure(incoming()) &&
-          hasModuleEdit(orgId, 'fees') &&
+          (hasModuleEdit(orgId, 'fees') || hasModuleEdit(orgId, 'stock')) &&
           canAccessSchool(orgId, incoming().schoolId);
 
         allow update: if isSignedIn() &&
@@ -1993,8 +2447,16 @@ service cloud.firestore {
           incoming().schoolId == existing().schoolId &&
           incoming().session == existing().session &&
           incoming().createdAt == existing().createdAt &&
-          hasModuleEdit(orgId, 'fees') &&
-          canAccessSchool(orgId, incoming().schoolId);
+          canAccessSchool(orgId, incoming().schoolId) && (
+            hasModuleEdit(orgId, 'fees') ||
+            (
+              // Phase 11 Stock: Stock editor may ONLY update the shared optionalCatalogue + audit fields
+              hasModuleEdit(orgId, 'stock') &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'optionalCatalogue', 'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+              ])
+            )
+          );
 
         allow delete: if isSignedIn() &&
           isValidId(structureId) &&
@@ -2002,7 +2464,10 @@ service cloud.firestore {
       }
 
       match /studentFeeOverrides/{overrideId} {
-        allow get, list: if isSignedIn() && hasModuleView(orgId, 'fees');
+        allow get, list: if isSignedIn() && (
+          hasModuleView(orgId, 'fees') ||
+          hasModuleView(orgId, 'exams')
+        );
 
         allow create: if isSignedIn() &&
           isValidId(overrideId) &&
@@ -2027,7 +2492,12 @@ service cloud.firestore {
       }
 
       match /feeReceipts/{receiptId} {
-        allow get, list: if isSignedIn() && hasModuleView(orgId, 'fees');
+        allow get, list: if isSignedIn() && (
+          hasModuleView(orgId, 'fees') ||
+          hasModuleView(orgId, 'cashBook') ||
+          hasModuleView(orgId, 'stock') ||
+          hasModuleView(orgId, 'exams')
+        );
 
         allow create: if isSignedIn() &&
           isValidId(receiptId) &&
@@ -2120,6 +2590,312 @@ service cloud.firestore {
 
         allow update: if false;
         allow delete: if false;
+      }
+
+      // -----------------------------------------------------------------------
+      // 3l. PHASE 10: CERTIFICATES ('certificates'), CASH BOOK ('cashBook'),
+      //     AND ADMISSION ENQUIRY ('enquiry')
+      // Missing permission key = NO ACCESS (handled by hasModuleView/Edit).
+      // -----------------------------------------------------------------------
+      match /schoolCertificates/{certId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'certificates');
+
+        allow create: if isSignedIn() &&
+          isValidId(certId) &&
+          isValidSchoolCertificateCreate(incoming()) &&
+          hasModuleEdit(orgId, 'certificates') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        // Issued certificates can NEVER be edited; ONLY ISSUED -> CANCELLED with mandatory reason.
+        allow update: if isSignedIn() &&
+          isValidId(certId) &&
+          hasModuleEdit(orgId, 'certificates') &&
+          canAccessSchool(orgId, existing().schoolId) &&
+          existing().status == 'ISSUED' &&
+          incoming().status == 'CANCELLED' &&
+          incoming().cancelledByUid == request.auth.uid &&
+          incoming().cancelledByName is string &&
+          incoming().cancelledByName.size() >= 1 &&
+          incoming().cancelledByName.size() <= 120 &&
+          incoming().cancelledAtMs is int &&
+          incoming().cancelledAtMs > 0 &&
+          incoming().cancelReason is string &&
+          incoming().cancelReason.size() >= 1 &&
+          incoming().cancelReason.size() <= 300 &&
+          isValidTimestamp(incoming().updatedAt) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status', 'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason', 'updatedAt'
+          ]);
+
+        // Certificates are NEVER deleted
+        allow delete: if false;
+      }
+
+      match /cashBookSettings/{settingId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'cashBook');
+
+        allow create: if isSignedIn() &&
+          isValidId(settingId) &&
+          isValidCashBookSettings(incoming()) &&
+          hasModuleEdit(orgId, 'cashBook') &&
+          canAccessSchool(orgId, incoming().schoolId) &&
+          (isOrgAdmin(orgId) || incoming().expenseApprovalLimitRs == 5000);
+
+        allow update: if isSignedIn() &&
+          isValidId(settingId) &&
+          isValidCashBookSettings(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'cashBook') &&
+          canAccessSchool(orgId, incoming().schoolId) &&
+          (isOrgAdmin(orgId) || incoming().expenseApprovalLimitRs == existing().expenseApprovalLimitRs);
+
+        allow delete: if false;
+      }
+
+      match /cashBookEntries/{entryId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'cashBook');
+
+        allow create: if isSignedIn() &&
+          isValidId(entryId) &&
+          isValidCashBookEntryCreate(incoming()) &&
+          hasModuleEdit(orgId, 'cashBook') &&
+          canAccessSchool(orgId, incoming().schoolId) &&
+          canRecordCashBookExpense(orgId, incoming());
+
+        // Edit or Cancel an ACTIVE entry ONLY with mandatory reason; nothing silently deleted.
+        allow update: if isSignedIn() &&
+          isValidId(entryId) &&
+          hasModuleEdit(orgId, 'cashBook') &&
+          canAccessSchool(orgId, existing().schoolId) &&
+          existing().status == 'ACTIVE' &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().dateIso == existing().dateIso &&
+          incoming().entryType == existing().entryType &&
+          incoming().createdByUid == existing().createdByUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedByUid == request.auth.uid &&
+          incoming().updatedByName is string && incoming().updatedByName.size() >= 1 && incoming().updatedByName.size() <= 120 &&
+          incoming().clientEditedAtMs is int && incoming().clientEditedAtMs >= 0 &&
+          isValidTimestamp(incoming().updatedAt) && (
+            // Branch A: Edit active entry with mandatory lastEditReason + approval check
+            (
+              incoming().status == 'ACTIVE' &&
+              incoming().category is string && incoming().category.size() >= 1 && incoming().category.size() <= 80 &&
+              incoming().amount is int && incoming().amount > 0 && incoming().amount <= 100000000 &&
+              incoming().paymentMode in ['CASH', 'UPI', 'CHEQUE', 'OTHER'] &&
+              incoming().note is string && incoming().note.size() <= 300 &&
+              incoming().billPhotoBase64 is string && incoming().billPhotoBase64.size() <= 260000 &&
+              incoming().lastEditReason is string && incoming().lastEditReason.size() >= 1 && incoming().lastEditReason.size() <= 300 &&
+              canRecordCashBookExpense(orgId, incoming()) &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'category', 'amount', 'paymentMode', 'note', 'billPhotoBase64',
+                'approvedByAdminUid', 'approvedByAdminName', 'approvalNote',
+                'updatedByUid', 'updatedByName', 'lastEditReason', 'clientEditedAtMs', 'updatedAt'
+              ])
+            ) || (
+              // Branch B: Cancel active entry with mandatory cancelReason
+              incoming().status == 'CANCELLED' &&
+              incoming().cancelledByUid == request.auth.uid &&
+              incoming().cancelledByName is string && incoming().cancelledByName.size() >= 1 && incoming().cancelledByName.size() <= 120 &&
+              incoming().cancelledAtMs is int && incoming().cancelledAtMs > 0 &&
+              incoming().cancelReason is string && incoming().cancelReason.size() >= 1 && incoming().cancelReason.size() <= 300 &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason',
+                'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+              ])
+            )
+          );
+
+        // Cash book entries are NEVER silently deleted
+        allow delete: if false;
+      }
+
+      match /cashBookDayClosings/{closingId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'cashBook');
+
+        allow create: if isSignedIn() &&
+          isValidId(closingId) &&
+          isValidCashBookDayClosing(incoming()) &&
+          hasModuleEdit(orgId, 'cashBook') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(closingId) &&
+          isValidCashBookDayClosing(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().dateIso == existing().dateIso &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'cashBook') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if false;
+      }
+
+      match /cashBookAuditLogs/{logId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'cashBook');
+
+        allow create: if isSignedIn() &&
+          isValidId(logId) &&
+          isValidCashBookAuditLog(incoming()) &&
+          hasModuleEdit(orgId, 'cashBook') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      match /enquirySettings/{settingId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'enquiry');
+
+        allow create: if isSignedIn() &&
+          isValidId(settingId) &&
+          isValidEnquirySettings(incoming()) &&
+          hasModuleEdit(orgId, 'enquiry') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(settingId) &&
+          isValidEnquirySettings(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'enquiry') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if false;
+      }
+
+      match /admissionEnquiries/{enquiryId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'enquiry');
+
+        allow create: if isSignedIn() &&
+          isValidId(enquiryId) &&
+          isValidAdmissionEnquiry(incoming()) &&
+          incoming().createdByUid == request.auth.uid &&
+          hasModuleEdit(orgId, 'enquiry') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(enquiryId) &&
+          isValidAdmissionEnquiry(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().createdByUid == existing().createdByUid &&
+          incoming().createdAt == existing().createdAt &&
+          hasModuleEdit(orgId, 'enquiry') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(enquiryId) &&
+          isOrgAdmin(orgId);
+      }
+
+      // -----------------------------------------------------------------------
+      // 3m. PHASE 11: EXAM SCHEDULE & ADMIT CARDS ('exams'), STOCK ('stock'),
+      //     AND TRANSPORT ROUTES ('transport')
+      // Missing key = 'none' (no access). Owner & Admin have full access.
+      // -----------------------------------------------------------------------
+
+      match /examSchedules/{examId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'exams');
+
+        allow create: if isSignedIn() &&
+          isValidId(examId) &&
+          isValidExamSchedule(incoming()) &&
+          hasModuleEdit(orgId, 'exams') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(examId) &&
+          isValidExamSchedule(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          hasModuleEdit(orgId, 'exams') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(examId) &&
+          hasModuleEdit(orgId, 'exams') &&
+          canAccessSchool(orgId, existing().schoolId);
+      }
+
+      match /examRooms/{roomId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'exams');
+
+        allow create, update: if isSignedIn() &&
+          isValidId(roomId) &&
+          isValidExamRoom(incoming()) &&
+          hasModuleEdit(orgId, 'exams') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(roomId) &&
+          hasModuleEdit(orgId, 'exams') &&
+          canAccessSchool(orgId, existing().schoolId);
+      }
+
+      match /examSeatings/{seatingId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'exams');
+
+        allow create, update: if isSignedIn() &&
+          isValidId(seatingId) &&
+          isValidExamSeating(incoming()) &&
+          hasModuleEdit(orgId, 'exams') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(seatingId) &&
+          hasModuleEdit(orgId, 'exams') &&
+          canAccessSchool(orgId, existing().schoolId);
+      }
+
+      match /examInvigilatorDuties/{dutyId} {
+        // Exams viewers see all duties; any active linked teacher can read ONLY their own duties for Teacher Home
+        allow get, list: if isSignedIn() && (
+          hasModuleView(orgId, 'exams') ||
+          (isActiveMember(orgId) && resource.data.teacherUid == request.auth.uid)
+        );
+
+        allow create, update: if isSignedIn() &&
+          isValidId(dutyId) &&
+          isValidExamInvigilatorDuty(incoming()) &&
+          hasModuleEdit(orgId, 'exams') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(dutyId) &&
+          hasModuleEdit(orgId, 'exams') &&
+          canAccessSchool(orgId, existing().schoolId);
+      }
+
+      match /stockTransactions/{txId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'stock');
+
+        allow create: if isSignedIn() &&
+          isValidId(txId) &&
+          isValidStockTransaction(incoming()) &&
+          hasModuleEdit(orgId, 'stock') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        // Append-only audit trail for stock movements
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      match /transportRoutes/{routeId} {
+        allow get, list: if isSignedIn() && (
+          hasModuleView(orgId, 'transport') ||
+          hasModuleView(orgId, 'studentRegister')
+        );
+
+        allow create, update: if isSignedIn() &&
+          isValidId(routeId) &&
+          isValidTransportRoute(incoming()) &&
+          hasModuleEdit(orgId, 'transport') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(routeId) &&
+          hasModuleEdit(orgId, 'transport') &&
+          canAccessSchool(orgId, existing().schoolId);
       }
     }
   }

@@ -103,7 +103,8 @@ import kotlinx.coroutines.launch
 fun Phase9StudentRegisterScreen(
     viewModel: SchoolViewModel,
     onBack: () -> Unit,
-    onOpenFeeCollectionForStudent: (StudentEntity) -> Unit = {}
+    onOpenFeeCollectionForStudent: (StudentEntity) -> Unit = {},
+    onOpenCertificatesForStudent: (StudentEntity) -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
 
@@ -439,7 +440,9 @@ fun Phase9StudentRegisterScreen(
                         onFilterBySiblingGroup = { grp -> siblingGroupFilter = grp },
                         onPrintAdmissionForm = { viewModel.generateStudentAdmissionFormPdf(student) },
                         onPrintSingleIdCard = { viewModel.generateStudentIdCardsPdf(listOf(student), student.name) },
-                        onOpenFees = { onOpenFeeCollectionForStudent(student) }
+                        onOpenFees = { onOpenFeeCollectionForStudent(student) },
+                        canViewCertificates = uiState.canViewCertificates,
+                        onOpenCertificates = { onOpenCertificatesForStudent(student) }
                     )
                 }
             }
@@ -499,7 +502,9 @@ private fun StudentRegisterCard(
     onFilterBySiblingGroup: (String) -> Unit,
     onPrintAdmissionForm: () -> Unit,
     onPrintSingleIdCard: () -> Unit,
-    onOpenFees: () -> Unit
+    onOpenFees: () -> Unit,
+    canViewCertificates: Boolean = false,
+    onOpenCertificates: () -> Unit = {}
 ) {
     val isActive = student.isActiveStatus
     val photoBitmap = remember(student.photoBase64) {
@@ -747,6 +752,16 @@ private fun StudentRegisterCard(
                             .testTag("register_open_fees_${student.admNo}")
                     )
                 }
+                if (canViewCertificates) {
+                    AssistChip(
+                        onClick = onOpenCertificates,
+                        label = { Text("Certificates (TC / Bonafide)") },
+                        leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("register_open_certs_${student.admNo}")
+                    )
+                }
             }
         }
     }
@@ -784,6 +799,8 @@ internal fun StudentRegisterAddEditDialog(
     var previousSchool by remember { mutableStateOf(existingStudent?.previousSchool.orEmpty()) }
     var siblingGroupId by remember { mutableStateOf(existingStudent?.siblingGroupId.orEmpty()) }
     var usesTransport by remember { mutableStateOf(existingStudent?.usesTransport ?: false) }
+    var transportRouteId by remember { mutableStateOf(existingStudent?.transportRouteId.orEmpty()) }
+    var transportStopName by remember { mutableStateOf(existingStudent?.transportStopName.orEmpty()) }
     var transportRouteName by remember { mutableStateOf(existingStudent?.transportRouteName.orEmpty()) }
     var transportAmountText by remember {
         mutableStateOf(
@@ -1055,6 +1072,75 @@ internal fun StudentRegisterAddEditDialog(
                 }
 
                 if (usesTransport) {
+                    val schoolRoutes = remember(uiState.transportRoutes, uiState.activeSchoolDocId) {
+                        uiState.transportRoutes.filter { it.schoolId == uiState.activeSchoolDocId && it.active }
+                    }
+                    if (schoolRoutes.isNotEmpty()) {
+                        val pickedRoute = schoolRoutes.firstOrNull { it.id == transportRouteId }
+                        Text(
+                            text = "Quick Select Transport Route",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            schoolRoutes.forEach { rt ->
+                                FilterChip(
+                                    selected = transportRouteId == rt.id,
+                                    onClick = {
+                                        transportRouteId = rt.id
+                                        val firstStop = rt.stops.firstOrNull()?.stopName.orEmpty()
+                                        transportStopName = firstStop
+                                        transportRouteName = if (firstStop.isNotBlank()) "${rt.routeName} - $firstStop" else rt.routeName
+                                        // Preserve existing positive transport amount; only auto-fill if blank/0
+                                        val curAmt = transportAmountText.toIntOrNull() ?: 0
+                                        if (curAmt <= 0) {
+                                            val suggested = rt.effectiveFeeForStop(firstStop)
+                                            if (suggested > 0) transportAmountText = suggested.toString()
+                                        }
+                                    },
+                                    label = { Text("${rt.routeName} (₹${rt.monthlyFeeRs})") }
+                                )
+                            }
+                        }
+                        if (pickedRoute != null && pickedRoute.stops.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                pickedRoute.stops.forEach { st ->
+                                    val stopFee = pickedRoute.effectiveFeeForStop(st.stopName)
+                                    FilterChip(
+                                        selected = transportStopName.equals(st.stopName, ignoreCase = true),
+                                        onClick = {
+                                            transportStopName = st.stopName
+                                            transportRouteName = "${pickedRoute.routeName} - ${st.stopName}"
+                                            val curAmt = transportAmountText.toIntOrNull() ?: 0
+                                            if (curAmt <= 0 && stopFee > 0) {
+                                                transportAmountText = stopFee.toString()
+                                            }
+                                        },
+                                        label = { Text("${st.stopName} (₹$stopFee)") }
+                                    )
+                                }
+                            }
+                            val effectiveFee = pickedRoute.effectiveFeeForStop(transportStopName)
+                            val curAmt = transportAmountText.toIntOrNull() ?: 0
+                            if (effectiveFee > 0 && curAmt > 0 && curAmt != effectiveFee) {
+                                TextButton(
+                                    onClick = { transportAmountText = effectiveFee.toString() }
+                                ) {
+                                    Text("Use route/stop fee ₹$effectiveFee/mo (currently ₹$curAmt)")
+                                }
+                            }
+                        }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = transportRouteName,
@@ -1131,6 +1217,8 @@ internal fun StudentRegisterAddEditDialog(
                         previousSchool = previousSchool.trim(),
                         siblingGroupId = siblingGroupId.trim(),
                         usesTransport = usesTransport,
+                        transportRouteId = if (usesTransport) transportRouteId.trim() else "",
+                        transportStopName = if (usesTransport) transportStopName.trim() else "",
                         transportRouteName = if (usesTransport) transportRouteName.trim() else "",
                         transportMonthlyAmount = if (usesTransport) transportAmt else 0,
                         photoBase64 = photoBase64,

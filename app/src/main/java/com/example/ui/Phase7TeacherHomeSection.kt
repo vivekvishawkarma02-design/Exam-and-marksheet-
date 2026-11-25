@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AssignmentInd
 import androidx.compose.material.icons.filled.AssignmentLate
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
@@ -682,3 +683,93 @@ fun AdminPendingMarksSummaryCard(
         }
     }
 }
+
+/**
+ * Phase 11: "My Exam Duties" card shown on Teacher Home whenever this teacher has
+ * invigilator duties assigned (works even if the teacher does not have Exams module access).
+ */
+@Composable
+fun TeacherMyExamDutiesHomeCard(
+    duties: List<com.example.domain.ExamInvigilatorDutyRecord>,
+    isHindi: Boolean,
+    modifier: Modifier = Modifier
+) {
+    if (duties.isEmpty()) return
+    val todayIso = remember { Phase6DateUtils.todayIsoDate() }
+    val upcoming = remember(duties, todayIso) {
+        duties.filter { it.dateIso >= todayIso }.ifEmpty { duties }.take(8)
+    }
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.2.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.45f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("teacher_my_exam_duties_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AssignmentInd,
+                    contentDescription = "My exam duties",
+                    tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = p10Label(isHindi, "मेरी परीक्षा ड्यूटी (My Exam Duties)", "My Exam Duties"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                    Text(
+                        text = p10Label(
+                            isHindi,
+                            "कुल ${duties.size} कक्ष निरीक्षक ड्यूटी आवंटित",
+                            "${duties.size} invigilator duty slot(s) assigned"
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            HorizontalDivider()
+            upcoming.forEach { d ->
+                val isToday = d.dateIso == todayIso
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isToday) AbsentAmberContainer.copy(alpha = 0.7f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${d.dateIso} • ${d.startTime}-${d.endTime}" + if (isToday) " (TODAY)" else "",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isToday) Color(0xFF4E2D00) else MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "${d.examTitle} — ${d.roomName}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

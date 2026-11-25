@@ -40,6 +40,12 @@ enum class AppModule(val key: String, val label: String, val description: String
     ATTENDANCE("attendance", "Attendance", "Daily student attendance, school calendar, and attendance reports"),
     FEES("fees", "Fees", "Fee structure, fee collection, receipts, dues, reports, and send queue"),
     STUDENT_REGISTER("studentRegister", "Student Register", "Extended student register, transport, sibling links, left status, and ID cards"),
+    CERTIFICATES("certificates", "Certificates", "Transfer, Bonafide & Character certificates and register"),
+    CASH_BOOK("cashBook", "Cash Book", "Daily expenses, fee income, day closing, and financial reports"),
+    ENQUIRY("enquiry", "Enquiry", "Admission enquiries, follow-ups, WhatsApp reminders, and admission conversion"),
+    EXAMS("exams", "Exams", "Exam schedules, rooms, seating, invigilator duties, and admit cards"),
+    STOCK("stock", "Stock", "School item inventory, purchases, fee-receipt stock out, and low-stock alerts"),
+    TRANSPORT("transport", "Transport", "Bus/van routes, stops, drivers, student assignments, and route lists"),
     SETTINGS("settings", "Settings", "Organisation settings, sessions, schools, and backups"),
     MEMBERS("members", "Members", "Member directory, join requests, roles, and access control");
 
@@ -76,6 +82,12 @@ data class MemberPermissions(
     val attendance: AccessLevel = AccessLevel.NONE,
     val fees: AccessLevel = AccessLevel.NONE,
     val studentRegister: AccessLevel = AccessLevel.NONE,
+    val certificates: AccessLevel = AccessLevel.NONE,
+    val cashBook: AccessLevel = AccessLevel.NONE,
+    val enquiry: AccessLevel = AccessLevel.NONE,
+    val exams: AccessLevel = AccessLevel.NONE,
+    val stock: AccessLevel = AccessLevel.NONE,
+    val transport: AccessLevel = AccessLevel.NONE,
     val settings: AccessLevel = AccessLevel.NONE,
     val members: AccessLevel = AccessLevel.NONE
 ) {
@@ -89,6 +101,12 @@ data class MemberPermissions(
         AppModule.ATTENDANCE -> attendance
         AppModule.FEES -> fees
         AppModule.STUDENT_REGISTER -> studentRegister
+        AppModule.CERTIFICATES -> certificates
+        AppModule.CASH_BOOK -> cashBook
+        AppModule.ENQUIRY -> enquiry
+        AppModule.EXAMS -> exams
+        AppModule.STOCK -> stock
+        AppModule.TRANSPORT -> transport
         AppModule.SETTINGS -> settings
         AppModule.MEMBERS -> members
     }
@@ -103,6 +121,12 @@ data class MemberPermissions(
         AppModule.ATTENDANCE -> copy(attendance = level)
         AppModule.FEES -> copy(fees = level)
         AppModule.STUDENT_REGISTER -> copy(studentRegister = level)
+        AppModule.CERTIFICATES -> copy(certificates = level)
+        AppModule.CASH_BOOK -> copy(cashBook = level)
+        AppModule.ENQUIRY -> copy(enquiry = level)
+        AppModule.EXAMS -> copy(exams = level)
+        AppModule.STOCK -> copy(stock = level)
+        AppModule.TRANSPORT -> copy(transport = level)
         AppModule.SETTINGS -> copy(settings = level)
         AppModule.MEMBERS -> copy(members = level)
     }
@@ -117,6 +141,12 @@ data class MemberPermissions(
         AppModule.ATTENDANCE.key to attendance.wireValue,
         AppModule.FEES.key to fees.wireValue,
         AppModule.STUDENT_REGISTER.key to studentRegister.wireValue,
+        AppModule.CERTIFICATES.key to certificates.wireValue,
+        AppModule.CASH_BOOK.key to cashBook.wireValue,
+        AppModule.ENQUIRY.key to enquiry.wireValue,
+        AppModule.EXAMS.key to exams.wireValue,
+        AppModule.STOCK.key to stock.wireValue,
+        AppModule.TRANSPORT.key to transport.wireValue,
         AppModule.SETTINGS.key to settings.wireValue,
         AppModule.MEMBERS.key to members.wireValue
     )
@@ -133,6 +163,12 @@ data class MemberPermissions(
                 attendance = AccessLevel.EDIT,
                 fees = AccessLevel.EDIT,
                 studentRegister = AccessLevel.EDIT,
+                certificates = AccessLevel.EDIT,
+                cashBook = AccessLevel.EDIT,
+                enquiry = AccessLevel.EDIT,
+                exams = AccessLevel.EDIT,
+                stock = AccessLevel.EDIT,
+                transport = AccessLevel.EDIT,
                 settings = AccessLevel.EDIT,
                 members = AccessLevel.EDIT
             )
@@ -146,6 +182,12 @@ data class MemberPermissions(
                 attendance = AccessLevel.EDIT,
                 fees = AccessLevel.EDIT,
                 studentRegister = AccessLevel.EDIT,
+                certificates = AccessLevel.EDIT,
+                cashBook = AccessLevel.EDIT,
+                enquiry = AccessLevel.EDIT,
+                exams = AccessLevel.EDIT,
+                stock = AccessLevel.EDIT,
+                transport = AccessLevel.EDIT,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -159,6 +201,12 @@ data class MemberPermissions(
                 attendance = AccessLevel.NONE,
                 fees = AccessLevel.NONE,
                 studentRegister = AccessLevel.NONE,
+                certificates = AccessLevel.NONE,
+                cashBook = AccessLevel.NONE,
+                enquiry = AccessLevel.NONE,
+                exams = AccessLevel.NONE,
+                stock = AccessLevel.NONE,
+                transport = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -172,6 +220,12 @@ data class MemberPermissions(
                 attendance = AccessLevel.NONE,
                 fees = AccessLevel.NONE,
                 studentRegister = AccessLevel.NONE,
+                certificates = AccessLevel.NONE,
+                cashBook = AccessLevel.NONE,
+                enquiry = AccessLevel.NONE,
+                exams = AccessLevel.NONE,
+                stock = AccessLevel.NONE,
+                transport = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -189,6 +243,12 @@ data class MemberPermissions(
                 attendance = AccessLevel.fromRaw(raw[AppModule.ATTENDANCE.key] as? String),
                 fees = AccessLevel.fromRaw(raw[AppModule.FEES.key] as? String),
                 studentRegister = AccessLevel.fromRaw(raw[AppModule.STUDENT_REGISTER.key] as? String),
+                certificates = AccessLevel.fromRaw(raw[AppModule.CERTIFICATES.key] as? String),
+                cashBook = AccessLevel.fromRaw(raw[AppModule.CASH_BOOK.key] as? String),
+                enquiry = AccessLevel.fromRaw(raw[AppModule.ENQUIRY.key] as? String),
+                exams = AccessLevel.fromRaw(raw[AppModule.EXAMS.key] as? String),
+                stock = AccessLevel.fromRaw(raw[AppModule.STOCK.key] as? String),
+                transport = AccessLevel.fromRaw(raw[AppModule.TRANSPORT.key] as? String),
                 settings = AccessLevel.fromRaw(raw[AppModule.SETTINGS.key] as? String),
                 members = AccessLevel.fromRaw(raw[AppModule.MEMBERS.key] as? String)
             )

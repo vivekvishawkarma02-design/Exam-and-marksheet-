@@ -161,6 +161,9 @@ data class StudentEntity(
     val usesTransport: Boolean = false,
     val transportRouteName: String = "",
     val transportMonthlyAmount: Int = 0,
+    // Phase 11: Optional route & stop linkage (defaults keep 100% Phase 9 compatibility)
+    val transportRouteId: String = "",
+    val transportStopName: String = "",
     val status: String = "ACTIVE", // "ACTIVE" or "LEFT"
     val leftDate: String = "",
     val leftReason: String = ""

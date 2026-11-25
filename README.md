@@ -239,12 +239,68 @@ All Phase 8 student attendance data belongs to an organisation in Cloud Firestor
 
 ---
 
+## Phase 10: Certificates, Cash Book & Admission Enquiry
+
+All Phase 10 modules are mobile-first (touch targets `>= 48 dp`), Hindi-friendly with a 1-tap **`हिन्दी / EN`** toggle on every screen, work 100% offline with Phase 3 Firestore sync, and preserve Phases 1–9 unchanged.
+
+1. **Three New Access Modules (`Certificates`, `Cash Book`, `Enquiry`)**
+   - Added `certificates`, `cashBook`, and `enquiry` (`No access` / `View only` / `View & edit`) to the per-member access matrix (now 14 modules total), enforced in both UI and `firestore.rules` (with emulator rules tests).
+   - **Backward-Compatible Missing-Key Rule:** Any older member document missing these keys evaluates to `No access` (sees nothing). Owners and Admins always keep full access across all schools; `Office Operator` defaults to `View & edit` for all three new modules.
+
+2. **Certificates (`organisations/{orgId}/schoolCertificates/{docId}`)**
+   - Issue **Transfer Certificate (TC)**, **Bonafide Certificate**, or **Character Certificate** directly from any student's profile in the **Student Register** or from the **Certificates** screen.
+   - 1-tap prepare pre-fills student particulars from the Student Register, lets staff review/edit fields (`Reason for leaving`, `Date`, `Conduct`, `Promotion status`, `Fee dues`, `Remarks`), and generates an offline **A4 Portrait PDF** with school logo, border, details, date, Office Seal box, and Principal signature line (Preview, Print, Save, Share).
+   - **Duplicate-Free Offline Numbering:** Every phone generates a deterministic 3-character `deviceNodeCode` (e.g. `A1B`, `K4M`) stored locally and issues running numbers per `(school, session, certificateType, deviceNodeCode)` in the format `{TYPE}-{SESSION}-{NODE}-{SEQ}` (e.g. `TC-2627-A1B-0001`, `BON-2627-A1B-0001`, `CHR-2627-A1B-0001`). Because each phone increments inside its own device namespace, two phones offline at the same time never collide when they sync.
+   - **Immutable Register + Cancel & Re-issue:** Issued certificates can never be edited or silently deleted. Staff can **Cancel** with a mandatory reason (stamping a diagonal red `CANCELLED` watermark on the PDF) and **Re-issue** a fresh numbered certificate linked to the cancelled original. Issuing a **TC** immediately offers to mark the student as **"Left"** in the Student Register with the date and reason.
+
+3. **Cash Book (`cashBookEntries`, `cashBookDayClosings`, `cashBookSettings`, `cashBookAuditLogs`)**
+   - **Daily Expense & Other Income Entry:** Record date, category (editable per school), amount, payment mode (`Cash`/`UPI`/`Bank`/`Cheque`), note, and optional **Bill Photo** (using Android's zero-permission Photo Picker, compressed `< 180 KB`). Edits and cancellations require a mandatory reason and append an immutable audit log entry — nothing is silently deleted.
+   - **Automatic Phase 9 Fee Income:** Active Phase 9 `feeReceipts` are read automatically as Cash Book income (never typed twice), even for accounts staff who have `Cash Book` access without `Fees` access.
+   - **Today, Month & Day Closing:** View today's Money In, Money Out, and Closing Balance; Month view with category-wise totals and share bars; and **Day Closing** showing Opening Cash, Cash In/Out, Expected Closing Cash, Actual Counted Cash, and live **Difference** (`Counted − Expected`, with non-cash UPI/Bank totals shown separately).
+   - **Large Expense Approval Limit:** Expenses above a configurable per-school threshold (default **₹5,000**, editable by Admins/Owners only) require an **Admin Approver** (enforced in UI, domain engine, and `firestore.rules`).
+   - **Offline A4 PDFs & CSV Export:** Export **Day Book PDF**, **Month Summary PDF**, **Category-Wise Expense PDF**, and **Day / Month CSV**.
+
+4. **Admission Enquiry (`admissionEnquiries`, `enquirySettings`)**
+   - **Under-1-Minute Entry:** Capture child name, class wanted (1-tap chips), guardian name, mobile, editable source list, notes, and next follow-up date (`Today`, `+2 days`, `+1 week`).
+   - **Follow-Up Today Queue (Overdue First):** Lists open enquiries (`New`, `Contacted`, `Visit Planned`) with **Overdue** strictly at the top (oldest first), followed by **Due Today**. Supports `Admitted` and `Lost` (with mandatory reason).
+   - **1-Tap WhatsApp & Call:** **"Send on WhatsApp"** opens an editable message template and launches `wa.me` with `+91` mobile normalisation (never automatic); **"Call"** opens the phone dialer.
+   - **Convert to Admission & Monthly Summary:** 1-tap **"Convert to Admission"** creates the student directly in the **Student Register** with pre-filled details and links the enquiry to the new Admission No. Monthly summary card tracks **Enquiries this month**, **Admitted**, and **Conversion %**.
+
+---
+
+## Phase 11: Exam Schedule & Admit Cards, Stock & Transport Routes
+
+All Phase 11 modules follow the same mobile-first (`>= 48 dp` touch targets), Hindi-friendly (`हिन्दी / EN` toggle), offline-first Firestore sync architecture and leave Phases 1–10 report cards, marks, grading, fees, attendance, certificates, cash book, and enquiry behaviour untouched.
+
+1. **Three New Access Modules (`Exams`, `Stock`, `Transport`)**
+   - Added `exams`, `stock`, and `transport` (`No access` / `View only` / `View & edit`) to the member access matrix (**17 modules total**), enforced in both the Compose UI and `firestore.rules` (verified with emulator rules tests).
+   - **Backward-Compatible Missing-Key Rule:** Older member records missing these keys evaluate to `No access`. Owners and Admins keep full access across all schools; `Office Operator` defaults to `View & edit`; `Teacher` and `Other` default to `No access` (linked teachers can still read **only their own** assigned exam duties to see **"My Exam Duties"** on Teacher Home).
+
+2. **Exam Schedule & Admit Cards (`examSchedules`, `examRooms`, `examSeatings`, `examInvigilatorDuties`)**
+   - **Exam Timetable with Validation:** Create exams (`UT-I`, `UT-II`, `Half-Yearly`, `Yearly`, or `Custom`) per school and session. Add class-wise papers (subject, date, start/end time, max marks) with automatic validation preventing same-day time clashes for a class, duplicate subjects, or dates outside the session (April 1 – March 31).
+   - **Rooms & Seating Plan:** Define exam rooms with seat capacities and auto-allocate active students **By Roll Number** or **Mixed by Class** (interleaving classes across adjacent seats), with 1-tap manual room reassignment and per-room seating lists.
+   - **Invigilator Duty Roster:** Auto-assign teachers to every exam slot and room while avoiding Phase 6 approved leaves and weekly off-days, preventing overlapping double-booking, and balancing total duty load across teachers. Supports manual overrides and displays **"My Exam Duties"** on each linked teacher's Home screen.
+   - **Optional Fee-Dues Withholding Warning:** Set an optional per-exam dues threshold (`0` = disabled); students above the limit show a clear warning on Admit Cards, and Admins/Owners can override individually.
+   - **Offline A4 PDFs (Preview, Print, Share):** Class Exam Timetable, Student Admit Cards (**2 cards per A4 page** with dashed cut line, school logo, student photo if present, roll no, class, subjects/dates/times, room & seat, signatures), Room Seating List, and Invigilator Duty List.
+
+3. **Unified Stock (`stockTransactions` + Phase 9 `feeStructures.optionalCatalogue`)**
+   - **Single Shared Catalogue:** Stock items (tie, belt, books, uniform, diary, etc.) live in the exact same `optionalCatalogue` list used by the Phase 9 Fee Counter — adding unit, opening stock, and low-stock warning level without duplicating item lists.
+   - **Automatic Stock Out & Cancel Return:** Record purchases (**Stock In** with date, quantity, unit/total cost, supplier) and reasoned **Manual Adjustments**. Whenever an optional item is sold on a Phase 9 fee receipt, stock drops automatically; if that receipt is cancelled, the stock returns automatically — computed offline-safe from active receipts and stock transactions.
+   - **Low-Stock Warnings & Below-Zero Guard:** Highlights items at or below their warning level, exports an **A4 Stock Summary Report PDF**, and shows a below-zero warning on the Phase 9 Fee Counter with an Admin override checkbox.
+
+4. **Transport Routes (`transportRoutes` + `students` route/stop fields)**
+   - **Routes & Stops:** Manage bus/van routes with vehicle number, seat capacity, driver name & phone (with 1-tap Call), stops, and monthly fee per stop or route.
+   - **Safe Student Assignment:** Assign students to a route & stop from either the **Transport** screen or the **Student Register**. Students who already have a custom positive Phase 9 transport monthly fee keep their existing amount by default unless you choose to apply the route/stop fee.
+   - **Summary & Offline A4 PDFs:** Live cards for students per route, seats used / over-capacity warnings, and expected monthly transport income, plus **Route-Wise Student List PDF** and **Driver's Pickup & Drop Sheet PDF** with guardian mobiles.
+
+---
+
 ## How Each Role Uses the App
 
-- **Owner:** Creates the organisation (and first school), can add/edit multiple schools, manage all academic/timetable/attendance modules, approve members & set granular per-school/per-module access (all 9 modules), configure report card links, attendance auto-fill & open exams, export JSON backups, transfer ownership, or delete the organisation (requires a backup first).
-- **Admin:** Day-to-day head across assigned schools — manages members & invite codes, teachers, period structures, class-subject assignments (which automatically sync teacher scopes & Class Teacher names), timetables, auto-generate, leave approvals, daily substitutions, staff attendance, student attendance & school calendars, pending marks reminders, workload reports, marks history audit logs, and batch A4 report cards.
-- **Office Operator:** Handles daily administrative operations for their assigned school(s) based on the exact modules granted by the Admin (typically Students, Marks, Co-Scholastic, Reports, Timetable/Substitutions, Staff Attendance, and Student Attendance). Keeps full marks & co-scholastic access across assigned schools even when an exam is closed for teachers.
-- **Teacher:** Signs in and lands on **"My Day"** and **"My Class Attendance (Today)"** showing today's periods, assigned substitutions, weekly timetable, Class Teacher section(s), and own pending marks. Enters marks **only** for their assigned class-section-subject combinations during open exams, enters co-scholastic/attendance/remarks and takes daily **Student Attendance** **only** for their own Class Teacher section, and can submit or cancel their own `PENDING` leave requests.
+- **Owner:** Creates the organisation (and first school), can add/edit multiple schools, manage all academic/timetable/attendance/fees/certificates/cash book/enquiry/exams/stock/transport modules, approve members & set granular per-school/per-module access (all 17 modules), configure report card links, attendance auto-fill, cash book approval limits & open exams, export JSON backups, transfer ownership, or delete the organisation (requires a backup first).
+- **Admin:** Day-to-day head across assigned schools — manages members & invite codes, teachers, period structures, class-subject assignments, timetables, auto-generate, leave approvals, daily substitutions, staff & student attendance, fees & concessions, certificates, cash book (including approving large expenses and editing limits), admission enquiries, exam schedules/rooms/invigilators/admit card overrides, stock & below-zero overrides, transport routes, and batch A4 report cards.
+- **Office Operator:** Handles daily administrative operations for their assigned school(s) based on the exact modules granted by the Admin (defaulting to Students, Marks, Co-Scholastic, Reports, Timetable, Attendance, Fees, Student Register, Certificates, Cash Book, Admission Enquiry, Exams, Stock, and Transport).
+- **Teacher:** Signs in and lands on **"My Day"**, **"My Class Attendance (Today)"**, and **"My Exam Duties"** showing today's periods, assigned substitutions, upcoming invigilator duties, weekly timetable, Class Teacher section(s), and own pending marks. Enters marks **only** for their assigned class-section-subject combinations during open exams, enters co-scholastic/attendance/remarks and takes daily **Student Attendance** **only** for their own Class Teacher section, and can submit or cancel their own `PENDING` leave requests.
 
 ---
 

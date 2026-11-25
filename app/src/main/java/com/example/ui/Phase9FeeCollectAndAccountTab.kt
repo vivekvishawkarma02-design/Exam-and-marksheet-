@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sms
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -83,6 +84,7 @@ import com.example.domain.FeeHeadType
 import com.example.domain.FeeMessageType
 import com.example.domain.FeeReceiptRecord
 import com.example.domain.FeeReceiptStatus
+import com.example.domain.StockEngine
 import com.example.domain.FeeReportsAndQueueEngine
 import com.example.domain.PaymentMode
 import com.example.domain.Phase6DateUtils
@@ -1153,11 +1155,103 @@ fun Phase9FeeCollectAndAccountTab(
                                 )
                             }
 
+                            // Phase 11: Below-zero stock warning on optional item sales (Admin can override)
+                            val stockSummariesForSale = remember(
+                                uiState.stockTransactions,
+                                uiState.effectivePhase11FeeReceipts,
+                                structure.optionalCatalogue,
+                                uiState.activeSchoolDocId,
+                                uiState.filter.session
+                            ) {
+                                StockEngine.computeStockSummary(
+                                    schoolId = uiState.activeSchoolDocId,
+                                    session = uiState.filter.session,
+                                    catalogue = structure.optionalCatalogue,
+                                    transactions = uiState.stockTransactions,
+                                    feeReceipts = uiState.effectivePhase11FeeReceipts
+                                )
+                            }
+                            val belowZeroWarnings = remember(selectedOptionalItems.toList(), stockSummariesForSale) {
+                                if (selectedOptionalItems.isEmpty()) emptyList()
+                                else {
+                                    val qtyMap = selectedOptionalItems
+                                        .groupBy { it.catalogueItem.id }
+                                        .mapValues { (_, list) -> list.sumOf { it.quantity.coerceAtLeast(1) } }
+                                    StockEngine.checkBelowZeroSaleWarnings(qtyMap, stockSummariesForSale)
+                                }
+                            }
+                            var allowBelowZeroStockOverride by remember(belowZeroWarnings) { mutableStateOf(false) }
+                            if (belowZeroWarnings.isNotEmpty()) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("fee_below_zero_stock_warning")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Warning,
+                                                contentDescription = "Low stock warning",
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Text(
+                                                text = "Low Stock Warning (Below Zero)",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                        belowZeroWarnings.forEach { w ->
+                                            Text(
+                                                text = "• ${w.itemName}: Available ${w.availableStock}, Selling ${w.requestedQty} (Projected: ${w.projectedStock})",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onErrorContainer
+                                            )
+                                        }
+                                        if (uiState.isAdmin) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.clickable { allowBelowZeroStockOverride = !allowBelowZeroStockOverride }
+                                            ) {
+                                                Checkbox(
+                                                    checked = allowBelowZeroStockOverride,
+                                                    onCheckedChange = { allowBelowZeroStockOverride = it },
+                                                    modifier = Modifier.testTag("fee_stock_override_checkbox")
+                                                )
+                                                Text(
+                                                    text = "Admin Override: Allow selling below zero stock",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                                )
+                                            }
+                                        } else {
+                                            Text(
+                                                text = "Reduce quantity, add Stock In, or ask an Admin to override.",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
                             val isDraftValid = draftResult != null &&
                                 draftResult.validationError == null &&
                                 draftResult.draftLines.isNotEmpty()
+                            val stockGatePassed = belowZeroWarnings.isEmpty() || (uiState.isAdmin && allowBelowZeroStockOverride)
                             Button(
                                 enabled = isDraftValid &&
+                                    stockGatePassed &&
                                     (!draftResult!!.requiresAdminApprovalForConcession || (uiState.isAdmin && adminApprovalConfirmed)),
                                 onClick = {
                                     val draft = draftResult ?: return@Button

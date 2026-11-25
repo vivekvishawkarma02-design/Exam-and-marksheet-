@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Apartment
@@ -27,15 +28,20 @@ import androidx.compose.material.icons.filled.AssignmentLate
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.ContactPhone
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.DirectionsBus
 import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HowToReg
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -115,6 +121,12 @@ fun DashboardScreen(
     onTakeStudentAttendanceSection: (String, String, String, String) -> Unit = { _, _, _, _ -> },
     onNavigateToStudentRegister: () -> Unit = {},
     onNavigateToFeeManagement: () -> Unit = {},
+    onNavigateToCertificates: () -> Unit = {},
+    onNavigateToCashBook: () -> Unit = {},
+    onNavigateToEnquiry: () -> Unit = {},
+    onNavigateToExams: () -> Unit = {},
+    onNavigateToStock: () -> Unit = {},
+    onNavigateToTransport: () -> Unit = {},
     onOpenPendingMarksItem: (PendingMarksItem) -> Unit = {},
     onOpenCoScholasticSection: (String, String, String) -> Unit = { _, _, _ -> },
     onEditOwnTeacherProfile: () -> Unit = {},
@@ -256,6 +268,78 @@ fun DashboardScreen(
                     accent = secondaryColor,
                     testTag = "tile_student_register",
                     onClick = onNavigateToStudentRegister
+                )
+            )
+        }
+        if (uiState.canViewCertificates) {
+            add(
+                QuickActionSpec(
+                    title = "Certificates",
+                    subtitle = if (uiState.canEditCertificates) "TC, Bonafide, Character PDF" else "View issued register & PDF",
+                    icon = Icons.Default.Verified,
+                    accent = primaryColor,
+                    testTag = "tile_certificates",
+                    onClick = onNavigateToCertificates
+                )
+            )
+        }
+        if (uiState.canViewCashBook) {
+            add(
+                QuickActionSpec(
+                    title = "Cash Book",
+                    subtitle = if (uiState.canEditCashBook) "Expenses, fee income & closing" else "View day book & reports",
+                    icon = Icons.Default.AccountBalance,
+                    accent = secondaryColor,
+                    testTag = "tile_cash_book",
+                    onClick = onNavigateToCashBook
+                )
+            )
+        }
+        if (uiState.canViewEnquiry) {
+            add(
+                QuickActionSpec(
+                    title = "Enquiry",
+                    subtitle = if (uiState.canEditEnquiry) "Follow-ups, WhatsApp & admit" else "View admission enquiries",
+                    icon = Icons.Default.ContactPhone,
+                    accent = tertiaryColor,
+                    testTag = "tile_enquiry",
+                    onClick = onNavigateToEnquiry
+                )
+            )
+        }
+        if (uiState.canViewExams) {
+            add(
+                QuickActionSpec(
+                    title = "Exams & Admit",
+                    subtitle = if (uiState.canEditExams) "Schedule, seating, duties & PDF" else "View exams & admit cards",
+                    icon = Icons.Default.EventNote,
+                    accent = primaryColor,
+                    testTag = "tile_exams",
+                    onClick = onNavigateToExams
+                )
+            )
+        }
+        if (uiState.canViewStock) {
+            add(
+                QuickActionSpec(
+                    title = "Stock",
+                    subtitle = if (uiState.canEditStock) "Purchases, sales & low alerts" else "View stock summary & PDF",
+                    icon = Icons.Default.Inventory2,
+                    accent = secondaryColor,
+                    testTag = "tile_stock",
+                    onClick = onNavigateToStock
+                )
+            )
+        }
+        if (uiState.canViewTransport) {
+            add(
+                QuickActionSpec(
+                    title = "Transport",
+                    subtitle = if (uiState.canEditTransport) "Routes, stops & driver list" else "View routes & students",
+                    icon = Icons.Default.DirectionsBus,
+                    accent = tertiaryColor,
+                    testTag = "tile_transport",
+                    onClick = onNavigateToTransport
                 )
             )
         }
@@ -487,6 +571,16 @@ fun DashboardScreen(
                     onOpenPendingMarks = onNavigateToPendingMarks,
                     onOpenMarksForItem = onOpenPendingMarksItem,
                     onOpenCoScholasticForSection = onOpenCoScholasticSection
+                )
+            }
+        }
+
+        // Phase 11: Teacher "My Exam Duties" Home Card (visible whenever this teacher has invigilator duties)
+        if (uiState.ownExamDuties.isNotEmpty()) {
+            item {
+                TeacherMyExamDutiesHomeCard(
+                    duties = uiState.ownExamDuties,
+                    isHindi = uiState.phase10HindiLabels
                 )
             }
         }

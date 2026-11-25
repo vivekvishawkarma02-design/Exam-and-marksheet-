@@ -135,7 +135,11 @@ data class OptionalFeeCatalogueItem(
     val name: String,
     val price: Int,
     val classFilter: List<String> = emptyList(), // Empty = applies to all classes
-    val hidden: Boolean = false
+    val hidden: Boolean = false,
+    // Phase 11 unified Stock fields (optional defaults keep 100% Phase 9 backward compatibility)
+    val unit: String = "pcs",
+    val openingStock: Int = 0,
+    val lowStockLevel: Int = 5
 ) {
     fun appliesToClass(className: String): Boolean {
         if (classFilter.isEmpty()) return true
@@ -147,7 +151,10 @@ data class OptionalFeeCatalogueItem(
         "name" to name.trim().take(80),
         "price" to price.coerceAtLeast(0).toLong(),
         "classFilter" to classFilter.map { it.trim().take(40) }.filter { it.isNotEmpty() },
-        "hidden" to hidden
+        "hidden" to hidden,
+        "unit" to unit.trim().ifBlank { "pcs" }.take(24),
+        "openingStock" to openingStock.coerceAtLeast(0).toLong(),
+        "lowStockLevel" to lowStockLevel.coerceAtLeast(0).toLong()
     )
 
     companion object {
@@ -162,12 +169,18 @@ data class OptionalFeeCatalogueItem(
                 ?.filter { it.isNotEmpty() }
                 .orEmpty()
             val hidden = (raw["hidden"] as? Boolean) ?: false
+            val unit = (raw["unit"] as? String)?.trim().orEmpty().ifBlank { "pcs" }
+            val openingStock = (raw["openingStock"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0
+            val lowStockLevel = (raw["lowStockLevel"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 5
             return OptionalFeeCatalogueItem(
                 id = id,
                 name = name,
                 price = price,
                 classFilter = classes,
-                hidden = hidden
+                hidden = hidden,
+                unit = unit,
+                openingStock = openingStock,
+                lowStockLevel = lowStockLevel
             )
         }
     }

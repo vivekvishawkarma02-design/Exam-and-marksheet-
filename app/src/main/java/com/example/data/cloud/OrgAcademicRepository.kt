@@ -201,6 +201,10 @@ class OrgAcademicRepository(
         val canReadStudents = OrgAccessEvaluator.canViewModule(member, AppModule.STUDENTS) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.STUDENT_REGISTER) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.FEES) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.CERTIFICATES) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.ENQUIRY) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.EXAMS) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.TRANSPORT) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.MARKS) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.CO_SCHOLASTIC) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.REPORTS) ||
@@ -661,7 +665,9 @@ class OrgAcademicRepository(
                 "previousSchool" to student.previousSchool.trim().take(160),
                 "siblingGroupId" to student.siblingGroupId.trim().take(80),
                 "usesTransport" to student.usesTransport,
+                "transportRouteId" to student.transportRouteId.trim().take(128),
                 "transportRouteName" to student.transportRouteName.trim().take(120),
+                "transportStopName" to student.transportStopName.trim().take(80),
                 "transportMonthlyAmount" to student.transportMonthlyAmount.coerceIn(0, 500_000).toLong(),
                 "status" to normalizedStatus,
                 "leftDate" to (if (normalizedStatus == "LEFT") student.leftDate.trim().take(40) else ""),
@@ -723,6 +729,103 @@ class OrgAcademicRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Phase 10: Least-privilege student update when issuing a Transfer Certificate (TC).
+     * Updates ONLY `status`, `leftDate`, `leftReason`, and `updatedAt`, matching the
+     * Firestore rule that permits `certificates: edit` members to mark a student left.
+     */
+    fun markStudentLeftFromCertificate(
+        orgId: String,
+        schoolDocId: String,
+        studentDocId: String,
+        studentName: String,
+        leftDateIso: String,
+        leftReason: String
+    ): Result<Unit> {
+        val path = "organisations/$orgId/schools/$schoolDocId/students/$studentDocId"
+        return try {
+            requireUid()
+            val ref = db.collection("organisations").document(orgId)
+                .collection("schools").document(schoolDocId)
+                .collection("students").document(studentDocId)
+            val updates = mapOf<String, Any>(
+                "status" to "LEFT",
+                "leftDate" to leftDateIso.trim().take(40),
+                "leftReason" to leftReason.trim().take(300),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            val task = ref.update(updates)
+            attachSyncListeners(task, OperationType.UPDATE, path) { ref.update(updates) }
+            orgRepo.logAuditNonBlocking(
+                orgId = orgId,
+                action = "STUDENT_MARKED_LEFT_TC",
+                targetType = "student",
+                targetId = studentDocId,
+                summary = "Marked student '$studentName' as Left on $leftDateIso via Transfer Certificate",
+                schoolId = schoolDocId
+            )
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Phase 11: Least-privilege student update when assigning/removing a transport route & stop.
+     * Updates ONLY `usesTransport`, `transportRouteId`, `transportRouteName`, `transportStopName`,
+     * `transportMonthlyAmount`, and `updatedAt`, matching the Firestore rule for `transport: edit`.
+     */
+    fun updateStudentTransportAssignment(
+        orgId: String,
+        schoolDocId: String,
+        studentDocId: String,
+        studentName: String,
+        usesTransport: Boolean,
+        transportRouteId: String,
+        transportRouteName: String,
+        transportStopName: String,
+        transportMonthlyAmount: Int
+    ): Result<Unit> {
+        val path = "organisations/$orgId/schools/$schoolDocId/students/$studentDocId"
+        return try {
+            requireUid()
+            val ref = db.collection("organisations").document(orgId)
+                .collection("schools").document(schoolDocId)
+                .collection("students").document(studentDocId)
+            val updates = mapOf<String, Any>(
+                "usesTransport" to usesTransport,
+                "transportRouteId" to (if (usesTransport) transportRouteId.trim().take(128) else ""),
+                "transportRouteName" to (if (usesTransport) transportRouteName.trim().take(120) else ""),
+                "transportStopName" to (if (usesTransport) transportStopName.trim().take(80) else ""),
+                "transportMonthlyAmount" to (if (usesTransport) transportMonthlyAmount.coerceIn(0, 500_000).toLong() else 0L),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            val task = ref.update(updates)
+            attachSyncListeners(task, OperationType.UPDATE, path) { ref.update(updates) }
+            orgRepo.logAuditNonBlocking(
+                orgId = orgId,
+                action = if (usesTransport) "STUDENT_TRANSPORT_ASSIGNED" else "STUDENT_TRANSPORT_REMOVED",
+                targetType = "student",
+                targetId = studentDocId,
+                summary = if (usesTransport) {
+                    "Assigned '$studentName' to transport '$transportRouteName' (₹$transportMonthlyAmount/mo)"
+                } else {
+                    "Removed '$studentName' from school transport"
+                },
+                schoolId = schoolDocId
+            )
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }
@@ -1589,7 +1692,9 @@ class OrgAcademicRepository(
                 previousSchool = doc.getString("previousSchool").orEmpty(),
                 siblingGroupId = doc.getString("siblingGroupId").orEmpty(),
                 usesTransport = doc.getBoolean("usesTransport") ?: false,
+                transportRouteId = doc.getString("transportRouteId").orEmpty(),
                 transportRouteName = doc.getString("transportRouteName").orEmpty(),
+                transportStopName = doc.getString("transportStopName").orEmpty(),
                 transportMonthlyAmount = (doc.getLong("transportMonthlyAmount") ?: 0L).toInt().coerceAtLeast(0),
                 status = parsedStatus,
                 leftDate = doc.getString("leftDate").orEmpty(),

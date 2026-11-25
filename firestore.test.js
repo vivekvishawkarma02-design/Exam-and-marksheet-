@@ -2686,6 +2686,832 @@ test("Phase 9: Student Register (11th module) & Fees (10th module) permissions, 
   await assertFails(outsiderOrg.collection("feeAuditLogs").get());
 });
 
+// ============================================================================
+// TEST 17: PHASE 10 — CERTIFICATES, CASH BOOK & ADMISSION ENQUIRY RULES
+// ============================================================================
+test("17. Phase 10: Certificates, Cash Book & Enquiry RBAC, missing-key denial, immutability, approval limit & conversion", async () => {
+  await seedOrgWithOwnerAndSchools();
+  const ts = pastDate(5000);
+
+  const CERT_EDITOR = "p10_cert_editor";
+  const CERT_VIEWER = "p10_cert_viewer";
+  const CB_EDITOR = "p10_cb_editor";
+  const CB_VIEWER = "p10_cb_viewer";
+  const ENQ_EDITOR = "p10_enq_editor";
+  const ENQ_VIEWER = "p10_enq_viewer";
+  const LEGACY_NO_P10 = "p10_legacy_missing_keys";
+  const OUTSIDER = "p10_outsider";
+
+  const baseNone = {
+    students: "none",
+    marks: "none",
+    coScholastic: "none",
+    reports: "none",
+    timetable: "none",
+    teachers: "none",
+    settings: "none",
+    members: "none",
+    attendance: "none",
+    fees: "none",
+    studentRegister: "none",
+    certificates: "none",
+    cashBook: "none",
+    enquiry: "none",
+  };
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    const orgRef = db.collection("organisations").doc(ORG_ID);
+    const seedMember = (uid, name, perms, role = "OFFICE_OPERATOR") =>
+      orgRef.collection("members").doc(uid).set({
+        uid,
+        name,
+        email: `${uid}@sts.edu`,
+        mobile: "9800000200",
+        role,
+        status: "active",
+        allSchools: false,
+        schools: [SCHOOL_1],
+        permissions: perms,
+        teacherProfileCompleted: true,
+        teacherPhotoBase64: "",
+        requestedSubjects: [],
+        requestedClasses: [],
+        assignedClassSubjects: [],
+        lastActiveAt: ts,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+
+    await seedMember(CERT_EDITOR, "Cert Clerk", { ...baseNone, certificates: "edit" });
+    await seedMember(CERT_VIEWER, "Cert Viewer", { ...baseNone, certificates: "view" });
+    await seedMember(CB_EDITOR, "Cash Clerk", { ...baseNone, cashBook: "edit" });
+    await seedMember(CB_VIEWER, "Cash Viewer", { ...baseNone, cashBook: "view" });
+    await seedMember(ENQ_EDITOR, "Enquiry Clerk", { ...baseNone, enquiry: "edit" });
+    await seedMember(ENQ_VIEWER, "Enquiry Viewer", { ...baseNone, enquiry: "view" });
+    // Legacy member WITHOUT certificates/cashBook/enquiry keys -> MUST be denied (missing key = no access)
+    await seedMember(LEGACY_NO_P10, "Legacy Teacher", {
+      students: "none",
+      marks: "none",
+      coScholastic: "none",
+      reports: "none",
+      timetable: "view",
+      teachers: "none",
+      settings: "none",
+      members: "none",
+      attendance: "none",
+      fees: "none",
+      studentRegister: "none",
+    }, "TEACHER");
+
+    // Seed an active student in SCHOOL_1 for TC mark-left test
+    await orgRef.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_p10_01").set({
+      schoolId: SCHOOL_1,
+      classId: "cls_5th",
+      session: "2026-2027",
+      admNo: "ADM-P10-01",
+      name: "Rohan Verma",
+      fatherName: "Rajesh Verma",
+      motherName: "Sunita Verma",
+      dob: "2015-06-12",
+      mobile: "9839100055",
+      secondMobile: "",
+      address: "Station Road",
+      photoBase64: "",
+      className: "5th",
+      section: "A",
+      rollNo: 1,
+      admissionDate: "2024-04-01",
+      previousSchool: "",
+      siblingGroupId: "",
+      usesTransport: false,
+      transportRouteName: "",
+      transportMonthlyAmount: 0,
+      status: "ACTIVE",
+      leftDate: "",
+      leftReason: "",
+      sample: false,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    // Seed a Phase 9 fee receipt so Cash Book user (with fees: 'none') can auto-read fee income
+    await orgRef.collection("feeReceipts").doc("frcp_p10_income_1").set({
+      schoolId: SCHOOL_1,
+      session: "2026-2027",
+      receiptNumber: "RCP-2627-A1B-0010",
+      deviceNodeCode: "A1B",
+      sequenceNo: 10,
+      receiptDateIso: "2026-11-24",
+      studentId: "stu_p10_01",
+      studentName: "Rohan Verma",
+      studentAdmNo: "ADM-P10-01",
+      fatherName: "Rajesh Verma",
+      className: "5th",
+      section: "A",
+      rollNo: 1,
+      lineItems: [{ title: "Tuition", amount: 1200 }],
+      totalBeforeConcession: 1200,
+      concessionMode: "NONE",
+      concessionScope: "WHOLE_RECEIPT",
+      concessionTargetLineId: "",
+      concessionInputValue: 0,
+      concessionAmount: 0,
+      concessionRemark: "",
+      concessionGivenByUid: "",
+      concessionGivenByName: "",
+      concessionApprovedByAdminUid: "",
+      concessionApprovedByAdminName: "",
+      netPayableAmount: 1200,
+      amountPaid: 1200,
+      balanceDueOnReceipt: 0,
+      paymentMode: "CASH",
+      paymentNote: "",
+      status: "ISSUED",
+      receivedByUid: OWNER_UID,
+      receivedByName: "Principal",
+      issuedAtMs: Date.now() - 1000,
+      cancelledAtMs: 0,
+      cancelledByUid: "",
+      cancelledByName: "",
+      cancelReason: "",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+  });
+
+  const ownerOrg = testEnv.authenticatedContext(OWNER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const certEdOrg = testEnv.authenticatedContext(CERT_EDITOR).firestore().collection("organisations").doc(ORG_ID);
+  const certVwOrg = testEnv.authenticatedContext(CERT_VIEWER).firestore().collection("organisations").doc(ORG_ID);
+  const cbEdOrg = testEnv.authenticatedContext(CB_EDITOR).firestore().collection("organisations").doc(ORG_ID);
+  const cbVwOrg = testEnv.authenticatedContext(CB_VIEWER).firestore().collection("organisations").doc(ORG_ID);
+  const enqEdOrg = testEnv.authenticatedContext(ENQ_EDITOR).firestore().collection("organisations").doc(ORG_ID);
+  const enqVwOrg = testEnv.authenticatedContext(ENQ_VIEWER).firestore().collection("organisations").doc(ORG_ID);
+  const legacyOrg = testEnv.authenticatedContext(LEGACY_NO_P10).firestore().collection("organisations").doc(ORG_ID);
+  const outsiderOrg = testEnv.authenticatedContext(OUTSIDER).firestore().collection("organisations").doc(ORG_ID);
+
+  // =========================================================================
+  // PART 1: CERTIFICATES MODULE
+  // =========================================================================
+  const certPayload = {
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    certificateType: "TC",
+    certificateNumber: "TC-2627-A1B-0001",
+    deviceNodeCode: "A1B",
+    sequenceNo: 1,
+    issueDateIso: "2026-11-24",
+    studentId: "stu_p10_01",
+    studentName: "Rohan Verma",
+    studentAdmNo: "ADM-P10-01",
+    fatherName: "Rajesh Verma",
+    motherName: "Sunita Verma",
+    dob: "2015-06-12",
+    className: "5th",
+    section: "A",
+    rollNo: 1,
+    admissionDate: "2024-04-01",
+    address: "Station Road",
+    reasonForLeaving: "Family relocated",
+    lastAttendanceDateIso: "2026-11-20",
+    conduct: "Good",
+    promotionStatus: "Promoted to Class 6th",
+    feeDuesStatus: "All school dues cleared",
+    remarks: "",
+    status: "ISSUED",
+    issuedByUid: CERT_EDITOR,
+    issuedByName: "Cert Clerk",
+    issuedAtMs: Date.now() - 1000,
+    cancelledAtMs: 0,
+    cancelledByUid: "",
+    cancelledByName: "",
+    cancelReason: "",
+    reissuedFromCertId: "",
+    reissuedFromCertNumber: "",
+    createdAt: ts,
+    updatedAt: ts,
+  };
+  const certDocId = `cert_${SCHOOL_1}_2026_2027_TC_2627_A1B_0001`;
+
+  // Cert Editor can read students in SCHOOL_1 and issue TC in SCHOOL_1, NOT SCHOOL_2
+  await assertSucceeds(certEdOrg.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_p10_01").get());
+  await assertSucceeds(certEdOrg.collection("schoolCertificates").doc(certDocId).set(certPayload));
+  await assertFails(certEdOrg.collection("schoolCertificates").doc("cert_sch2").set({ ...certPayload, schoolId: SCHOOL_2 }));
+
+  // Cert Editor can mark student LEFT (only status, leftDate, leftReason, updatedAt), NOT rename student
+  await assertFails(certEdOrg.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_p10_01").update({
+    name: "Hacked Name",
+    updatedAt: ts,
+  }));
+  await assertSucceeds(certEdOrg.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_p10_01").update({
+    status: "LEFT",
+    leftDate: "2026-11-24",
+    leftReason: "TC issued",
+    updatedAt: ts,
+  }));
+
+  // Cert Viewer can read certificates, CANNOT issue or cancel
+  await assertSucceeds(certVwOrg.collection("schoolCertificates").doc(certDocId).get());
+  await assertFails(certVwOrg.collection("schoolCertificates").doc("cert_vw_try").set({ ...certPayload, issuedByUid: CERT_VIEWER }));
+
+  // Issued certificate is IMMUTABLE (no edit, no delete, no cancel without reason); cancel WITH reason succeeds
+  await assertFails(certEdOrg.collection("schoolCertificates").doc(certDocId).update({ conduct: "Excellent", updatedAt: ts }));
+  await assertFails(ownerOrg.collection("schoolCertificates").doc(certDocId).delete());
+  await assertFails(certEdOrg.collection("schoolCertificates").doc(certDocId).update({
+    status: "CANCELLED",
+    cancelledAtMs: Date.now(),
+    cancelledByUid: CERT_EDITOR,
+    cancelledByName: "Cert Clerk",
+    cancelReason: "",
+    updatedAt: ts,
+  }));
+  await assertSucceeds(certEdOrg.collection("schoolCertificates").doc(certDocId).update({
+    status: "CANCELLED",
+    cancelledAtMs: Date.now(),
+    cancelledByUid: CERT_EDITOR,
+    cancelledByName: "Cert Clerk",
+    cancelReason: "Typo in father name",
+    updatedAt: ts,
+  }));
+
+  // =========================================================================
+  // PART 2: CASH BOOK MODULE
+  // =========================================================================
+  // Cash Book viewer/editor (with fees: 'none') CAN auto-read Phase 9 feeReceipts!
+  await assertSucceeds(cbVwOrg.collection("feeReceipts").doc("frcp_p10_income_1").get());
+  await assertSucceeds(cbEdOrg.collection("feeReceipts").doc("frcp_p10_income_1").get());
+
+  // Cash Book settings: non-admin cannot change expenseApprovalLimitRs from default 5000; Owner CAN
+  const cbSetId = `cbset_${SCHOOL_1}`;
+  const makeCbSettings = (uid, limit = 5000) => ({
+    schoolId: SCHOOL_1,
+    expenseCategories: ["Electricity", "Stationery", "Repairs", "Other"],
+    otherIncomeCategories: ["Donation", "Other Income"],
+    expenseApprovalLimitRs: limit,
+    defaultOpeningBalanceRs: 1000,
+    updatedByUid: uid,
+    updatedByName: "Staff",
+    clientEditedAtMs: Date.now() - 100,
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  await assertFails(cbEdOrg.collection("cashBookSettings").doc(cbSetId).set(makeCbSettings(CB_EDITOR, 99999)));
+  await assertSucceeds(ownerOrg.collection("cashBookSettings").doc(cbSetId).set(makeCbSettings(OWNER_UID, 5000)));
+
+  // Cash Book entry <= 5000 succeeds for Cash Clerk
+  const makeCbEntry = (uid, overrides = {}) => ({
+    schoolId: SCHOOL_1,
+    dateIso: "2026-11-24",
+    entryType: "EXPENSE",
+    category: "Stationery",
+    amount: 850,
+    paymentMode: "CASH",
+    note: "Chalk & register",
+    billPhotoBase64: "",
+    status: "ACTIVE",
+    approvedByAdminUid: "",
+    approvedByAdminName: "",
+    approvalNote: "",
+    createdByUid: uid,
+    createdByName: "Cash Clerk",
+    createdAtMs: Date.now() - 500,
+    updatedByUid: uid,
+    updatedByName: "Cash Clerk",
+    lastEditReason: "",
+    clientEditedAtMs: Date.now() - 500,
+    cancelledAtMs: 0,
+    cancelledByUid: "",
+    cancelledByName: "",
+    cancelReason: "",
+    createdAt: ts,
+    updatedAt: ts,
+    ...overrides,
+  });
+  await assertSucceeds(cbEdOrg.collection("cashBookEntries").doc("cbe_small_1").set(makeCbEntry(CB_EDITOR)));
+
+  // Large expense > 5000 by non-admin WITHOUT real admin approval FAILS; forged self-approval FAILS; with OWNER approval SUCCEEDS
+  await assertFails(cbEdOrg.collection("cashBookEntries").doc("cbe_large_no_appr").set(makeCbEntry(CB_EDITOR, { amount: 6500 })));
+  await assertFails(cbEdOrg.collection("cashBookEntries").doc("cbe_large_fake_appr").set(
+    makeCbEntry(CB_EDITOR, { amount: 6500, approvedByAdminUid: CB_EDITOR, approvedByAdminName: "Self" })
+  ));
+  await assertSucceeds(cbEdOrg.collection("cashBookEntries").doc("cbe_large_with_admin").set(
+    makeCbEntry(CB_EDITOR, { amount: 6500, approvedByAdminUid: OWNER_UID, approvedByAdminName: "Principal", approvalNote: "Approved" })
+  ));
+
+  // Edit requires lastEditReason; Cancel requires cancelReason; Delete is ALWAYS denied
+  await assertFails(cbEdOrg.collection("cashBookEntries").doc("cbe_small_1").update({
+    amount: 900,
+    lastEditReason: "",
+    updatedByUid: CB_EDITOR,
+    updatedByName: "Cash Clerk",
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  }));
+  await assertSucceeds(cbEdOrg.collection("cashBookEntries").doc("cbe_small_1").update({
+    amount: 900,
+    lastEditReason: "Corrected bill total",
+    updatedByUid: CB_EDITOR,
+    updatedByName: "Cash Clerk",
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  }));
+  await assertSucceeds(cbEdOrg.collection("cashBookEntries").doc("cbe_small_1").update({
+    status: "CANCELLED",
+    cancelledAtMs: Date.now(),
+    cancelledByUid: CB_EDITOR,
+    cancelledByName: "Cash Clerk",
+    cancelReason: "Duplicate entry",
+    updatedByUid: CB_EDITOR,
+    updatedByName: "Cash Clerk",
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  }));
+  await assertFails(ownerOrg.collection("cashBookEntries").doc("cbe_small_1").delete());
+
+  // Day Closing & Append-only Cash Book Audit Log
+  await assertSucceeds(cbEdOrg.collection("cashBookDayClosings").doc(`cbcls_${SCHOOL_1}_2026_11_24`).set({
+    schoolId: SCHOOL_1,
+    dateIso: "2026-11-24",
+    openingCashBalance: 1000,
+    cashInTotal: 1200,
+    cashOutTotal: 6500,
+    expectedClosingCash: -4300,
+    countedCash: -4300,
+    cashDifference: 0,
+    nonCashInTotal: 0,
+    nonCashOutTotal: 0,
+    note: "Matched",
+    closedByUid: CB_EDITOR,
+    closedByName: "Cash Clerk",
+    closedAtMs: Date.now(),
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+  await assertSucceeds(cbEdOrg.collection("cashBookAuditLogs").doc("cbal_01").set({
+    schoolId: SCHOOL_1,
+    action: "EXPENSE_ADDED",
+    targetId: "cbe_small_1",
+    dateIso: "2026-11-24",
+    amount: 850,
+    reason: "Chalk",
+    summary: "Added expense Rs 850",
+    actorUid: CB_EDITOR,
+    actorName: "Cash Clerk",
+    clientCreatedAtMs: Date.now(),
+    createdAt: ts,
+  }));
+  await assertFails(ownerOrg.collection("cashBookAuditLogs").doc("cbal_01").update({ summary: "Tampered" }));
+  await assertFails(ownerOrg.collection("cashBookAuditLogs").doc("cbal_01").delete());
+  await assertFails(cbVwOrg.collection("cashBookEntries").doc("cbe_vw_try").set(makeCbEntry(CB_VIEWER)));
+
+  // =========================================================================
+  // PART 3: ADMISSION ENQUIRY MODULE
+  // =========================================================================
+  const enqPayload = {
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    childName: "Kavya Singh",
+    classWanted: "1st",
+    guardianName: "Amit Singh",
+    mobile: "9839100099",
+    source: "Walk-in",
+    notes: "Interested in transport",
+    enquiryDateIso: "2026-11-24",
+    nextFollowUpDateIso: "2026-11-25",
+    status: "NEW",
+    lostReason: "",
+    convertedStudentDocId: "",
+    convertedStudentAdmNo: "",
+    convertedAtMs: 0,
+    createdByUid: ENQ_EDITOR,
+    createdByName: "Enquiry Clerk",
+    createdAtMs: Date.now() - 500,
+    updatedByUid: ENQ_EDITOR,
+    updatedByName: "Enquiry Clerk",
+    clientEditedAtMs: Date.now() - 500,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+  await assertSucceeds(enqEdOrg.collection("admissionEnquiries").doc("enq_01").set(enqPayload));
+  // Marking LOST without lostReason fails; with lostReason succeeds
+  await assertFails(enqEdOrg.collection("admissionEnquiries").doc("enq_01").update({
+    status: "LOST",
+    lostReason: "",
+    updatedByUid: ENQ_EDITOR,
+    updatedByName: "Enquiry Clerk",
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  }));
+  // Enquiry Editor can create a Student Register doc during Convert to Admission
+  await assertSucceeds(enqEdOrg.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_from_enq_01").set({
+    schoolId: SCHOOL_1,
+    classId: "cls_1st",
+    session: "2026-2027",
+    admNo: "ADM-ENQ-01",
+    name: "Kavya Singh",
+    fatherName: "Amit Singh",
+    motherName: "",
+    dob: "",
+    mobile: "9839100099",
+    secondMobile: "",
+    address: "",
+    photoBase64: "",
+    className: "1st",
+    section: "A",
+    rollNo: 1,
+    admissionDate: "2026-11-24",
+    previousSchool: "",
+    siblingGroupId: "",
+    usesTransport: false,
+    transportRouteName: "",
+    transportMonthlyAmount: 0,
+    status: "ACTIVE",
+    leftDate: "",
+    leftReason: "",
+    sample: false,
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+  // Enquiry Viewer can read, CANNOT create or edit
+  await assertSucceeds(enqVwOrg.collection("admissionEnquiries").doc("enq_01").get());
+  await assertFails(enqVwOrg.collection("admissionEnquiries").doc("enq_vw_try").set({ ...enqPayload, createdByUid: ENQ_VIEWER, updatedByUid: ENQ_VIEWER }));
+
+  // =========================================================================
+  // PART 4: MISSING KEY = NO ACCESS, MODULE ISOLATION & CROSS-ORG ISOLATION
+  // =========================================================================
+  for (const deniedOrg of [legacyOrg, outsiderOrg]) {
+    await assertFails(deniedOrg.collection("schoolCertificates").get());
+    await assertFails(deniedOrg.collection("cashBookSettings").get());
+    await assertFails(deniedOrg.collection("cashBookEntries").get());
+    await assertFails(deniedOrg.collection("cashBookDayClosings").get());
+    await assertFails(deniedOrg.collection("cashBookAuditLogs").get());
+    await assertFails(deniedOrg.collection("enquirySettings").get());
+    await assertFails(deniedOrg.collection("admissionEnquiries").get());
+  }
+  // Cross-module isolation: Cert editor cannot read Cash Book or Enquiry; Cash editor cannot read Certs or Enquiry; Enquiry editor cannot read Certs or Cash Book
+  await assertFails(certEdOrg.collection("cashBookEntries").get());
+  await assertFails(certEdOrg.collection("admissionEnquiries").get());
+  await assertFails(cbEdOrg.collection("schoolCertificates").get());
+  await assertFails(cbEdOrg.collection("admissionEnquiries").get());
+  await assertFails(enqEdOrg.collection("schoolCertificates").get());
+  await assertFails(enqEdOrg.collection("cashBookEntries").get());
+});
+
+// =============================================================================
+// 18. PHASE 11: EXAMS ('exams'), STOCK ('stock'), TRANSPORT ('transport')
+//     - Missing key = no access, none / view / edit, Owner/Admin full access
+//     - Linked teacher self-only read on examInvigilatorDuties
+//     - Stock editor can update ONLY optionalCatalogue on feeStructures (tuition blocked)
+//     - Stock transactions append-only; ADJUSTMENT requires non-empty reason
+//     - Transport editor can update ONLY transport fields on students (name/status blocked)
+//     - Cross-module & cross-org isolation
+// =============================================================================
+test("Phase 11: Exams, Stock & Transport RBAC, teacher self-duty read, stock catalogue-only update, transport-only student update & isolation", async () => {
+  const EXAMS_ED = "uid_p11_exams_ed";
+  const EXAMS_VW = "uid_p11_exams_vw";
+  const STOCK_ED = "uid_p11_stock_ed";
+  const STOCK_VW = "uid_p11_stock_vw";
+  const TRANS_ED = "uid_p11_trans_ed";
+  const TRANS_VW = "uid_p11_trans_vw";
+  const TEACHER_A = "uid_p11_tchr_a";
+  const TEACHER_B = "uid_p11_tchr_b";
+  const LEGACY_NO_KEYS = "uid_p11_legacy";
+  const OUTSIDER = "uid_p11_outsider";
+
+  await seedOrgWithOwnerAndSchools();
+  const ts = pastDate();
+
+  const baseNoAccess = {
+    students: "none",
+    marks: "none",
+    coScholastic: "none",
+    reports: "none",
+    timetable: "none",
+    teachers: "none",
+    settings: "none",
+    members: "none",
+    attendance: "none",
+    fees: "none",
+    studentRegister: "none",
+    certificates: "none",
+    cashBook: "none",
+    enquiry: "none",
+    exams: "none",
+    stock: "none",
+    transport: "none",
+  };
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const orgRef = ctx.firestore().collection("organisations").doc(ORG_ID);
+    const seedMember = async (uid, role, perms, schools = [SCHOOL_1]) => {
+      await orgRef.collection("members").doc(uid).set({
+        uid,
+        name: uid,
+        email: `${uid}@org1.com`,
+        mobile: "9999900000",
+        role,
+        status: "active",
+        allSchools: false,
+        schools,
+        permissions: perms,
+        teacherProfileCompleted: true,
+        teacherPhotoBase64: "",
+        requestedSubjects: [],
+        requestedClasses: [],
+        assignedClassSubjects: [],
+        lastActiveAt: ts,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    };
+
+    await seedMember(EXAMS_ED, "OFFICE_OPERATOR", { ...baseNoAccess, exams: "edit" });
+    await seedMember(EXAMS_VW, "OTHER", { ...baseNoAccess, exams: "view" });
+    await seedMember(STOCK_ED, "OFFICE_OPERATOR", { ...baseNoAccess, stock: "edit" });
+    await seedMember(STOCK_VW, "OTHER", { ...baseNoAccess, stock: "view" });
+    await seedMember(TRANS_ED, "OFFICE_OPERATOR", { ...baseNoAccess, transport: "edit" });
+    await seedMember(TRANS_VW, "OTHER", { ...baseNoAccess, transport: "view" });
+    await seedMember(TEACHER_A, "TEACHER", { ...baseNoAccess, marks: "edit" });
+    await seedMember(TEACHER_B, "TEACHER", { ...baseNoAccess, marks: "edit" });
+
+    // Legacy 8-key member (missing exams/stock/transport keys -> must be NONE)
+    await seedMember(LEGACY_NO_KEYS, "OTHER", {
+      students: "view",
+      marks: "none",
+      coScholastic: "none",
+      reports: "none",
+      timetable: "none",
+      teachers: "none",
+      settings: "none",
+      members: "none",
+    });
+
+    // Seed a student in SCHOOL_1 and a feeStructure for SCHOOL_1
+    await orgRef.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_p11_01").set({
+      schoolId: SCHOOL_1,
+      classId: "cls_5th",
+      session: "2026-2027",
+      admNo: "ADM-P11-01",
+      name: "Aarav Kumar",
+      fatherName: "Rajesh Kumar",
+      motherName: "Sunita Devi",
+      dob: "2015-04-10",
+      mobile: "9839001122",
+      secondMobile: "",
+      address: "Main Road",
+      photoBase64: "",
+      className: "5th",
+      section: "A",
+      rollNo: 1,
+      admissionDate: "2024-04-01",
+      previousSchool: "",
+      siblingGroupId: "",
+      usesTransport: true,
+      transportRouteName: "Old Route",
+      transportMonthlyAmount: 750,
+      status: "ACTIVE",
+      leftDate: "",
+      leftReason: "",
+      sample: false,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    await orgRef.collection("feeStructures").doc(`feestruct_${SCHOOL_1}_2026_2027`).set({
+      schoolId: SCHOOL_1,
+      session: "2026-2027",
+      monthOrder: ["APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR"],
+      chargedTuitionMonths: ["APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR"],
+      chargedTransportMonths: ["APR", "MAY", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR"],
+      tuitionByClassAndMonth: { "5th": { APR: 1200 } },
+      examFees: [],
+      optionalCatalogue: [
+        { id: "opt_tie", name: "Tie", price: 120, hidden: false, unit: "pcs", openingStock: 20, lowStockLevel: 5 },
+      ],
+      frozenPastCellAmountsByClass: {},
+      maxConcessionPercentWithoutAdminApproval: 10,
+      messageTemplates: {
+        receiptTemplate: "Receipt",
+        reminderTemplate: "Reminder",
+        noticeTemplate: "Notice",
+      },
+      updatedByUid: OWNER_UID,
+      updatedByName: "Owner",
+      clientEditedAtMs: Date.now() - 5000,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+  });
+
+  const authedOrg = (uid) => testEnv.authenticatedContext(uid).firestore().collection("organisations").doc(ORG_ID);
+  const examsEdOrg = authedOrg(EXAMS_ED);
+  const examsVwOrg = authedOrg(EXAMS_VW);
+  const stockEdOrg = authedOrg(STOCK_ED);
+  const stockVwOrg = authedOrg(STOCK_VW);
+  const transEdOrg = authedOrg(TRANS_ED);
+  const transVwOrg = authedOrg(TRANS_VW);
+  const teacherAOrg = authedOrg(TEACHER_A);
+  const teacherBOrg = authedOrg(TEACHER_B);
+  const legacyOrg = authedOrg(LEGACY_NO_KEYS);
+  const outsiderOrg = authedOrg(OUTSIDER);
+
+  // =========================================================================
+  // PART 1: EXAMS MODULE + TEACHER SELF-DUTY ISOLATION
+  // =========================================================================
+  const examPayload = {
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    examType: "HALF_YEARLY",
+    title: "Half-Yearly 2026",
+    entries: [
+      { entryId: "p1", className: "5th", subjectName: "Maths", dateIso: "2026-10-12", startTime: "09:00", endTime: "12:00", maxMarks: 100 },
+    ],
+    withholdAdmitCardAboveDuesRs: 1000,
+    admitCardOverrideStudentIds: [],
+    admitCardInstructions: "Bring admit card.",
+    createdByUid: EXAMS_ED,
+    updatedByUid: EXAMS_ED,
+    updatedByName: "Exams Coord",
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  };
+  await assertSucceeds(examsEdOrg.collection("examSchedules").doc("exam_hy_01").set(examPayload));
+  // Exams editor cannot write to SCHOOL_2 (out of school scope)
+  await assertFails(examsEdOrg.collection("examSchedules").doc("exam_sch2").set({ ...examPayload, schoolId: SCHOOL_2 }));
+  // Exams viewer can read, cannot create
+  await assertSucceeds(examsVwOrg.collection("examSchedules").doc("exam_hy_01").get());
+  await assertFails(examsVwOrg.collection("examSchedules").doc("exam_vw_try").set({ ...examPayload, createdByUid: EXAMS_VW, updatedByUid: EXAMS_VW }));
+
+  // Exam Room & Seating
+  await assertSucceeds(examsEdOrg.collection("examRooms").doc("eroom_101").set({
+    schoolId: SCHOOL_1,
+    roomName: "Room 101",
+    capacity: 30,
+    active: true,
+    updatedByUid: EXAMS_ED,
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  }));
+  await assertSucceeds(examsEdOrg.collection("examSeatings").doc("seat_exam_hy_01").set({
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    examId: "exam_hy_01",
+    allocationMode: "MIXED_BY_CLASS",
+    includedClasses: ["5th"],
+    roomIds: ["eroom_101"],
+    allocations: [],
+    unallocatedStudentIds: [],
+    updatedByUid: EXAMS_ED,
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  }));
+
+  // Invigilator Duty for TEACHER_A
+  const dutyPayload = {
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    examId: "exam_hy_01",
+    examTitle: "Half-Yearly 2026",
+    dateIso: "2026-10-12",
+    startTime: "09:00",
+    endTime: "12:00",
+    roomId: "eroom_101",
+    roomName: "Room 101",
+    teacherId: "tchr_a",
+    teacherUid: TEACHER_A,
+    teacherName: "Mrs. A",
+    assignedManually: false,
+    updatedByUid: EXAMS_ED,
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  };
+  await assertSucceeds(examsEdOrg.collection("examInvigilatorDuties").doc("duty_01").set(dutyPayload));
+  // TEACHER_A (without exams module) CAN read own duty via self query, CANNOT read all duties or examSchedules
+  await assertSucceeds(teacherAOrg.collection("examInvigilatorDuties").where("teacherUid", "==", TEACHER_A).get());
+  await assertFails(teacherAOrg.collection("examInvigilatorDuties").get());
+  await assertFails(teacherAOrg.collection("examSchedules").get());
+  // TEACHER_B CANNOT read TEACHER_A's duty
+  await assertFails(teacherBOrg.collection("examInvigilatorDuties").doc("duty_01").get());
+
+  // =========================================================================
+  // PART 2: STOCK MODULE (CATALOGUE-ONLY UPDATE + APPEND-ONLY TRANSACTIONS)
+  // =========================================================================
+  const feeStructRefStockEd = stockEdOrg.collection("feeStructures").doc(`feestruct_${SCHOOL_1}_2026_2027`);
+  // Stock editor CAN update ONLY optionalCatalogue + audit fields
+  await assertSucceeds(feeStructRefStockEd.update({
+    optionalCatalogue: [
+      { id: "opt_tie", name: "Tie", price: 130, hidden: false, unit: "pcs", openingStock: 25, lowStockLevel: 5 },
+    ],
+    updatedByUid: STOCK_ED,
+    updatedByName: "Store Clerk",
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  }));
+  // Stock editor CANNOT tamper with tuitionByClassAndMonth!
+  await assertFails(feeStructRefStockEd.update({
+    tuitionByClassAndMonth: { "5th": { APR: 9999 } },
+    updatedByUid: STOCK_ED,
+    updatedByName: "Store Clerk",
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  }));
+
+  // Stock In transaction succeeds; Adjustment without reason FAILS; Adjustment with reason SUCCEEDS; update/delete FAILS
+  const stockInPayload = {
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    itemId: "opt_tie",
+    itemName: "Tie",
+    txType: "STOCK_IN",
+    dateIso: "2026-10-10",
+    quantityDelta: 50,
+    unitCostRs: 80,
+    totalCostRs: 4000,
+    supplier: "Uniform Depot",
+    reason: "",
+    createdByUid: STOCK_ED,
+    createdByName: "Store Clerk",
+    createdAtMs: Date.now(),
+    createdAt: ts,
+  };
+  await assertSucceeds(stockEdOrg.collection("stockTransactions").doc("stk_in_01").set(stockInPayload));
+  await assertFails(stockEdOrg.collection("stockTransactions").doc("stk_adj_bad").set({
+    ...stockInPayload,
+    txType: "ADJUSTMENT",
+    quantityDelta: -2,
+    reason: "",
+  }));
+  await assertSucceeds(stockEdOrg.collection("stockTransactions").doc("stk_adj_ok").set({
+    ...stockInPayload,
+    txType: "ADJUSTMENT",
+    quantityDelta: -2,
+    reason: "2 ties damaged in rain",
+  }));
+  await assertFails(stockEdOrg.collection("stockTransactions").doc("stk_in_01").update({ quantityDelta: 100 }));
+  await assertFails(stockEdOrg.collection("stockTransactions").doc("stk_in_01").delete());
+  // Stock viewer can read, cannot create
+  await assertSucceeds(stockVwOrg.collection("stockTransactions").doc("stk_in_01").get());
+  await assertFails(stockVwOrg.collection("stockTransactions").doc("stk_vw_try").set({ ...stockInPayload, createdByUid: STOCK_VW }));
+
+  // =========================================================================
+  // PART 3: TRANSPORT ROUTES + LEAST-PRIVILEGE STUDENT TRANSPORT UPDATE
+  // =========================================================================
+  const routePayload = {
+    schoolId: SCHOOL_1,
+    routeName: "Route 1 - Station Road",
+    vehicleNumber: "UP32-AB-1234",
+    vehicleType: "Bus",
+    seatCapacity: 32,
+    driverName: "Ramesh Yadav",
+    driverPhone: "9839009988",
+    monthlyFeeRs: 800,
+    stops: [{ stopId: "st_1", stopName: "Station Chowk", pickupTime: "07:30", monthlyFeeRs: 800 }],
+    active: true,
+    updatedByUid: TRANS_ED,
+    updatedByName: "Transport In-Charge",
+    clientEditedAtMs: Date.now(),
+    updatedAt: ts,
+  };
+  await assertSucceeds(transEdOrg.collection("transportRoutes").doc("troute_01").set(routePayload));
+  await assertSucceeds(transVwOrg.collection("transportRoutes").doc("troute_01").get());
+  await assertFails(transVwOrg.collection("transportRoutes").doc("troute_vw").set({ ...routePayload, updatedByUid: TRANS_VW }));
+
+  // Transport editor CAN update ONLY transport fields on a student
+  const stuRefTransEd = transEdOrg.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_p11_01");
+  await assertSucceeds(stuRefTransEd.update({
+    usesTransport: true,
+    transportRouteId: "troute_01",
+    transportRouteName: "Route 1 - Station Road - Station Chowk",
+    transportStopName: "Station Chowk",
+    transportMonthlyAmount: 750,
+    updatedAt: ts,
+  }));
+  // Transport editor CANNOT modify student's name or status!
+  await assertFails(stuRefTransEd.update({
+    name: "Hacked Name",
+    updatedAt: ts,
+  }));
+
+  // =========================================================================
+  // PART 4: MISSING KEY = NO ACCESS, CROSS-MODULE & CROSS-ORG ISOLATION
+  // =========================================================================
+  for (const deniedOrg of [legacyOrg, outsiderOrg]) {
+    await assertFails(deniedOrg.collection("examSchedules").get());
+    await assertFails(deniedOrg.collection("examRooms").get());
+    await assertFails(deniedOrg.collection("examSeatings").get());
+    await assertFails(deniedOrg.collection("stockTransactions").get());
+    await assertFails(deniedOrg.collection("transportRoutes").get());
+  }
+  await assertFails(examsEdOrg.collection("stockTransactions").get());
+  await assertFails(examsEdOrg.collection("transportRoutes").get());
+  await assertFails(stockEdOrg.collection("examSchedules").get());
+  await assertFails(stockEdOrg.collection("transportRoutes").get());
+  await assertFails(transEdOrg.collection("examSchedules").get());
+  await assertFails(transEdOrg.collection("stockTransactions").get());
+});
+
+
+
 
 
 

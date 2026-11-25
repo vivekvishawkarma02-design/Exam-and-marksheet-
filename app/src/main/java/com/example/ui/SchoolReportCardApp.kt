@@ -103,6 +103,12 @@ object AppRoutes {
     const val ROUTE_STUDENT_ATTENDANCE = "student_attendance"
     const val ROUTE_STUDENT_REGISTER = "student_register"
     const val ROUTE_FEE_MANAGEMENT = "fee_management"
+    const val ROUTE_CERTIFICATES = "certificates"
+    const val ROUTE_CASH_BOOK = "cash_book"
+    const val ROUTE_ENQUIRY = "enquiry"
+    const val ROUTE_EXAMS = "exams"
+    const val ROUTE_STOCK = "stock"
+    const val ROUTE_TRANSPORT = "transport"
 }
 
 private enum class OnboardingSubScreen {
@@ -486,6 +492,7 @@ private fun OrganisationWorkspace(
     var attendanceJumpTab by remember { mutableStateOf<Int?>(null) }
     var feeJumpInitialTab by remember { mutableStateOf(0) }
     var feeJumpPreselectedStudent by remember { mutableStateOf<com.example.data.StudentEntity?>(null) }
+    var certificateJumpStudentId by remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.snackbar.collect { msg ->
@@ -587,7 +594,13 @@ private fun OrganisationWorkspace(
         currentRoute == AppRoutes.ROUTE_TEACHER_ATTENDANCE ||
         currentRoute == AppRoutes.ROUTE_STUDENT_ATTENDANCE ||
         currentRoute == AppRoutes.ROUTE_STUDENT_REGISTER ||
-        currentRoute == AppRoutes.ROUTE_FEE_MANAGEMENT
+        currentRoute == AppRoutes.ROUTE_FEE_MANAGEMENT ||
+        currentRoute == AppRoutes.ROUTE_CERTIFICATES ||
+        currentRoute == AppRoutes.ROUTE_CASH_BOOK ||
+        currentRoute == AppRoutes.ROUTE_ENQUIRY ||
+        currentRoute == AppRoutes.ROUTE_EXAMS ||
+        currentRoute == AppRoutes.ROUTE_STOCK ||
+        currentRoute == AppRoutes.ROUTE_TRANSPORT
 
     fun navigateTopLevel(route: String) {
         navController.navigate(route) {
@@ -783,6 +796,37 @@ private fun OrganisationWorkspace(
                                             feeJumpInitialTab = 0
                                             feeJumpPreselectedStudent = null
                                             navController.navigate(AppRoutes.ROUTE_FEE_MANAGEMENT) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToCertificates = {
+                                        if (uiState.canViewCertificates) {
+                                            certificateJumpStudentId = null
+                                            navController.navigate(AppRoutes.ROUTE_CERTIFICATES) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToCashBook = {
+                                        if (uiState.canViewCashBook) {
+                                            navController.navigate(AppRoutes.ROUTE_CASH_BOOK) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToEnquiry = {
+                                        if (uiState.canViewEnquiry) {
+                                            navController.navigate(AppRoutes.ROUTE_ENQUIRY) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToExams = {
+                                        if (uiState.canViewExams) {
+                                            navController.navigate(AppRoutes.ROUTE_EXAMS) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToStock = {
+                                        if (uiState.canViewStock) {
+                                            navController.navigate(AppRoutes.ROUTE_STOCK) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToTransport = {
+                                        if (uiState.canViewTransport) {
+                                            navController.navigate(AppRoutes.ROUTE_TRANSPORT) { launchSingleTop = true }
                                         }
                                     },
                                     onOpenPendingMarksItem = { item ->
@@ -1055,6 +1099,12 @@ private fun OrganisationWorkspace(
                                                 feeJumpPreselectedStudent = student
                                                 navController.navigate(AppRoutes.ROUTE_FEE_MANAGEMENT) { launchSingleTop = true }
                                             }
+                                        },
+                                        onOpenCertificatesForStudent = { student ->
+                                            if (uiState.canViewCertificates) {
+                                                certificateJumpStudentId = student.id
+                                                navController.navigate(AppRoutes.ROUTE_CERTIFICATES) { launchSingleTop = true }
+                                            }
                                         }
                                     )
                                 } else {
@@ -1075,6 +1125,92 @@ private fun OrganisationWorkspace(
                                                 navController.navigate(AppRoutes.ROUTE_STUDENT_REGISTER) { launchSingleTop = true }
                                             }
                                         },
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_CERTIFICATES) {
+                                if (uiState.canViewCertificates) {
+                                    Phase10CertificatesScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        initialStudentId = certificateJumpStudentId,
+                                        onInitialStudentConsumed = { certificateJumpStudentId = null },
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_CASH_BOOK) {
+                                if (uiState.canViewCashBook) {
+                                    Phase10CashBookScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_ENQUIRY) {
+                                if (uiState.canViewEnquiry) {
+                                    Phase10EnquiryScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_EXAMS) {
+                                if (uiState.canViewExams) {
+                                    Phase11ExamsScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_STOCK) {
+                                if (uiState.canViewStock) {
+                                    Phase11StockScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_TRANSPORT) {
+                                if (uiState.canViewTransport) {
+                                    Phase11TransportScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
                                         onBack = { navController.popBackStack() }
                                     )
                                 } else {

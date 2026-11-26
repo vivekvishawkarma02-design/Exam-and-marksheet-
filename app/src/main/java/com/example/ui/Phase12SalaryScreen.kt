@@ -546,12 +546,15 @@ private fun MonthlySalarySheetTab(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
                             IconButton(
                                 onClick = { onChangeYearMonth(stepYearMonth(selectedYearMonth, -1)) },
                                 modifier = Modifier.minimumInteractiveComponentSize()
@@ -561,7 +564,9 @@ private fun MonthlySalarySheetTab(
                             Text(
                                 text = selectedYearMonth,
                                 style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             IconButton(
                                 onClick = { onChangeYearMonth(stepYearMonth(selectedYearMonth, 1)) },
@@ -575,6 +580,7 @@ private fun MonthlySalarySheetTab(
                             OutlinedButton(
                                 onClick = onToggleLockClick,
                                 modifier = Modifier
+                                    .fillMaxWidth()
                                     .heightIn(min = 48.dp)
                                     .testTag("salary_lock_month_button")
                             ) {
@@ -586,22 +592,31 @@ private fun MonthlySalarySheetTab(
                                 )
                                 Spacer(Modifier.width(6.dp))
                                 Text(
-                                    if (isMonthLocked) p10Label(isHindi, "माह लॉक है", "Locked")
-                                    else p10Label(isHindi, "माह लॉक करें", "Lock Month")
+                                    text = if (isMonthLocked) p10Label(isHindi, "माह लॉक है", "Locked")
+                                    else p10Label(isHindi, "माह लॉक करें", "Lock Month"),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         } else if (isMonthLocked) {
-                            Surface(color = FailRedContainer, shape = RoundedCornerShape(8.dp)) {
+                            Surface(
+                                color = FailRedContainer,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    horizontalArrangement = Arrangement.Center
                                 ) {
                                     Icon(Icons.Default.Lock, contentDescription = null, tint = FailRed, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
                                     Text(
-                                        p10Label(isHindi, "माह लॉक है", "Month Locked"),
+                                        text = p10Label(isHindi, "माह लॉक है", "Month Locked"),
                                         color = FailRed,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
@@ -1459,37 +1474,49 @@ fun TeacherOwnSalarySlipsCard(
                     shape = RoundedCornerShape(10.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
                             Text(
                                 text = "${slip.yearMonth}  •  Net ₹${slip.netPayableRs}",
                                 style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = "P:${slip.presentDays} A:${slip.absentDays} Lv:${slip.onLeaveDays} • ${slip.status.wireValue}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             OutlinedButton(
                                 onClick = { onPrintSlip(slip, SalarySlipPageSize.A4) },
-                                modifier = Modifier.heightIn(min = 48.dp)
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
                             ) {
-                                Text("A4 PDF")
+                                Text("A4 PDF", maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             OutlinedButton(
                                 onClick = { onPrintSlip(slip, SalarySlipPageSize.A5) },
-                                modifier = Modifier.heightIn(min = 48.dp)
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
                             ) {
-                                Text("A5 PDF")
+                                Text("A5 PDF", maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }

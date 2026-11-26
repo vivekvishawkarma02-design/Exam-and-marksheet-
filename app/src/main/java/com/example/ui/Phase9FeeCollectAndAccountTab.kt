@@ -499,6 +499,61 @@ fun Phase9FeeCollectAndAccountTab(
                             }
                         }
 
+                        account.previousSessionDueCell?.let { prevCell ->
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (prevCell.remainingDue > 0) Color(0xFFFFF3E0) else Color(0xFFE8F5E9),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (prevCell.remainingDue > 0) Color(0xFFE65100).copy(alpha = 0.45f)
+                                    else Color(0xFF2E7D32).copy(alpha = 0.45f)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("previous_session_dues_row")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = prevCell.label,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (prevCell.remainingDue > 0) Color(0xFFBF360C) else Color(0xFF1B5E20)
+                                        )
+                                        Text(
+                                            text = if (prevCell.remainingDue > 0) {
+                                                "Carried forward unpaid balance • Scheduled ₹${prevCell.scheduledAmount} • Paid ₹${prevCell.paidAmount + prevCell.concessionAllocated}"
+                                            } else {
+                                                "Previous session dues fully cleared (₹${prevCell.scheduledAmount})"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Box(modifier = Modifier.width(120.dp)) {
+                                        FeeGridTickableCell(
+                                            cell = prevCell,
+                                            isTicked = prevCell.cellKey in tickedCellKeys,
+                                            enabled = canEditFees,
+                                            onToggle = { c ->
+                                                if (c.cellKey in tickedCellKeys) {
+                                                    tickedCellKeys.remove(c.cellKey)
+                                                } else {
+                                                    tickedCellKeys.add(c.cellKey)
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         // Table Header
                         Row(
                             modifier = Modifier

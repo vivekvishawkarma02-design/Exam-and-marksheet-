@@ -47,6 +47,7 @@ enum class AppModule(val key: String, val label: String, val description: String
     STOCK("stock", "Stock", "School item inventory, purchases, fee-receipt stock out, and low-stock alerts"),
     TRANSPORT("transport", "Transport", "Bus/van routes, stops, drivers, student assignments, and route lists"),
     SALARY("salary", "Salary", "Staff salary setup, monthly sheets, attendance deductions, advances, slips, and month locking"),
+    SESSION_PROMOTION("sessionPromotion", "Session and Promotion", "Start new session, student promotion, class order, alumni history, and promotion register"),
     SETTINGS("settings", "Settings", "Organisation settings, sessions, schools, and backups"),
     MEMBERS("members", "Members", "Member directory, join requests, roles, and access control");
 
@@ -90,6 +91,7 @@ data class MemberPermissions(
     val stock: AccessLevel = AccessLevel.NONE,
     val transport: AccessLevel = AccessLevel.NONE,
     val salary: AccessLevel = AccessLevel.NONE,
+    val sessionPromotion: AccessLevel = AccessLevel.NONE,
     val settings: AccessLevel = AccessLevel.NONE,
     val members: AccessLevel = AccessLevel.NONE
 ) {
@@ -110,6 +112,7 @@ data class MemberPermissions(
         AppModule.STOCK -> stock
         AppModule.TRANSPORT -> transport
         AppModule.SALARY -> salary
+        AppModule.SESSION_PROMOTION -> sessionPromotion
         AppModule.SETTINGS -> settings
         AppModule.MEMBERS -> members
     }
@@ -131,6 +134,7 @@ data class MemberPermissions(
         AppModule.STOCK -> copy(stock = level)
         AppModule.TRANSPORT -> copy(transport = level)
         AppModule.SALARY -> copy(salary = level)
+        AppModule.SESSION_PROMOTION -> copy(sessionPromotion = level)
         AppModule.SETTINGS -> copy(settings = level)
         AppModule.MEMBERS -> copy(members = level)
     }
@@ -152,6 +156,7 @@ data class MemberPermissions(
         AppModule.STOCK.key to stock.wireValue,
         AppModule.TRANSPORT.key to transport.wireValue,
         AppModule.SALARY.key to salary.wireValue,
+        AppModule.SESSION_PROMOTION.key to sessionPromotion.wireValue,
         AppModule.SETTINGS.key to settings.wireValue,
         AppModule.MEMBERS.key to members.wireValue
     )
@@ -175,6 +180,7 @@ data class MemberPermissions(
                 stock = AccessLevel.EDIT,
                 transport = AccessLevel.EDIT,
                 salary = AccessLevel.EDIT,
+                sessionPromotion = AccessLevel.EDIT,
                 settings = AccessLevel.EDIT,
                 members = AccessLevel.EDIT
             )
@@ -195,6 +201,7 @@ data class MemberPermissions(
                 stock = AccessLevel.EDIT,
                 transport = AccessLevel.EDIT,
                 salary = AccessLevel.NONE,
+                sessionPromotion = AccessLevel.EDIT,
                 settings = AccessLevel.EDIT,
                 members = AccessLevel.EDIT
             )
@@ -215,6 +222,7 @@ data class MemberPermissions(
                 stock = AccessLevel.EDIT,
                 transport = AccessLevel.EDIT,
                 salary = AccessLevel.NONE,
+                sessionPromotion = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -235,6 +243,7 @@ data class MemberPermissions(
                 stock = AccessLevel.NONE,
                 transport = AccessLevel.NONE,
                 salary = AccessLevel.NONE,
+                sessionPromotion = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -255,6 +264,7 @@ data class MemberPermissions(
                 stock = AccessLevel.NONE,
                 transport = AccessLevel.NONE,
                 salary = AccessLevel.NONE,
+                sessionPromotion = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -279,6 +289,7 @@ data class MemberPermissions(
                 stock = AccessLevel.fromRaw(raw[AppModule.STOCK.key] as? String),
                 transport = AccessLevel.fromRaw(raw[AppModule.TRANSPORT.key] as? String),
                 salary = AccessLevel.fromRaw(raw[AppModule.SALARY.key] as? String),
+                sessionPromotion = AccessLevel.fromRaw(raw[AppModule.SESSION_PROMOTION.key] as? String),
                 settings = AccessLevel.fromRaw(raw[AppModule.SETTINGS.key] as? String),
                 members = AccessLevel.fromRaw(raw[AppModule.MEMBERS.key] as? String)
             )

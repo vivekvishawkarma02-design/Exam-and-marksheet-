@@ -422,6 +422,58 @@ Phase 13 makes the home experience immediately useful and friendly for every sch
 
 ---
 
+## Phase 14: New Session & Promotion, Bulk Student Import, and Manual Backup ZIP
+
+All Phase 14 features are mobile-first (`>= 48 dp` touch targets), Hindi-friendly with a 1-tap **`हिन्दी / EN`** toggle, offline-first with Firestore sync, and preserve Phases 1–13 report card layouts, marks calculations, grading rules, and all past-session records completely untouched.
+
+1. **19th Access Module (`Session and Promotion`) & Owner/Admin Restrictions**
+   - Added `sessionPromotion` (`No access` / `View only` / `View & edit`) to the member access matrix, enforced in both the Compose UI and `firestore.rules` (verified with emulator rules tests).
+   - **Backward-Compatible Missing-Key Rule:** Any member document without the `sessionPromotion` key defaults to `No access`. Owners and Admins automatically receive full access.
+   - **Strict Owner/Admin Gates:**
+     - **Bulk Student Import** and **Backup ZIP Export** are available **only to Owner and Admins** (hidden in UI and rejected in `firestore.rules` for all other roles).
+     - **`staff_salary.csv` inside Backup ZIP** is included **only for the Owner** (never included in Admin exports, enforced in both the ZIP engine and `firestore.rules`).
+     - **7-Day Undo of a Session Start** is **Owner-only** (enforced in both UI and `firestore.rules`).
+
+2. **New Session Wizard & Class Promotion (Per School, April–March)**
+   - **4-Step Guided Wizard with Preview Before Applying:**
+     1. Choose new session name (e.g. `2026-2027` -> `2027-2028`) and April 1 – March 31 dates.
+     2. Select independently what to copy from the previous session (each with its own checkbox): Class & Section structure, Subjects per class, Fee Structure (tuition, exam fees, optional items — without copying frozen past-session locks), Period structure & timetable settings, School Calendar template (holidays automatically shifted +1 year and editable before apply), Transport routes, and Staff list.
+     3. **Per-Class Promotion Review:** Proposed decisions come directly from the old session's Annual result using the **exact same `ReportCalculations.calculateStudentPerformance` 33% per-subject pass rule** (`Promoted`, `Detained`, `Left`, `Passed Out / Alumni` for the final class such as 8th, or `Needs Review` if no annual marks exist). Includes a 1-tap **"Promote All Passed"** bulk action (showing exceptions first), 1-tap individual overrides including **"Promoted by Grace"** (mandatory remark + approver recorded), and section/roll-number assignment (keep previous roll order or re-number alphabetically A–Z, with manual edits).
+     4. **Final Preview & Confirm:** Displays exact student counts and **total unpaid fee dues carried forward** before writing anything.
+   - **Carry-Over & Previous Session Dues:** Admission number, photo, guardian details, sibling group, and transport assignment carry over automatically. Unpaid dues from the old session never vanish — they carry forward as a clearly labelled **"Previous session dues"** line on the student's new-session Fee Account, Dues List, and Send Queue, remain collectable in full or in part, and leave the old session's receipts and totals untouched.
+   - **Editable Class Order, Alumni Search, Student Session History & A4 Promotion Register PDF:** Customise class progression order per school (e.g., `Nursery -> LKG -> UKG -> 1st .. 8th -> Passed Out / Alumni`), search passed-out alumni anytime, view any student's multi-session class history right from the **Student Register**, and export an offline **A4 Promotion Register PDF** per class.
+   - **Safe Chunked Batches, Offline Resume/Rollback & Conflict Avoidance:**
+     - Promotion commits in atomic batches of **25 students** (`SessionTransitionRecord` tracks `completedBatches / totalBatches`). If a device shuts down or fails halfway, the wizard offers **Resume** or **Rollback** cleanly.
+     - **How offline conflicts are avoided when two people promote the same class:** Every created document uses a **deterministic ID** derived from `(schoolId, toSession, admNo / oldStudentDocId)` (`stu_<school>_<toSession>_<admNo>`, `prom_<school>_<fromSession>_<toSession>_<oldStuId>`, `fov_<school>_<toSession>_<newStuId>`, `strans_<school>_<fromSession>_<toSession>`). If two staff members promote the same class offline, syncing writes to the exact same document paths (latest confirmed edit wins) — guaranteeing **zero duplicate students and zero double-counted carried-forward dues**.
+   - **7-Day Owner Undo:** Within 7 days, the Owner can undo a session start to restore the previous active session. If any new-session data (marks, attendance, receipts, certificates, or newly admitted students) already exists, the app shows an explicit warning and will never delete new-session records without confirmation.
+
+3. **Bulk Student Import (CSV & Excel `.xlsx`)**
+   - Supports **both `.csv` and Excel `.xlsx`** files using a lightweight pure-Kotlin reader (`ZipInputStream` + XXE-hardened XML DOM — zero heavy third-party libraries and zero storage permissions via Android's Document Picker).
+   - Provides a 1-tap downloadable **bilingual Hindi + English sample CSV** and an in-app step-by-step guide.
+   - **Workflow:** Pick file -> Auto-mapped Column Mapper (Hindi + English headers) -> Preview with highlighted problems (missing name, invalid class, invalid mobile, duplicate admission no. in file/DB, duplicate student) -> Fix inline or Skip rows -> Import.
+   - Normalises all Indian mobile numbers to `+91` form. Never overwrites existing students unless **"Update matching admission numbers"** is explicitly turned on (with a field-by-field diff preview). Generates both **CSV** and **A4 PDF** result reports.
+
+4. **Manual Backup ZIP Export & 30-Day Reminder**
+   - Export **Active School** or **Whole Organisation** into a single `.zip` containing `README.txt` and UTF-8 Excel-ready CSVs (`students.csv`, `guardians.csv`, `class_structure.csv`, `fee_receipts.csv`, `fee_dues.csv`, `attendance_summary.csv`, `marks.csv`, `teachers.csv`, `cash_book.csv`, `certificates_register.csv`, plus **Owner-only** `staff_salary.csv`).
+   - Save directly to Downloads / Google Drive / SD card via Android's Save picker or share via WhatsApp/Email.
+   - Displays **Last Backup Date** and a **30-day overdue reminder** on the Today Home screen, clearly noting that this is a manual local export while Firebase continues keeping the cloud copy automatically.
+
+### Yearly April Checklist for the Owner (नए सत्र की वार्षिक जाँच-सूची)
+
+1. **Take a Full End-of-Year Backup ZIP (Late March):** Open **Backup & Export ZIP**, select **Whole Organisation**, export the ZIP (includes `staff_salary.csv` for Owner), and save a copy to Google Drive or a computer.
+2. **Finish Annual Marks & Print Report Cards:** Confirm all Annual exam marks and co-scholastic grades are entered and export the final A4 Annual Report Card PDFs for the closing session.
+3. **Check Class Order:** Open **Session & Promotion -> Class Order** for each school and verify the progression order (e.g., `Nursery -> LKG -> UKG -> 1st .. 8th`) so the final class graduates to **Passed Out / Alumni**.
+4. **Run the "Start New Session" Wizard (1 April):**
+   - Pick the new session (e.g., `2027-2028`, `2027-04-01` to `2028-03-31`).
+   - Tick what to copy (Classes, Subjects, Fee Structure, Timetable settings, School Calendar holidays, Transport routes, Staff list) and adjust holiday dates for the new year.
+   - Review each class's promotions: tap **Promote All Passed**, resolve every **Needs Review** / **Detained** / **Grace** student (enter grace remarks where needed), and pick **Previous Roll** or **Alphabetical** roll numbering.
+   - Verify the **Total Dues Carried Forward** summary and tap **Confirm & Apply**.
+5. **Print Promotion Registers:** Download/print the A4 **Promotion Register PDF** for each class and file it in the school office.
+6. **Import New Admissions in Bulk:** If you have a spreadsheet of newly admitted students, open **Bulk Student Import** (`.csv` or `.xlsx`), verify the preview, and import in one go.
+7. **Update Fee Structure & Open Exams:** Review any new-year tuition/transport fee revisions in **Fees -> Fee Structure** and open **UT-I** for teacher marks entry when ready.
+
+---
+
 ## Build & Test Commands
 
 ```bash

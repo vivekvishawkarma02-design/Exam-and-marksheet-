@@ -100,8 +100,8 @@ class Phase12DomainAndAccessTest {
         )
         val parsedFromLegacy = MemberPermissions.fromMap(legacy17Map)
         assertEquals(AccessLevel.NONE, parsedFromLegacy.salary)
-        assertEquals(18, AppModule.entries.size)
-        assertEquals(18, parsedFromLegacy.toFirestoreMap().size)
+        assertEquals(19, AppModule.entries.size)
+        assertEquals(19, parsedFromLegacy.toFirestoreMap().size)
 
         // Role presets: ONLY OWNER gets EDIT on salary by default; ADMIN gets NONE
         val ownerPreset = MemberPermissions.presetFor(OrgRole.OWNER)

@@ -3892,6 +3892,320 @@ test("Phase 12: Staff Salary Owner-only default, Admin blocked without Owner gra
   await assertFails(adminNoGrantOrg.collection("salaryAuditLogs").doc("salaudit_01").update({ summary: "Tamper" }));
 });
 
+test("20. Phase 14: Session & Promotion ('sessionPromotion'), Bulk Import & Backup Export rules", async () => {
+  await seedOrgWithOwnerAndSchools();
+  const ts = pastDate(5000);
+
+  const LEGACY_UID = "p14_legacy_no_key";
+  const VIEWER_UID = "p14_session_viewer";
+  const EDITOR_UID = "p14_session_editor";
+  const ADMIN_P14_UID = "p14_admin_user";
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    const orgRef = db.collection("organisations").doc(ORG_ID);
+
+    // 1. Legacy member WITHOUT 'sessionPromotion' key -> must default to NO ACCESS
+    await orgRef.collection("members").doc(LEGACY_UID).set(
+      makeMemberPayload(LEGACY_UID, {
+        role: "OPERATOR",
+        allSchools: true,
+        schools: [SCHOOL_1, SCHOOL_2],
+        permissions: {
+          students: "view",
+          marks: "view",
+          coScholastic: "none",
+          reports: "view",
+          timetable: "none",
+          teachers: "none",
+          settings: "none",
+          members: "none",
+          // intentionally NO 'sessionPromotion' key
+        },
+      })
+    );
+
+    // 2. Member with sessionPromotion: 'view', scoped to SCHOOL_1 only
+    await orgRef.collection("members").doc(VIEWER_UID).set(
+      makeMemberPayload(VIEWER_UID, {
+        role: "OPERATOR",
+        allSchools: false,
+        schools: [SCHOOL_1],
+        permissions: {
+          ...teacherPermissions("none"),
+          sessionPromotion: "view",
+        },
+      })
+    );
+
+    // 3. Member with sessionPromotion: 'edit', scoped to SCHOOL_1 only (NOT Admin/Owner)
+    await orgRef.collection("members").doc(EDITOR_UID).set(
+      makeMemberPayload(EDITOR_UID, {
+        role: "OPERATOR",
+        allSchools: false,
+        schools: [SCHOOL_1],
+        permissions: {
+          ...teacherPermissions("none"),
+          sessionPromotion: "edit",
+        },
+      })
+    );
+
+    // 4. Active Admin (full access to sessionPromotion, bulk import, backup — EXCEPT Undo & salary CSV)
+    await orgRef.collection("members").doc(ADMIN_P14_UID).set(
+      makeMemberPayload(ADMIN_P14_UID, {
+        role: "ADMIN",
+        allSchools: true,
+        schools: [SCHOOL_1, SCHOOL_2],
+        permissions: fullPermissions("edit"),
+      })
+    );
+  });
+
+  const ownerOrg = testEnv.authenticatedContext(OWNER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const adminOrg = testEnv.authenticatedContext(ADMIN_P14_UID).firestore().collection("organisations").doc(ORG_ID);
+  const editorOrg = testEnv.authenticatedContext(EDITOR_UID).firestore().collection("organisations").doc(ORG_ID);
+  const viewerOrg = testEnv.authenticatedContext(VIEWER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const legacyOrg = testEnv.authenticatedContext(LEGACY_UID).firestore().collection("organisations").doc(ORG_ID);
+  const outsiderOrg = testEnv.authenticatedContext(OTHER_ORG_UID).firestore().collection("organisations").doc(ORG_ID);
+
+  function makeClassOrder(uid, schoolId = SCHOOL_1) {
+    return {
+      schoolId,
+      orderedClassNames: ["Nursery", "LKG", "UKG", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th"],
+      updatedByUid: uid,
+      updatedByName: "Staff User",
+      clientEditedAtMs: Date.now(),
+      updatedAt: ts,
+    };
+  }
+
+  function makeTransition(uid, status = "COMPLETED", overrides = {}) {
+    return {
+      schoolId: SCHOOL_1,
+      fromSession: "2026-2027",
+      toSession: "2027-2028",
+      startDateIso: "2027-04-01",
+      endDateIso: "2028-03-31",
+      status,
+      copyOptions: {
+        copyClassesAndSections: true,
+        copySubjects: true,
+        copyFeeStructure: true,
+        copyPeriodStructureAndTimetable: true,
+        copySchoolCalendar: true,
+        copyTransportRoutes: true,
+        copyStaffList: true,
+      },
+      totalStudentsEvaluated: 40,
+      promotedCount: 35,
+      gracePromotedCount: 2,
+      detainedCount: 1,
+      leftCount: 1,
+      passedOutCount: 1,
+      totalDuesCarriedForwardRs: 4500,
+      totalBatches: 2,
+      completedBatches: 2,
+      createdStudentDocIds: ["stu_new_01"],
+      createdFeeOverrideDocIds: ["fov_new_01"],
+      createdPromotionRecordIds: ["prom_01"],
+      createdFeeStructureDocId: "fstruct_sch_primary_01_2027_2028",
+      createdCalendarDocId: "cal_sch_primary_01_2027_2028",
+      previousCurrentSession: "2026-2027",
+      previousSessionsCsv: "2026-2027",
+      appliedByUid: uid,
+      appliedByName: "Staff User",
+      appliedAtMs: Date.now(),
+      undoExpiresAtMs: Date.now() + 7 * 24 * 3600 * 1000,
+      undoneByUid: "",
+      undoneByName: "",
+      undoneAtMs: 0,
+      updatedAt: ts,
+      ...overrides,
+    };
+  }
+
+  function makePromotionRecord(uid, overrides = {}) {
+    return {
+      schoolId: SCHOOL_1,
+      transitionId: "st_sch_primary_01_2026_2027_to_2027_2028",
+      fromSession: "2026-2027",
+      toSession: "2027-2028",
+      oldStudentDocId: "stu_old_01",
+      newStudentDocId: "stu_new_01",
+      admNo: "ADM-101",
+      studentName: "Aarav Sharma",
+      fatherName: "Rajesh Sharma",
+      mobile: "+919876543210",
+      fromClassName: "5th",
+      fromSection: "A",
+      fromRollNo: 1,
+      toClassName: "6th",
+      toSection: "A",
+      toRollNo: 1,
+      annualPercent: 78.5,
+      annualResultStatus: "PASS",
+      decision: "PROMOTED",
+      isAlumni: false,
+      graceRemark: "",
+      graceApprovedByUid: "",
+      graceApprovedByName: "",
+      carriedForwardDueRs: 1200,
+      confirmedByUid: uid,
+      confirmedByName: "Staff User",
+      confirmedAtMs: Date.now(),
+      updatedAt: ts,
+      ...overrides,
+    };
+  }
+
+  // =========================================================================
+  // 1. SCHOOL CLASS ORDERS & MISSING-KEY = NO ACCESS
+  // =========================================================================
+  await assertSucceeds(editorOrg.collection("schoolClassOrders").doc(SCHOOL_1).set(makeClassOrder(EDITOR_UID, SCHOOL_1)));
+  // Scoped editor cannot write to SCHOOL_2
+  await assertFails(editorOrg.collection("schoolClassOrders").doc(SCHOOL_2).set(makeClassOrder(EDITOR_UID, SCHOOL_2)));
+  // Viewer can read SCHOOL_1 class order, cannot write
+  await assertSucceeds(viewerOrg.collection("schoolClassOrders").doc(SCHOOL_1).get());
+  await assertFails(viewerOrg.collection("schoolClassOrders").doc(SCHOOL_1).set(makeClassOrder(VIEWER_UID, SCHOOL_1)));
+  // Legacy member missing 'sessionPromotion' key -> DENIED read & write
+  await assertFails(legacyOrg.collection("schoolClassOrders").doc(SCHOOL_1).get());
+  await assertFails(legacyOrg.collection("schoolClassOrders").doc(SCHOOL_1).set(makeClassOrder(LEGACY_UID, SCHOOL_1)));
+  // Outsider from another org -> DENIED
+  await assertFails(outsiderOrg.collection("schoolClassOrders").doc(SCHOOL_1).get());
+
+  // =========================================================================
+  // 2. SESSION TRANSITIONS & OWNER-ONLY 7-DAY UNDO ('UNDONE')
+  // =========================================================================
+  const transId = "st_sch_primary_01_2026_2027_to_2027_2028";
+  // Editor creates IN_PROGRESS and completes transition for SCHOOL_1
+  await assertSucceeds(editorOrg.collection("sessionTransitions").doc(transId).set(makeTransition(EDITOR_UID, "IN_PROGRESS")));
+  await assertSucceeds(editorOrg.collection("sessionTransitions").doc(transId).set(makeTransition(EDITOR_UID, "COMPLETED")));
+  // Viewer can read transition, cannot write; Legacy missing key cannot read
+  await assertSucceeds(viewerOrg.collection("sessionTransitions").doc(transId).get());
+  await assertFails(viewerOrg.collection("sessionTransitions").doc(transId).set(makeTransition(VIEWER_UID, "COMPLETED")));
+  await assertFails(legacyOrg.collection("sessionTransitions").doc(transId).get());
+
+  // Editor can update org settings.currentSession & sessionsCsv ONLY (cannot change passPercent)
+  await assertSucceeds(editorOrg.update({
+    settings: {
+      ...defaultSettings(),
+      currentSession: "2027-2028",
+      sessionsCsv: "2026-2027,2027-2028",
+    },
+    updatedAt: ts,
+  }));
+  await assertFails(editorOrg.update({
+    settings: {
+      ...defaultSettings(),
+      currentSession: "2027-2028",
+      sessionsCsv: "2026-2027,2027-2028",
+      passPercent: 40, // forbidden for sessionPromotion editor
+    },
+    updatedAt: ts,
+  }));
+
+  // Neither Editor nor Admin can mark a transition UNDONE (Owner-only!)
+  await assertFails(editorOrg.collection("sessionTransitions").doc(transId).set(
+    makeTransition(EDITOR_UID, "UNDONE", { undoneByUid: EDITOR_UID, undoneByName: "Editor", undoneAtMs: Date.now() })
+  ));
+  await assertFails(adminOrg.collection("sessionTransitions").doc(transId).set(
+    makeTransition(EDITOR_UID, "UNDONE", { undoneByUid: ADMIN_P14_UID, undoneByName: "Admin", undoneAtMs: Date.now() })
+  ));
+  // Owner CAN mark transition UNDONE
+  await assertSucceeds(ownerOrg.collection("sessionTransitions").doc(transId).set(
+    makeTransition(EDITOR_UID, "UNDONE", { undoneByUid: OWNER_UID, undoneByName: "Principal Owner", undoneAtMs: Date.now() })
+  ));
+
+  // =========================================================================
+  // 3. PROMOTION RECORDS & MANDATORY GRACE REMARK
+  // =========================================================================
+  const promId = "prom_sch_primary_01_2027_2028_stu_old_01";
+  await assertSucceeds(editorOrg.collection("promotionRecords").doc(promId).set(makePromotionRecord(EDITOR_UID)));
+  // PROMOTED_BY_GRACE with empty graceRemark MUST FAIL
+  await assertFails(editorOrg.collection("promotionRecords").doc("prom_grace_bad").set(
+    makePromotionRecord(EDITOR_UID, {
+      decision: "PROMOTED_BY_GRACE",
+      graceRemark: "",
+      graceApprovedByUid: OWNER_UID,
+      graceApprovedByName: "Principal",
+    })
+  ));
+  // PROMOTED_BY_GRACE with non-empty graceRemark SUCCEEDS
+  await assertSucceeds(editorOrg.collection("promotionRecords").doc("prom_grace_ok").set(
+    makePromotionRecord(EDITOR_UID, {
+      decision: "PROMOTED_BY_GRACE",
+      graceRemark: "Medical leave during annual exam, approved by Principal",
+      graceApprovedByUid: OWNER_UID,
+      graceApprovedByName: "Principal",
+    })
+  ));
+  // Viewer can read, cannot write
+  await assertSucceeds(viewerOrg.collection("promotionRecords").doc(promId).get());
+  await assertFails(viewerOrg.collection("promotionRecords").doc(promId).set(makePromotionRecord(VIEWER_UID)));
+
+  // =========================================================================
+  // 4. BULK STUDENT IMPORT LOGS — STRICTLY OWNER & ADMIN ONLY
+  // =========================================================================
+  function makeBulkLog(uid) {
+    return {
+      schoolId: SCHOOL_1,
+      session: "2027-2028",
+      fileName: "students_2027.csv",
+      totalRows: 50,
+      addedCount: 48,
+      updatedCount: 0,
+      skippedCount: 1,
+      errorCount: 1,
+      updateMatchingEnabled: false,
+      actorUid: uid,
+      actorName: "User",
+      importedAtMs: Date.now(),
+      createdAt: ts,
+    };
+  }
+  // Session editor (non-Admin) & Viewer & Legacy CANNOT create or read bulkImportLogs
+  await assertFails(editorOrg.collection("bulkImportLogs").doc("bimp_1").set(makeBulkLog(EDITOR_UID)));
+  await assertFails(viewerOrg.collection("bulkImportLogs").doc("bimp_1").set(makeBulkLog(VIEWER_UID)));
+  await assertFails(legacyOrg.collection("bulkImportLogs").doc("bimp_1").set(makeBulkLog(LEGACY_UID)));
+  // Admin & Owner CAN create & read bulkImportLogs (immutable: update always fails)
+  await assertSucceeds(adminOrg.collection("bulkImportLogs").doc("bimp_admin").set(makeBulkLog(ADMIN_P14_UID)));
+  await assertSucceeds(ownerOrg.collection("bulkImportLogs").doc("bimp_owner").set(makeBulkLog(OWNER_UID)));
+  await assertSucceeds(adminOrg.collection("bulkImportLogs").doc("bimp_owner").get());
+  await assertFails(editorOrg.collection("bulkImportLogs").doc("bimp_owner").get());
+  await assertFails(adminOrg.collection("bulkImportLogs").doc("bimp_admin").update({ addedCount: 99 }));
+
+  // =========================================================================
+  // 5. BACKUP EXPORT LOGS — OWNER & ADMIN ONLY; SALARY CSV OWNER-ONLY
+  // =========================================================================
+  function makeBackupLog(uid, role, includedSalaryCsv) {
+    return {
+      scope: "ORGANISATION",
+      schoolId: "",
+      fileName: "backup_org_2027.zip",
+      includedSalaryCsv,
+      studentCount: 120,
+      receiptCount: 450,
+      actorUid: uid,
+      actorName: "User",
+      actorRole: role,
+      exportedAtMs: Date.now(),
+      createdAt: ts,
+    };
+  }
+  // Non-admin editor/viewer/legacy DENIED
+  await assertFails(editorOrg.collection("backupExportLogs").doc("bk_ed").set(makeBackupLog(EDITOR_UID, "ADMIN", false)));
+  await assertFails(legacyOrg.collection("backupExportLogs").doc("bk_leg").set(makeBackupLog(LEGACY_UID, "ADMIN", false)));
+  // Admin CAN export WITHOUT salary CSV, DENIED if includedSalaryCsv == true
+  await assertSucceeds(adminOrg.collection("backupExportLogs").doc("bk_admin_ok").set(makeBackupLog(ADMIN_P14_UID, "ADMIN", false)));
+  await assertFails(adminOrg.collection("backupExportLogs").doc("bk_admin_sal").set(makeBackupLog(ADMIN_P14_UID, "ADMIN", true)));
+  // Owner CAN export WITH salary CSV == true
+  await assertSucceeds(ownerOrg.collection("backupExportLogs").doc("bk_owner_sal").set(makeBackupLog(OWNER_UID, "OWNER", true)));
+  await assertSucceeds(adminOrg.collection("backupExportLogs").doc("bk_owner_sal").get());
+  await assertFails(editorOrg.collection("backupExportLogs").doc("bk_owner_sal").get());
+});
+
+
 
 
 

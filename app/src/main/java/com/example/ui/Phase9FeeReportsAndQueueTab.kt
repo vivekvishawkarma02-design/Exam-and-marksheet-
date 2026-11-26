@@ -68,6 +68,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.FeeHeadType
@@ -193,15 +194,16 @@ fun Phase9FeeReportsTab(
                             modifier = Modifier.padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Text(
                                     text = "Day Collection Register",
                                     style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Button(
                                     onClick = {
@@ -212,12 +214,13 @@ fun Phase9FeeReportsTab(
                                         )
                                     },
                                     modifier = Modifier
+                                        .fillMaxWidth()
                                         .heightIn(min = 48.dp)
                                         .testTag("fee_report_day_collection_pdf_button")
                                 ) {
                                     Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("A4 PDF Report")
+                                    Text("A4 PDF Report", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
 
@@ -350,36 +353,44 @@ fun Phase9FeeReportsTab(
                             modifier = Modifier.padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
+                                Column(modifier = Modifier.fillMaxWidth()) {
                                     Text(
                                         text = "Dues List Report (${duesRows.size} Students)",
                                         style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
                                         text = "Total Due: Rs. $grandTotalDue",
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFB71C1C)
+                                        color = Color(0xFFB71C1C),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
                                     OutlinedButton(
                                         onClick = {
                                             exportDuesCsvLauncher.launch("fee_dues_${session}.csv")
                                         },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                                         modifier = Modifier
+                                            .weight(1f)
                                             .heightIn(min = 48.dp)
                                             .testTag("fee_report_dues_csv_button")
                                     ) {
                                         Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("CSV")
+                                        Text("CSV", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
                                     Button(
                                         onClick = {
@@ -391,13 +402,15 @@ fun Phase9FeeReportsTab(
                                                 headTypeFilter = duesHeadFilter
                                             )
                                         },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                                         modifier = Modifier
+                                            .weight(1f)
                                             .heightIn(min = 48.dp)
                                             .testTag("fee_report_dues_pdf_button")
                                     ) {
                                         Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("A4 PDF")
+                                        Text("A4 PDF", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
                                 }
                             }
@@ -472,6 +485,7 @@ fun Phase9FeeReportsTab(
                             HorizontalDivider()
 
                             duesRows.forEach { row ->
+                                val prevSessionDue = row.dueByHead[FeeHeadType.PREVIOUS_SESSION_DUE] ?: 0
                                 val tuitionDue = row.dueByHead[FeeHeadType.TUITION] ?: 0
                                 val transportDue = row.dueByHead[FeeHeadType.TRANSPORT] ?: 0
                                 val examDue = FeeHeadType.examHeads.sumOf { row.dueByHead[it] ?: 0 }
@@ -510,8 +524,12 @@ fun Phase9FeeReportsTab(
                                                 color = Color(0xFFB71C1C)
                                             )
                                         }
+                                        val breakdownLine = buildString {
+                                            if (prevSessionDue > 0) append("Prev. Session: Rs.$prevSessionDue • ")
+                                            append("Tuition: Rs.$tuitionDue • Transport: Rs.$transportDue • Exam: Rs.$examDue")
+                                        }
                                         Text(
-                                            "Tuition: Rs.$tuitionDue • Transport: Rs.$transportDue • Exam: Rs.$examDue",
+                                            breakdownLine,
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                         Text(

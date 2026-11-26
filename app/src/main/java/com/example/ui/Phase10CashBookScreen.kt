@@ -222,26 +222,29 @@ fun Phase10CashBookScreen(
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("phase10_cashbook_screen")
     ) {
-        // Header
-        Row(
+        // Two-row responsive Header
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 IconButton(
                     onClick = onBack,
                     modifier = Modifier.testTag("cashbook_back_button")
                 ) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = p10Label(isHindi, "रोकड़ बही (Cash Book)", "Cash Book"),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("cashbook_header_title")
                     )
                     Text(
                         text = activeSchool.name,
@@ -252,12 +255,26 @@ fun Phase10CashBookScreen(
                     )
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                IconButton(
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
                     onClick = { showAuditLogDialog = true },
-                    modifier = Modifier.testTag("cashbook_audit_log_button")
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("cashbook_audit_log_button")
                 ) {
-                    Icon(Icons.Default.History, contentDescription = "Audit Log")
+                    Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = p10Label(isHindi, "ऑडिट लॉग", "Audit Log"),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
                 Phase10LanguageToggleChip(
                     isHindi = isHindi,

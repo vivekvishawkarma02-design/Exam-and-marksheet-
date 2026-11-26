@@ -67,11 +67,13 @@ jobs:
         with:
           gradle-version: 9.3.1
 
-      - name: Create temporary debug keystore
+      - name: Prepare debug keystore
+        id: debug_keystore
         shell: bash
         run: |
           set -euo pipefail
           KEYSTORE_PATH="./debug.keystore"
+          BASE64_PATH="./debug.keystore.base64"
           KEYTOOL_BIN="${JAVA_HOME}/bin/keytool"
 
           if [[ ! -x "${KEYTOOL_BIN}" ]]; then
@@ -79,9 +81,16 @@ jobs:
             exit 1
           fi
 
-          if [[ -f "${KEYSTORE_PATH}" ]]; then
-            echo "Debug keystore already exists at ${KEYSTORE_PATH}; skipping generation."
+          if [[ -f "${KEYSTORE_PATH}" && -s "${KEYSTORE_PATH}" ]]; then
+            KEYSTORE_SOURCE="committed debug.keystore"
+            echo "Using existing fixed debug keystore at ${KEYSTORE_PATH}; skipping generation."
+          elif [[ -f "${BASE64_PATH}" && -s "${BASE64_PATH}" ]]; then
+            KEYSTORE_SOURCE="committed debug.keystore.base64"
+            echo "Decoding fixed debug keystore from ${BASE64_PATH} to ${KEYSTORE_PATH}; skipping generation."
+            tr -d '\r\n' < "${BASE64_PATH}" | base64 -d > "${KEYSTORE_PATH}"
           else
+            KEYSTORE_SOURCE="fallback temporary debug keystore"
+            echo "::warning::Neither ${KEYSTORE_PATH} nor ${BASE64_PATH} found; generating fallback temporary debug keystore."
             "${KEYTOOL_BIN}" -genkeypair -v \
               -keystore "${KEYSTORE_PATH}" \
               -storepass android \
@@ -90,16 +99,17 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US" \
               -keyalg RSA \
               -keysize 2048 \
-              -validity 10000 \
+              -validity 10950 \
               >/dev/null 2>&1
           fi
 
           if [[ ! -f "${KEYSTORE_PATH}" || ! -s "${KEYSTORE_PATH}" ]]; then
-            echo "::error::Failed to create temporary debug keystore at ${KEYSTORE_PATH}."
+            echo "::error::Failed to prepare debug keystore at ${KEYSTORE_PATH}."
             exit 1
           fi
 
-          echo "Verified temporary debug keystore exists."
+          echo "keystore_source=${KEYSTORE_SOURCE}" >> "${GITHUB_OUTPUT}"
+          echo "Verified debug keystore exists (source: ${KEYSTORE_SOURCE})."
 
       - name: Ensure Android SDK 36.1 and build-tools are installed
         shell: bash
@@ -248,6 +258,56 @@ jobs:
           APK_SIZE="$(wc -c < "${EXPECTED_APK}")"
           echo "Verified debug APK: ${EXPECTED_APK} (${APK_SIZE} bytes)"
 
+      - name: Print debug keystore SHA-1 and SHA-256
+        id: keystore_fingerprints
+        shell: bash
+        env:
+          KEYSTORE_SOURCE: ${{ steps.debug_keystore.outputs.keystore_source }}
+        run: |
+          set -euo pipefail
+          KEYSTORE_PATH="./debug.keystore"
+          KEYTOOL_BIN="${JAVA_HOME}/bin/keytool"
+
+          if [[ ! -f "${KEYSTORE_PATH}" || ! -s "${KEYSTORE_PATH}" ]]; then
+            echo "::error::Debug keystore not found at ${KEYSTORE_PATH}."
+            exit 1
+          fi
+
+          KEYTOOL_OUT="$("${KEYTOOL_BIN}" -list -v -keystore "${KEYSTORE_PATH}" -storepass android -alias androiddebugkey)"
+          echo "=== Debug Keystore Fingerprints (source: ${KEYSTORE_SOURCE}) ==="
+          printf '%s\n' "${KEYTOOL_OUT}"
+
+          SHA1_VALUE="$(printf '%s\n' "${KEYTOOL_OUT}" | sed -n 's/^[[:space:]]*SHA1:[[:space:]]*//p' | head -n 1)"
+          SHA256_VALUE="$(printf '%s\n' "${KEYTOOL_OUT}" | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -n 1)"
+
+          if [[ -z "${SHA1_VALUE}" || -z "${SHA256_VALUE}" ]]; then
+            echo "::error::Failed to parse SHA-1 or SHA-256 from keytool output."
+            exit 1
+          fi
+
+          echo "DEBUG_KEYSTORE_SHA1=${SHA1_VALUE}"
+          echo "DEBUG_KEYSTORE_SHA256=${SHA256_VALUE}"
+          echo "sha1=${SHA1_VALUE}" >> "${GITHUB_OUTPUT}"
+          echo "sha256=${SHA256_VALUE}" >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "## Debug Keystore Fingerprints (Google Sign-In / Firebase)"
+            echo ""
+            echo "- **Keystore Source:** \`${KEYSTORE_SOURCE}\`"
+            echo "- **Alias:** \`androiddebugkey\`"
+            echo "- **SHA-1:** \`${SHA1_VALUE}\`"
+            echo "- **SHA-256:** \`${SHA256_VALUE}\`"
+            echo ""
+            echo "<details>"
+            echo "<summary>Full <code>keytool -list -v</code> output</summary>"
+            echo ""
+            echo '```text'
+            printf '%s\n' "${KEYTOOL_OUT}"
+            echo '```'
+            echo "</details>"
+            echo ""
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Upload debug APK artifact
         id: upload_artifact
         uses: actions/upload-artifact@v4
@@ -300,6 +360,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ASSET_PATH: ${{ steps.prepare_release_asset.outputs.asset_path }}
           ASSET_NAME: ${{ steps.prepare_release_asset.outputs.asset_name }}
+          KEYSTORE_SOURCE: ${{ steps.debug_keystore.outputs.keystore_source }}
+          DEBUG_SHA1: ${{ steps.keystore_fingerprints.outputs.sha1 }}
+          DEBUG_SHA256: ${{ steps.keystore_fingerprints.outputs.sha256 }}
         run: |
           set -euo pipefail
 
@@ -325,11 +388,14 @@ jobs:
           - **Workflow Run Attempt:** ${GITHUB_RUN_ATTEMPT}
           - **Source Commit SHA:** ${GITHUB_SHA}
           - **APK File:** \`${ASSET_NAME}\`
+          - **Debug Keystore Source:** \`${KEYSTORE_SOURCE}\`
+          - **SHA-1:** \`${DEBUG_SHA1}\`
+          - **SHA-256:** \`${DEBUG_SHA256}\`
 
           ### Important Notice
           - This APK is intended for testing only.
           - This APK is not a Play Store production release.
-          - This APK is signed only with a temporary debug keystore.
+          - This APK is signed with the debug keystore only (release builds use the separate release signingConfig).
           EOF
           )"
 

@@ -559,34 +559,34 @@ fun Phase9FeeStructureTab(
                     }
 
                     optionalCatalogue.forEachIndexed { idx, item ->
-                        Row(
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${item.name} • Rs. ${item.price}" +
-                                        if (item.hidden) " (Hidden)" else "",
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = if (item.hidden) {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurface
-                                    }
-                                )
-                                Text(
-                                    text = if (item.classFilter.isEmpty()) {
-                                        "All Classes"
-                                    } else {
-                                        "Classes: ${item.classFilter.joinToString(", ")}"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            Text(
+                                text = "${item.name} • Rs. ${item.price}" +
+                                    if (item.hidden) " (Hidden)" else "",
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (item.hidden) {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
+                            )
+                            Text(
+                                text = if (item.classFilter.isEmpty()) {
+                                    "All Classes"
+                                } else {
+                                    "Classes: ${item.classFilter.joinToString(", ")}"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                             if (canEditFees) {
-                                Row {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
                                     IconButton(
                                         onClick = {
                                             editingCatalogueItem = item
@@ -955,7 +955,7 @@ fun Phase9FeeStructureTab(
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        FeeHeadType.entries.forEach { ht ->
+                        FeeHeadType.regularHeads.forEach { ht ->
                             FilterChip(
                                 selected = headType == ht,
                                 onClick = {

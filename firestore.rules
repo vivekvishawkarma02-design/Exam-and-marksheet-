@@ -40,14 +40,14 @@ service cloud.firestore {
 
     function isValidPermissionsMap(perms) {
       return perms is map &&
-        perms.size() >= 8 && perms.size() <= 18 &&
+        perms.size() >= 8 && perms.size() <= 19 &&
         perms.keys().hasAll(['students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members']) &&
         perms.keys().hasOnly([
           'students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members',
           'attendance', 'fees', 'studentRegister',
           'certificates', 'cashBook', 'enquiry',
           'exams', 'stock', 'transport',
-          'salary'
+          'salary', 'sessionPromotion'
         ]) &&
         perms.students in ['none', 'view', 'edit'] &&
         perms.marks in ['none', 'view', 'edit'] &&
@@ -66,7 +66,8 @@ service cloud.firestore {
         (!('exams' in perms) || perms.exams in ['none', 'view', 'edit']) &&
         (!('stock' in perms) || perms.stock in ['none', 'view', 'edit']) &&
         (!('transport' in perms) || perms.transport in ['none', 'view', 'edit']) &&
-        (!('salary' in perms) || perms.salary in ['none', 'view', 'edit']);
+        (!('salary' in perms) || perms.salary in ['none', 'view', 'edit']) &&
+        (!('sessionPromotion' in perms) || perms.sessionPromotion in ['none', 'view', 'edit']);
     }
 
     function isValidStringList(listVal, maxLen) {
@@ -274,6 +275,7 @@ service cloud.firestore {
         (m.role in ['OWNER', 'ADMIN'] || m.allSchools == true || schoolId in m.schools) && (
           m.role in ['OWNER', 'ADMIN'] ||
           hasModuleEdit(orgId, 'settings') ||
+          hasModuleEdit(orgId, 'sessionPromotion') ||
           (m.role != 'TEACHER' && hasModuleEdit(orgId, 'attendance'))
         );
     }
@@ -613,7 +615,8 @@ service cloud.firestore {
           'mark', 'student', 'member', 'access', 'school', 'organisation', 'migration', 'invite',
           'teacher', 'periodStructure', 'assignment', 'subjectRule', 'timetable', 'leave',
           'substitution', 'timetableUndo', 'teacherAttendance', 'teacherScope', 'schoolCalendar',
-          'studentAttendance', 'feeStructure', 'feeOverride', 'feeReceipt', 'feeNotice'
+          'studentAttendance', 'feeStructure', 'feeOverride', 'feeReceipt', 'feeNotice',
+          'sessionTransition', 'promotion', 'bulkImport', 'backupExport'
         ] &&
         data.targetId is string && data.targetId.size() <= 128 &&
         data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 300 &&
@@ -988,6 +991,7 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'schoolId', 'session', 'studentId', 'studentName', 'cellOverrides', 'remark',
+          'previousSessionDueAmount', 'previousSessionDueLabel',
           'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.schoolId) &&
@@ -996,6 +1000,8 @@ service cloud.firestore {
         data.studentName is string && data.studentName.size() <= 120 &&
         data.cellOverrides is map && data.cellOverrides.size() <= 120 &&
         data.remark is string && data.remark.size() >= 1 && data.remark.size() <= 300 &&
+        (!('previousSessionDueAmount' in data) || (data.previousSessionDueAmount is int && data.previousSessionDueAmount >= 0 && data.previousSessionDueAmount <= 10000000)) &&
+        (!('previousSessionDueLabel' in data) || (data.previousSessionDueLabel is string && data.previousSessionDueLabel.size() <= 120)) &&
         data.updatedByUid == request.auth.uid &&
         data.updatedByName is string && data.updatedByName.size() <= 120 &&
         data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
@@ -1741,6 +1747,181 @@ service cloud.firestore {
     }
 
     // =========================================================================
+    // PHASE 14 VALIDATORS: SESSION & PROMOTION ('sessionPromotion'),
+    // BULK STUDENT IMPORT (Owner/Admin only), BACKUP EXPORT (Owner/Admin only)
+    // =========================================================================
+
+    function isValidSchoolClassOrder(data, schoolId) {
+      return data.keys().hasAll([
+          'schoolId', 'orderedClassNames', 'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'orderedClassNames', 'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        data.schoolId == schoolId &&
+        isValidStringList(data.orderedClassNames, 40) &&
+        data.orderedClassNames.size() >= 1 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSessionTransition(data) {
+      return data.keys().hasAll([
+          'schoolId', 'fromSession', 'toSession', 'startDateIso', 'endDateIso', 'status',
+          'copyOptions', 'totalStudentsEvaluated', 'promotedCount', 'gracePromotedCount',
+          'detainedCount', 'leftCount', 'passedOutCount', 'totalDuesCarriedForwardRs',
+          'totalBatches', 'completedBatches', 'createdStudentDocIds', 'createdFeeOverrideDocIds',
+          'createdPromotionRecordIds', 'createdFeeStructureDocId', 'createdCalendarDocId',
+          'previousCurrentSession', 'previousSessionsCsv',
+          'appliedByUid', 'appliedByName', 'appliedAtMs', 'undoExpiresAtMs',
+          'undoneByUid', 'undoneByName', 'undoneAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'fromSession', 'toSession', 'startDateIso', 'endDateIso', 'status',
+          'copyOptions', 'totalStudentsEvaluated', 'promotedCount', 'gracePromotedCount',
+          'detainedCount', 'leftCount', 'passedOutCount', 'totalDuesCarriedForwardRs',
+          'totalBatches', 'completedBatches', 'createdStudentDocIds', 'createdFeeOverrideDocIds',
+          'createdPromotionRecordIds', 'createdFeeStructureDocId', 'createdCalendarDocId',
+          'previousCurrentSession', 'previousSessionsCsv',
+          'appliedByUid', 'appliedByName', 'appliedAtMs', 'undoExpiresAtMs',
+          'undoneByUid', 'undoneByName', 'undoneAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.fromSession is string && data.fromSession.size() >= 4 && data.fromSession.size() <= 30 &&
+        data.toSession is string && data.toSession.size() >= 4 && data.toSession.size() <= 30 &&
+        data.fromSession != data.toSession &&
+        isValidIsoDate(data.startDateIso) &&
+        isValidIsoDate(data.endDateIso) &&
+        data.endDateIso >= data.startDateIso &&
+        data.status in ['IN_PROGRESS', 'COMPLETED', 'ROLLED_BACK', 'UNDONE'] &&
+        data.copyOptions is map && data.copyOptions.size() <= 12 &&
+        data.totalStudentsEvaluated is int && data.totalStudentsEvaluated >= 0 &&
+        data.promotedCount is int && data.promotedCount >= 0 &&
+        data.gracePromotedCount is int && data.gracePromotedCount >= 0 &&
+        data.detainedCount is int && data.detainedCount >= 0 &&
+        data.leftCount is int && data.leftCount >= 0 &&
+        data.passedOutCount is int && data.passedOutCount >= 0 &&
+        data.totalDuesCarriedForwardRs is int && data.totalDuesCarriedForwardRs >= 0 &&
+        data.totalBatches is int && data.totalBatches >= 0 &&
+        data.completedBatches is int && data.completedBatches >= 0 &&
+        isValidStringList(data.createdStudentDocIds, 3000) &&
+        isValidStringList(data.createdFeeOverrideDocIds, 3000) &&
+        isValidStringList(data.createdPromotionRecordIds, 3000) &&
+        data.createdFeeStructureDocId is string && data.createdFeeStructureDocId.size() <= 128 &&
+        data.createdCalendarDocId is string && data.createdCalendarDocId.size() <= 128 &&
+        data.previousCurrentSession is string && data.previousCurrentSession.size() <= 30 &&
+        data.previousSessionsCsv is string && data.previousSessionsCsv.size() <= 500 &&
+        data.appliedByUid is string && data.appliedByUid.size() >= 1 && data.appliedByUid.size() <= 128 &&
+        data.appliedByName is string && data.appliedByName.size() <= 120 &&
+        data.appliedAtMs is int && data.appliedAtMs >= 0 &&
+        data.undoExpiresAtMs is int && data.undoExpiresAtMs >= 0 &&
+        data.undoneByUid is string && data.undoneByUid.size() <= 128 &&
+        data.undoneByName is string && data.undoneByName.size() <= 120 &&
+        data.undoneAtMs is int && data.undoneAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidPromotionRecord(data) {
+      return data.keys().hasAll([
+          'schoolId', 'transitionId', 'fromSession', 'toSession',
+          'oldStudentDocId', 'newStudentDocId', 'admNo', 'studentName', 'fatherName', 'mobile',
+          'fromClassName', 'fromSection', 'fromRollNo',
+          'toClassName', 'toSection', 'toRollNo',
+          'annualPercent', 'annualResultStatus', 'decision', 'isAlumni',
+          'graceRemark', 'graceApprovedByUid', 'graceApprovedByName',
+          'carriedForwardDueRs', 'confirmedByUid', 'confirmedByName', 'confirmedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'transitionId', 'fromSession', 'toSession',
+          'oldStudentDocId', 'newStudentDocId', 'admNo', 'studentName', 'fatherName', 'mobile',
+          'fromClassName', 'fromSection', 'fromRollNo',
+          'toClassName', 'toSection', 'toRollNo',
+          'annualPercent', 'annualResultStatus', 'decision', 'isAlumni',
+          'graceRemark', 'graceApprovedByUid', 'graceApprovedByName',
+          'carriedForwardDueRs', 'confirmedByUid', 'confirmedByName', 'confirmedAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        isValidId(data.transitionId) &&
+        data.fromSession is string && data.fromSession.size() >= 4 && data.fromSession.size() <= 30 &&
+        data.toSession is string && data.toSession.size() >= 4 && data.toSession.size() <= 30 &&
+        isValidId(data.oldStudentDocId) &&
+        data.newStudentDocId is string && data.newStudentDocId.size() <= 128 &&
+        data.admNo is string && data.admNo.size() <= 60 &&
+        data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120 &&
+        data.fatherName is string && data.fatherName.size() <= 120 &&
+        data.mobile is string && data.mobile.size() <= 40 &&
+        data.fromClassName is string && data.fromClassName.size() >= 1 && data.fromClassName.size() <= 40 &&
+        data.fromSection is string && data.fromSection.size() >= 1 && data.fromSection.size() <= 10 &&
+        data.fromRollNo is int && data.fromRollNo >= 1 && data.fromRollNo <= 9999 &&
+        data.toClassName is string && data.toClassName.size() <= 40 &&
+        data.toSection is string && data.toSection.size() <= 10 &&
+        data.toRollNo is int && data.toRollNo >= 0 && data.toRollNo <= 9999 &&
+        data.annualPercent is number && data.annualPercent >= 0 && data.annualPercent <= 100 &&
+        data.annualResultStatus in ['PASS', 'FAIL', 'PENDING'] &&
+        data.decision in ['PROMOTED', 'PROMOTED_BY_GRACE', 'DETAINED', 'LEFT', 'PASSED_OUT'] &&
+        data.isAlumni is bool &&
+        data.graceRemark is string && data.graceRemark.size() <= 300 &&
+        (data.decision != 'PROMOTED_BY_GRACE' || data.graceRemark.size() >= 1) &&
+        data.graceApprovedByUid is string && data.graceApprovedByUid.size() <= 128 &&
+        data.graceApprovedByName is string && data.graceApprovedByName.size() <= 120 &&
+        data.carriedForwardDueRs is int && data.carriedForwardDueRs >= 0 &&
+        data.confirmedByUid == request.auth.uid &&
+        data.confirmedByName is string && data.confirmedByName.size() >= 1 && data.confirmedByName.size() <= 120 &&
+        data.confirmedAtMs is int && data.confirmedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidBulkImportLog(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'fileName', 'totalRows', 'addedCount', 'updatedCount',
+          'skippedCount', 'errorCount', 'updateMatchingEnabled',
+          'actorUid', 'actorName', 'importedAtMs', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'fileName', 'totalRows', 'addedCount', 'updatedCount',
+          'skippedCount', 'errorCount', 'updateMatchingEnabled',
+          'actorUid', 'actorName', 'importedAtMs', 'createdAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.fileName is string && data.fileName.size() <= 160 &&
+        data.totalRows is int && data.totalRows >= 0 &&
+        data.addedCount is int && data.addedCount >= 0 &&
+        data.updatedCount is int && data.updatedCount >= 0 &&
+        data.skippedCount is int && data.skippedCount >= 0 &&
+        data.errorCount is int && data.errorCount >= 0 &&
+        data.updateMatchingEnabled is bool &&
+        data.actorUid == request.auth.uid &&
+        data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
+        data.importedAtMs is int && data.importedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidBackupExportLog(data) {
+      return data.keys().hasAll([
+          'scope', 'schoolId', 'fileName', 'includedSalaryCsv', 'studentCount', 'receiptCount',
+          'actorUid', 'actorName', 'actorRole', 'exportedAtMs', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'scope', 'schoolId', 'fileName', 'includedSalaryCsv', 'studentCount', 'receiptCount',
+          'actorUid', 'actorName', 'actorRole', 'exportedAtMs', 'createdAt'
+        ]) &&
+        data.scope in ['SCHOOL', 'ORGANISATION'] &&
+        data.schoolId is string && data.schoolId.size() <= 128 &&
+        data.fileName is string && data.fileName.size() <= 160 &&
+        data.includedSalaryCsv is bool &&
+        data.studentCount is int && data.studentCount >= 0 &&
+        data.receiptCount is int && data.receiptCount >= 0 &&
+        data.actorUid == request.auth.uid &&
+        data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
+        data.actorRole in ['OWNER', 'ADMIN'] &&
+        data.exportedAtMs is int && data.exportedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    // =========================================================================
     // 1. PRIVATE USER ACCOUNT & MEMBERSHIPS INDEX
     // =========================================================================
     match /users/{uid} {
@@ -1813,6 +1994,16 @@ service cloud.firestore {
             (isOrgAdmin(orgId) || hasModuleEdit(orgId, 'settings')) &&
             incoming().ownerUid == existing().ownerUid &&
             incoming().diff(existing()).affectedKeys().hasOnly(['name', 'contactMobile', 'contactEmail', 'settings', 'updatedAt'])
+          ) ||
+          // Action 1b: Session & Promotion editor updating active session & sessionsCsv ONLY
+          (
+            hasModuleEdit(orgId, 'sessionPromotion') &&
+            incoming().ownerUid == existing().ownerUid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['settings', 'updatedAt']) &&
+            incoming().settings.passPercent == existing().settings.passPercent &&
+            incoming().settings.showPhotoAndAdmOnAnnual == existing().settings.showPhotoAndAdmOnAnnual &&
+            incoming().settings.showClassRank == existing().settings.showClassRank &&
+            incoming().settings.lastBackupEpochMs == existing().settings.lastBackupEpochMs
           ) ||
           // Action 2: Owner transferring ownership to an existing active member
           (
@@ -2055,6 +2246,7 @@ service cloud.firestore {
               hasModuleView(orgId, 'coScholastic') ||
               hasModuleView(orgId, 'reports') ||
               hasModuleView(orgId, 'attendance') ||
+              hasModuleView(orgId, 'sessionPromotion') ||
               hasAnyClassTeacherSection(orgId)
             );
 
@@ -2064,7 +2256,8 @@ service cloud.firestore {
             canAccessSchool(orgId, schoolId) && (
               hasModuleEdit(orgId, 'students') ||
               hasModuleEdit(orgId, 'studentRegister') ||
-              hasModuleEdit(orgId, 'enquiry')
+              hasModuleEdit(orgId, 'enquiry') ||
+              hasModuleEdit(orgId, 'sessionPromotion')
             );
 
           allow update: if isSignedIn() &&
@@ -2078,7 +2271,8 @@ service cloud.firestore {
             isValidId(studentId) &&
             canAccessSchool(orgId, schoolId) && (
               hasModuleEdit(orgId, 'students') ||
-              hasModuleEdit(orgId, 'studentRegister')
+              hasModuleEdit(orgId, 'studentRegister') ||
+              hasModuleEdit(orgId, 'sessionPromotion')
             );
         }
 
@@ -2087,7 +2281,8 @@ service cloud.firestore {
           allow get, list: if isSignedIn() &&
             canAccessSchool(orgId, schoolId) && (
               hasModuleView(orgId, 'marks') ||
-              hasModuleView(orgId, 'reports')
+              hasModuleView(orgId, 'reports') ||
+              hasModuleView(orgId, 'sessionPromotion')
             );
 
           allow create: if isSignedIn() &&
@@ -2543,6 +2738,7 @@ service cloud.firestore {
           hasModuleView(orgId, 'reports') ||
           hasModuleView(orgId, 'coScholastic') ||
           hasModuleView(orgId, 'settings') ||
+          hasModuleView(orgId, 'sessionPromotion') ||
           hasAnyClassTeacherSection(orgId)
         );
 
@@ -2652,13 +2848,14 @@ service cloud.firestore {
         allow get, list: if isSignedIn() && (
           hasModuleView(orgId, 'fees') ||
           hasModuleView(orgId, 'stock') ||
-          hasModuleView(orgId, 'exams')
+          hasModuleView(orgId, 'exams') ||
+          hasModuleView(orgId, 'sessionPromotion')
         );
 
         allow create: if isSignedIn() &&
           isValidId(structureId) &&
           isValidFeeStructure(incoming()) &&
-          (hasModuleEdit(orgId, 'fees') || hasModuleEdit(orgId, 'stock')) &&
+          (hasModuleEdit(orgId, 'fees') || hasModuleEdit(orgId, 'stock') || hasModuleEdit(orgId, 'sessionPromotion')) &&
           canAccessSchool(orgId, incoming().schoolId);
 
         allow update: if isSignedIn() &&
@@ -2686,13 +2883,14 @@ service cloud.firestore {
       match /studentFeeOverrides/{overrideId} {
         allow get, list: if isSignedIn() && (
           hasModuleView(orgId, 'fees') ||
-          hasModuleView(orgId, 'exams')
+          hasModuleView(orgId, 'exams') ||
+          hasModuleView(orgId, 'sessionPromotion')
         );
 
         allow create: if isSignedIn() &&
           isValidId(overrideId) &&
           isValidStudentFeeOverride(incoming()) &&
-          hasModuleEdit(orgId, 'fees') &&
+          (hasModuleEdit(orgId, 'fees') || hasModuleEdit(orgId, 'sessionPromotion')) &&
           canAccessSchool(orgId, incoming().schoolId);
 
         allow update: if isSignedIn() &&
@@ -2702,12 +2900,12 @@ service cloud.firestore {
           incoming().session == existing().session &&
           incoming().studentId == existing().studentId &&
           incoming().createdAt == existing().createdAt &&
-          hasModuleEdit(orgId, 'fees') &&
+          (hasModuleEdit(orgId, 'fees') || hasModuleEdit(orgId, 'sessionPromotion')) &&
           canAccessSchool(orgId, incoming().schoolId);
 
         allow delete: if isSignedIn() &&
           isValidId(overrideId) &&
-          hasModuleEdit(orgId, 'fees') &&
+          (hasModuleEdit(orgId, 'fees') || hasModuleEdit(orgId, 'sessionPromotion')) &&
           canAccessSchool(orgId, existing().schoolId);
       }
 
@@ -2716,7 +2914,8 @@ service cloud.firestore {
           hasModuleView(orgId, 'fees') ||
           hasModuleView(orgId, 'cashBook') ||
           hasModuleView(orgId, 'stock') ||
-          hasModuleView(orgId, 'exams')
+          hasModuleView(orgId, 'exams') ||
+          hasModuleView(orgId, 'sessionPromotion')
         );
 
         allow create: if isSignedIn() &&
@@ -3248,6 +3447,104 @@ service cloud.firestore {
         allow delete: if isSignedIn() &&
           isValidId(logId) &&
           isOrgOwner(orgId);
+      }
+
+      // -----------------------------------------------------------------------
+      // 3o. PHASE 14: SESSION & PROMOTION ('sessionPromotion'),
+      //     BULK STUDENT IMPORT (Owner & Admin ONLY),
+      //     BACKUP EXPORT (Owner & Admin ONLY; Salary CSV Owner ONLY in app)
+      // Missing 'sessionPromotion' key = no access. Owner & Admin have full access.
+      // -----------------------------------------------------------------------
+
+      match /schoolClassOrders/{schoolId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'sessionPromotion');
+
+        allow create, update: if isSignedIn() &&
+          isValidId(schoolId) &&
+          isValidSchoolClassOrder(incoming(), schoolId) &&
+          hasModuleEdit(orgId, 'sessionPromotion') &&
+          canAccessSchool(orgId, schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(schoolId) &&
+          isOrgAdmin(orgId);
+      }
+
+      match /sessionTransitions/{transitionId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'sessionPromotion');
+
+        allow create: if isSignedIn() &&
+          isValidId(transitionId) &&
+          isValidSessionTransition(incoming()) &&
+          incoming().status in ['IN_PROGRESS', 'COMPLETED'] &&
+          incoming().appliedByUid == request.auth.uid &&
+          hasModuleEdit(orgId, 'sessionPromotion') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(transitionId) &&
+          isValidSessionTransition(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().fromSession == existing().fromSession &&
+          incoming().toSession == existing().toSession &&
+          hasModuleEdit(orgId, 'sessionPromotion') &&
+          canAccessSchool(orgId, existing().schoolId) && (
+            // Owner-only 7-day Undo transition
+            (incoming().status == 'UNDONE' && isOrgOwner(orgId) && incoming().undoneByUid == request.auth.uid) ||
+            // Batch progress / resume / rollback during apply
+            (incoming().status in ['IN_PROGRESS', 'COMPLETED', 'ROLLED_BACK'])
+          );
+
+        allow delete: if isSignedIn() &&
+          isValidId(transitionId) &&
+          isOrgOwner(orgId);
+      }
+
+      match /promotionRecords/{recordId} {
+        allow get, list: if isSignedIn() && (
+          hasModuleView(orgId, 'sessionPromotion') ||
+          hasModuleView(orgId, 'students') ||
+          hasModuleView(orgId, 'studentRegister')
+        );
+
+        allow create, update: if isSignedIn() &&
+          isValidId(recordId) &&
+          isValidPromotionRecord(incoming()) &&
+          hasModuleEdit(orgId, 'sessionPromotion') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(recordId) && (
+            isOrgOwner(orgId) ||
+            (hasModuleEdit(orgId, 'sessionPromotion') && canAccessSchool(orgId, existing().schoolId))
+          );
+      }
+
+      // Bulk Student Import audit logs — strictly Owner & Admin ONLY
+      match /bulkImportLogs/{logId} {
+        allow get, list: if isSignedIn() && isOrgAdmin(orgId);
+
+        allow create: if isSignedIn() &&
+          isValidId(logId) &&
+          isValidBulkImportLog(incoming()) &&
+          isOrgAdmin(orgId);
+
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(logId) && isOrgOwner(orgId);
+      }
+
+      // Manual Backup Export logs — strictly Owner & Admin ONLY (Salary CSV only if Owner)
+      match /backupExportLogs/{logId} {
+        allow get, list: if isSignedIn() && isOrgAdmin(orgId);
+
+        allow create: if isSignedIn() &&
+          isValidId(logId) &&
+          isValidBackupExportLog(incoming()) &&
+          isOrgAdmin(orgId) &&
+          (incoming().includedSalaryCsv == false || isOrgOwner(orgId));
+
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(logId) && isOrgOwner(orgId);
       }
     }
   }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -132,6 +133,9 @@ fun DashboardScreen(
     onNavigateToStock: () -> Unit = {},
     onNavigateToTransport: () -> Unit = {},
     onNavigateToSalary: () -> Unit = {},
+    onNavigateToSessionPromotion: () -> Unit = {},
+    onNavigateToBulkImport: () -> Unit = {},
+    onNavigateToBackupExport: () -> Unit = {},
     onPrintOwnSalarySlip: (SalaryMonthlyRecord, SalarySlipPageSize) -> Unit = { _, _ -> },
     onOpenPendingMarksItem: (PendingMarksItem) -> Unit = {},
     onOpenCoScholasticSection: (String, String, String) -> Unit = { _, _, _ -> },
@@ -371,6 +375,30 @@ fun DashboardScreen(
                     accent = primaryColor,
                     testTag = "tile_salary",
                     onClick = onNavigateToSalary
+                )
+            )
+        }
+        if (uiState.canViewSessionPromotion) {
+            add(
+                QuickActionSpec(
+                    title = p10Label(isHindi, "नया सत्र व प्रमोशन", "Session & Promotion"),
+                    subtitle = if (uiState.canEditSessionPromotion) "New session, promote & alumni" else "View promotion register & alumni",
+                    icon = Icons.Default.School,
+                    accent = secondaryColor,
+                    testTag = "tile_session_promotion",
+                    onClick = onNavigateToSessionPromotion
+                )
+            )
+        }
+        if (uiState.canUseBulkStudentImport) {
+            add(
+                QuickActionSpec(
+                    title = p10Label(isHindi, "बल्क छात्र इम्पोर्ट", "Bulk Student Import"),
+                    subtitle = "CSV / Excel (.xlsx) import",
+                    icon = Icons.Default.Groups,
+                    accent = tertiaryColor,
+                    testTag = "tile_bulk_import",
+                    onClick = onNavigateToBulkImport
                 )
             )
         }
@@ -618,6 +646,58 @@ fun DashboardScreen(
                             onOpenStock = onNavigateToStock,
                             onOpenExams = onNavigateToExams
                         )
+                    }
+                    // Phase 14: Last Backup Date + 30-Day Reminder card on Today Home (Owner & Admin only)
+                    if (uiState.canUseBackupExport) {
+                        item {
+                            val backupStatus = uiState.backupReminderStatus
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("today_backup_reminder_card"),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (backupStatus.isOverdue30Days) {
+                                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+                                    } else {
+                                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                                    }
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Backup,
+                                        contentDescription = "Backup status",
+                                        tint = if (backupStatus.isOverdue30Days) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = p10Label(isHindi, backupStatus.headlineHi, backupStatus.headlineEn),
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = p10Label(isHindi, backupStatus.subtextHi, backupStatus.subtextEn),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Button(
+                                        onClick = onNavigateToBackupExport,
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .testTag("today_backup_now_btn")
+                                    ) {
+                                        Text(p10Label(isHindi, "बैकअप लें", "Backup"))
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 TodayHomePersona.FEE_CLERK -> {

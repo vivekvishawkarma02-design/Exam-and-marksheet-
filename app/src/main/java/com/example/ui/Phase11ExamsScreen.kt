@@ -747,37 +747,61 @@ private fun ExamRoomsAndSeatingTab(
             if (selectedRoom != null) {
                 item {
                     Card(shape = RoundedCornerShape(12.dp)) {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(selectedRoom.roomName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Column(modifier = Modifier.fillMaxWidth()) {
                                 Text(
-                                    "Capacity: ${selectedRoom.capacity} • Occupied: ${roomAllocations.size}",
+                                    text = selectedRoom.roomName,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "Capacity: ${selectedRoom.capacity} • Occupied: ${roomAllocations.size}",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            Row {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 OutlinedButton(
                                     onClick = { onPrintRoomSeating(selectedRoom) },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                                     modifier = Modifier
+                                        .weight(1f)
                                         .heightIn(min = 48.dp)
                                         .testTag("exams_print_seating_button")
                                 ) {
                                     Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("PDF")
+                                    Text("PDF", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 if (canEdit) {
-                                    IconButton(onClick = { onEditRoom(selectedRoom) }, modifier = Modifier.minimumInteractiveComponentSize()) {
-                                        Icon(Icons.Default.EventSeat, contentDescription = "Edit room")
+                                    OutlinedButton(
+                                        onClick = { onEditRoom(selectedRoom) },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .heightIn(min = 48.dp)
+                                    ) {
+                                        Icon(Icons.Default.EventSeat, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Edit", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
-                                    IconButton(onClick = { onDeleteRoom(selectedRoom) }, modifier = Modifier.minimumInteractiveComponentSize()) {
+                                    IconButton(
+                                        onClick = { onDeleteRoom(selectedRoom) },
+                                        modifier = Modifier.minimumInteractiveComponentSize()
+                                    ) {
                                         Icon(Icons.Default.Delete, contentDescription = "Delete room", tint = FailRed)
                                     }
                                 }

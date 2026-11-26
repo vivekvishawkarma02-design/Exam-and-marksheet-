@@ -113,6 +113,9 @@ object AppRoutes {
     const val ROUTE_STOCK = "stock"
     const val ROUTE_TRANSPORT = "transport"
     const val ROUTE_SALARY = "salary"
+    const val ROUTE_SESSION_PROMOTION = "session_promotion"
+    const val ROUTE_BULK_IMPORT = "bulk_import"
+    const val ROUTE_BACKUP_EXPORT = "backup_export"
 }
 
 private enum class OnboardingSubScreen {
@@ -839,6 +842,21 @@ private fun OrganisationWorkspace(
                                             navController.navigate(AppRoutes.ROUTE_SALARY) { launchSingleTop = true }
                                         }
                                     },
+                                    onNavigateToSessionPromotion = {
+                                        if (uiState.canViewSessionPromotion) {
+                                            navController.navigate(AppRoutes.ROUTE_SESSION_PROMOTION) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToBulkImport = {
+                                        if (uiState.canUseBulkStudentImport) {
+                                            navController.navigate(AppRoutes.ROUTE_BULK_IMPORT) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToBackupExport = {
+                                        if (uiState.canUseBackupExport) {
+                                            navController.navigate(AppRoutes.ROUTE_BACKUP_EXPORT) { launchSingleTop = true }
+                                        }
+                                    },
                                     onPrintOwnSalarySlip = { slip, pageSize ->
                                         viewModel.generateSalarySlipPdfAndPreview(slip, pageSize)
                                     },
@@ -863,8 +881,12 @@ private fun OrganisationWorkspace(
                                         navigateTopLevel(AppRoutes.ROUTE_SETTINGS)
                                     },
                                     onNavigateToBackup = {
-                                        focusBackupSection = true
-                                        navigateTopLevel(AppRoutes.ROUTE_SETTINGS)
+                                        if (uiState.canUseBackupExport) {
+                                            navController.navigate(AppRoutes.ROUTE_BACKUP_EXPORT) { launchSingleTop = true }
+                                        } else {
+                                            focusBackupSection = true
+                                            navigateTopLevel(AppRoutes.ROUTE_SETTINGS)
+                                        }
                                     },
                                     onOpenStudentMarks = { student ->
                                         if (uiState.canView(AppModule.MARKS)) {
@@ -1274,6 +1296,48 @@ private fun OrganisationWorkspace(
                             composable(AppRoutes.ROUTE_SALARY) {
                                 if (uiState.canViewSalary) {
                                     Phase12SalaryScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_SESSION_PROMOTION) {
+                                if (uiState.canViewSessionPromotion) {
+                                    Phase14SessionPromotionScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_BULK_IMPORT) {
+                                if (uiState.canUseBulkStudentImport) {
+                                    Phase14BulkImportScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_BACKUP_EXPORT) {
+                                if (uiState.canUseBackupExport) {
+                                    Phase14BackupExportScreen(
                                         uiState = uiState,
                                         viewModel = viewModel,
                                         onBack = { navController.popBackStack() }

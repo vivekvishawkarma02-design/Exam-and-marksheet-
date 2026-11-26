@@ -179,26 +179,29 @@ fun Phase10EnquiryScreen(
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("phase10_enquiry_screen")
     ) {
-        // Header
-        Row(
+        // Two-row responsive Header
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 IconButton(
                     onClick = onBack,
                     modifier = Modifier.testTag("enquiry_back_button")
                 ) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = p10Label(isHindi, "प्रवेश पूछताछ (Enquiry)", "Admission Enquiry"),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("enquiry_header_title")
                     )
                     Text(
                         text = activeSchool.name,
@@ -209,14 +212,30 @@ fun Phase10EnquiryScreen(
                     )
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 if (canEdit) {
-                    IconButton(
+                    OutlinedButton(
                         onClick = { showSettingsDialog = true },
-                        modifier = Modifier.testTag("enquiry_settings_button")
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .testTag("enquiry_settings_button")
                     ) {
-                        Icon(Icons.Default.Settings, contentDescription = "Enquiry Settings")
+                        Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = p10Label(isHindi, "सेटिंग", "Settings"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
                 }
                 Phase10LanguageToggleChip(
                     isHindi = isHindi,

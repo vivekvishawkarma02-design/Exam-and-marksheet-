@@ -65,10 +65,12 @@ enum class SessionMonthCode(val code: String, val shortLabel: String, val fullLa
             entries.firstOrNull { it.code.equals(raw?.trim(), ignoreCase = true) }
 
         fun shortLabelFor(code: String): String =
-            fromCode(code)?.shortLabel ?: code
+            if (code.equals("PREV", ignoreCase = true)) "Prev. Dues"
+            else fromCode(code)?.shortLabel ?: code
 
         fun fullLabelFor(code: String): String =
-            fromCode(code)?.fullLabel ?: code
+            if (code.equals("PREV", ignoreCase = true)) "Previous Session"
+            else fromCode(code)?.fullLabel ?: code
     }
 }
 
@@ -78,13 +80,15 @@ enum class FeeHeadType(val key: String, val label: String, val shortLabel: Strin
     EXAM_UT1("EXAM_UT1", "UT-I Exam Fee", "UT-I"),
     EXAM_UT2("EXAM_UT2", "UT-II Exam Fee", "UT-II"),
     EXAM_HY("EXAM_HY", "Half-Yearly Exam Fee", "Half-Yearly"),
-    EXAM_YEARLY("EXAM_YEARLY", "Yearly Exam Fee", "Yearly");
+    EXAM_YEARLY("EXAM_YEARLY", "Yearly Exam Fee", "Yearly"),
+    PREVIOUS_SESSION_DUE("PREV_DUE", "Previous session dues", "Prev. Dues");
 
     val isExamHead: Boolean
         get() = this == EXAM_UT1 || this == EXAM_UT2 || this == EXAM_HY || this == EXAM_YEARLY
 
     companion object {
         val examHeads: List<FeeHeadType> = listOf(EXAM_UT1, EXAM_UT2, EXAM_HY, EXAM_YEARLY)
+        val regularHeads: List<FeeHeadType> = listOf(TUITION, TRANSPORT, EXAM_UT1, EXAM_UT2, EXAM_HY, EXAM_YEARLY)
 
         fun fromKey(raw: String?): FeeHeadType? =
             entries.firstOrNull { it.key.equals(raw?.trim(), ignoreCase = true) }
@@ -278,6 +282,7 @@ data class FeeStructureConfig(
                     cfg.amountForClass(className)
                 } else 0
             }
+            FeeHeadType.PREVIOUS_SESSION_DUE -> 0
         }
     }
 
@@ -428,6 +433,8 @@ data class StudentFeeOverride(
     val studentName: String = "",
     val cellOverrides: Map<String, Int> = emptyMap(),
     val remark: String = "",
+    val previousSessionDueAmount: Int = 0,
+    val previousSessionDueLabel: String = "",
     val updatedByUid: String = "",
     val updatedByName: String = "",
     val clientEditedAtMs: Long = 0L,
@@ -440,17 +447,21 @@ data class StudentFeeOverride(
         return cellOverrides[specificKey] ?: cellOverrides[allMonthsKey]
     }
 
-    fun toFirestoreMap(uid: String, editorName: String, nowMs: Long): Map<String, Any> = mapOf(
-        "schoolId" to schoolId,
-        "session" to session.trim().take(30),
-        "studentId" to studentId,
-        "studentName" to studentName.trim().take(120),
-        "cellOverrides" to cellOverrides.mapValues { it.value.coerceAtLeast(0).toLong() },
-        "remark" to remark.trim().take(300),
-        "updatedByUid" to uid,
-        "updatedByName" to editorName.take(120),
-        "clientEditedAtMs" to nowMs
-    )
+    fun toFirestoreMap(uid: String, editorName: String, nowMs: Long): Map<String, Any> = buildMap {
+        put("schoolId", schoolId)
+        put("session", session.trim().take(30))
+        put("studentId", studentId)
+        put("studentName", studentName.trim().take(120))
+        put("cellOverrides", cellOverrides.mapValues { it.value.coerceAtLeast(0).toLong() })
+        put("remark", remark.trim().take(300))
+        if (previousSessionDueAmount > 0 || previousSessionDueLabel.isNotBlank()) {
+            put("previousSessionDueAmount", previousSessionDueAmount.coerceAtLeast(0).toLong())
+            put("previousSessionDueLabel", previousSessionDueLabel.trim().take(120))
+        }
+        put("updatedByUid", uid)
+        put("updatedByName", editorName.take(120))
+        put("clientEditedAtMs", nowMs)
+    }
 
     companion object {
         fun makeDocId(schoolId: String, session: String, studentDocId: String): String =
@@ -476,6 +487,8 @@ data class StudentFeeOverride(
                 studentName = (data["studentName"] as? String).orEmpty(),
                 cellOverrides = parsedCells,
                 remark = (data["remark"] as? String).orEmpty(),
+                previousSessionDueAmount = ((data["previousSessionDueAmount"] as? Number)?.toInt() ?: 0).coerceAtLeast(0),
+                previousSessionDueLabel = (data["previousSessionDueLabel"] as? String).orEmpty(),
                 updatedByUid = (data["updatedByUid"] as? String).orEmpty(),
                 updatedByName = (data["updatedByName"] as? String).orEmpty(),
                 clientEditedAtMs = (data["clientEditedAtMs"] as? Number)?.toLong() ?: 0L,
@@ -816,7 +829,8 @@ data class StudentFeeAccountSummary(
     val totalRemainingDue: Int,
     val dueMonthsList: List<String>,
     val receipts: List<FeeReceiptRecord>,
-    val activeOverride: StudentFeeOverride?
+    val activeOverride: StudentFeeOverride?,
+    val previousSessionDueCell: StudentFeeGridCell? = null
 )
 
 data class SelectedOptionalSaleDraft(
@@ -1332,14 +1346,51 @@ object FeeCollectionEngine {
             )
         }
 
-        val allApplicableCells = monthRows.flatMap { it.allApplicableCells() }
+        // Phase 14: Optional carried-forward "Previous session dues" cell (only present when > 0; past sessions untouched)
+        val prevDueKey = "PREV|${FeeHeadType.PREVIOUS_SESSION_DUE.key}"
+        val prevPaid = (paidByCellKey[prevDueKey] ?: 0).coerceAtLeast(0)
+        val prevConc = (concByCellKey[prevDueKey] ?: 0).coerceAtLeast(0)
+        val prevScheduled = maxOf(
+            override?.previousSessionDueAmount?.coerceAtLeast(0) ?: 0,
+            prevPaid + prevConc
+        )
+        val previousDueCell: StudentFeeGridCell? = if (prevScheduled > 0) {
+            val prevRemaining = (prevScheduled - (prevPaid + prevConc)).coerceAtLeast(0)
+            val prevState = when {
+                prevRemaining == 0 -> FeeCellState.PAID
+                (prevPaid + prevConc) > 0 -> FeeCellState.PARTLY_PAID
+                else -> FeeCellState.DUE
+            }
+            StudentFeeGridCell(
+                monthCode = "PREV",
+                headType = FeeHeadType.PREVIOUS_SESSION_DUE,
+                label = override?.previousSessionDueLabel?.takeIf { it.isNotBlank() } ?: "Previous session dues",
+                scheduledAmount = prevScheduled,
+                paidAmount = prevPaid,
+                concessionAllocated = prevConc,
+                remainingDue = prevRemaining,
+                state = prevState,
+                isOverriddenForStudent = true,
+                overrideRemark = override?.remark.orEmpty()
+            )
+        } else null
+
+        val allApplicableCells = buildList {
+            if (previousDueCell != null) add(previousDueCell)
+            addAll(monthRows.flatMap { it.allApplicableCells() })
+        }
         val totalScheduled = allApplicableCells.sumOf { it.scheduledAmount }
         val totalPaid = allApplicableCells.sumOf { it.paidAmount }
         val totalConcession = allApplicableCells.sumOf { it.concessionAllocated }
         val totalRemainingDue = allApplicableCells.sumOf { it.remainingDue }
-        val dueMonths = monthRows
-            .filter { row -> row.allApplicableCells().any { it.remainingDue > 0 } }
-            .map { SessionMonthCode.shortLabelFor(it.monthCode) }
+        val dueMonths = buildList {
+            if (previousDueCell != null && previousDueCell.remainingDue > 0) {
+                add("Prev. Dues")
+            }
+            monthRows
+                .filter { row -> row.allApplicableCells().any { it.remainingDue > 0 } }
+                .forEach { add(SessionMonthCode.shortLabelFor(it.monthCode)) }
+        }
 
         val sortedReceipts = receiptsForStudent
             .filter {
@@ -1361,7 +1412,8 @@ object FeeCollectionEngine {
             totalRemainingDue = totalRemainingDue,
             dueMonthsList = dueMonths,
             receipts = sortedReceipts,
-            activeOverride = override
+            activeOverride = override,
+            previousSessionDueCell = previousDueCell
         )
     }
 
@@ -1387,6 +1439,7 @@ object FeeCollectionEngine {
                 val cfg = structure.examFees.firstOrNull { it.examHeadKey.equals(headType.key, ignoreCase = true) }
                 cfg != null && cfg.monthCode.equals(monthCode, ignoreCase = true) && cfg.amountForClass(student.className) > 0
             }
+            FeeHeadType.PREVIOUS_SESSION_DUE -> false
         }
 
         val overriddenAmount = override?.overrideFor(monthCode, headType)
@@ -1886,8 +1939,9 @@ object FeeReportsAndQueueEngine {
             return if (clean.contains(',') || clean.contains('"') || clean.contains('\n')) "\"$clean\"" else clean
         }
         val sb = StringBuilder()
-        sb.appendLine("School,Session,Class,Section,Roll No,Admission No,Student Name,Guardian Name,Mobile,Due Months,Tuition Due,Transport Due,Exam Due,Total Due (Rs)")
+        sb.appendLine("School,Session,Class,Section,Roll No,Admission No,Student Name,Guardian Name,Mobile,Due Months,Previous Session Due,Tuition Due,Transport Due,Exam Due,Total Due (Rs)")
         for (r in rows) {
+            val prevDue = r.dueByHead[FeeHeadType.PREVIOUS_SESSION_DUE] ?: 0
             val tuitionDue = r.dueByHead[FeeHeadType.TUITION] ?: 0
             val transportDue = r.dueByHead[FeeHeadType.TRANSPORT] ?: 0
             val examDue = FeeHeadType.examHeads.sumOf { r.dueByHead[it] ?: 0 }
@@ -1903,6 +1957,7 @@ object FeeReportsAndQueueEngine {
                     esc(r.student.fatherName.ifBlank { r.student.motherName }),
                     esc(r.student.mobile),
                     esc(r.dueMonths.joinToString(" ")),
+                    prevDue.toString(),
                     tuitionDue.toString(),
                     transportDue.toString(),
                     examDue.toString(),

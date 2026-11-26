@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.FamilyRestroom
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
@@ -98,6 +99,108 @@ import com.example.domain.StudentTransportFilter
 import com.example.util.ImageUtils
 import kotlinx.coroutines.launch
 
+@Composable
+fun StudentRegisterHeader(
+    schoolName: String,
+    session: String,
+    canEditRegister: Boolean,
+    idCardSelectionMode: Boolean,
+    selectedIdCardsCount: Int,
+    onBack: () -> Unit,
+    onPrintIdCards: () -> Unit,
+    onAddStudent: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("register_header"),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // Row 1: Back arrow + full-width title and ellipsized single-line subtitle
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.testTag("register_back_button")
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Student Register",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("register_header_title")
+                )
+                Text(
+                    text = "$schoolName • Session $session",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("register_header_subtitle")
+                )
+            }
+        }
+
+        // Row 2: Equal-width action buttons (>= 48dp tall, single-line labels)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("register_header_actions_row"),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = onPrintIdCards,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .testTag("register_print_id_cards_button")
+            ) {
+                Icon(Icons.Default.Badge, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (idCardSelectionMode && selectedIdCardsCount > 0) {
+                        "ID Cards ($selectedIdCardsCount)"
+                    } else {
+                        "ID Cards"
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (canEditRegister) {
+                Button(
+                    onClick = onAddStudent,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("register_add_student_button")
+                ) {
+                    Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Add Student",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Phase9StudentRegisterScreen(
@@ -130,6 +233,7 @@ fun Phase9StudentRegisterScreen(
     var classChangeTarget by remember { mutableStateOf<StudentEntity?>(null) }
     var statusChangeTarget by remember { mutableStateOf<StudentEntity?>(null) }
     var siblingLinkTarget by remember { mutableStateOf<StudentEntity?>(null) }
+    var historyTarget by remember { mutableStateOf<StudentEntity?>(null) }
 
     val selectedIdsForIdCards = remember { mutableStateListOf<Long>() }
     var idCardSelectionMode by remember { mutableStateOf(false) }
@@ -187,77 +291,31 @@ fun Phase9StudentRegisterScreen(
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("phase9_student_register_screen")
     ) {
-        // Header bar
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier.testTag("register_back_button")
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                }
-                Column {
-                    Text(
-                        text = "Student Register",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "${activeSchool.name} • Session ${uiState.filter.session}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+        // Two-row responsive header bar
+        StudentRegisterHeader(
+            schoolName = activeSchool.name,
+            session = uiState.filter.session,
+            canEditRegister = canEditRegister,
+            idCardSelectionMode = idCardSelectionMode,
+            selectedIdCardsCount = selectedIdsForIdCards.size,
+            onBack = onBack,
+            onPrintIdCards = {
+                if (idCardSelectionMode && selectedIdsForIdCards.isNotEmpty()) {
+                    val chosen = filteredStudents.filter { it.id in selectedIdsForIdCards }
+                    viewModel.generateStudentIdCardsPdf(chosen, "Selected (${chosen.size})")
+                } else {
+                    val activeFiltered = filteredStudents.filter { it.isActiveStatus }
+                    viewModel.generateStudentIdCardsPdf(
+                        activeFiltered,
+                        selectedClassFilter?.let { "Class $it" } ?: "All Filtered"
                     )
                 }
+            },
+            onAddStudent = {
+                editingStudent = null
+                showAddEditDialog = true
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        if (idCardSelectionMode && selectedIdsForIdCards.isNotEmpty()) {
-                            val chosen = filteredStudents.filter { it.id in selectedIdsForIdCards }
-                            viewModel.generateStudentIdCardsPdf(chosen, "Selected (${chosen.size})")
-                        } else {
-                            val activeFiltered = filteredStudents.filter { it.isActiveStatus }
-                            viewModel.generateStudentIdCardsPdf(
-                                activeFiltered,
-                                selectedClassFilter?.let { "Class $it" } ?: "All Filtered"
-                            )
-                        }
-                    },
-                    modifier = Modifier
-                        .heightIn(min = 48.dp)
-                        .testTag("register_print_id_cards_button")
-                ) {
-                    Icon(Icons.Default.Badge, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        if (idCardSelectionMode && selectedIdsForIdCards.isNotEmpty()) {
-                            "ID Cards (${selectedIdsForIdCards.size})"
-                        } else {
-                            "ID Cards PDF"
-                        }
-                    )
-                }
-                if (canEditRegister) {
-                    Button(
-                        onClick = {
-                            editingStudent = null
-                            showAddEditDialog = true
-                        },
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .testTag("register_add_student_button")
-                    ) {
-                        Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Add Student")
-                    }
-                }
-            }
-        }
+        )
 
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -273,7 +331,7 @@ fun Phase9StudentRegisterScreen(
                     FilterChip(
                         selected = sch.id == activeSchool.id,
                         onClick = { viewModel.selectSchool(sch.id) },
-                        label = { Text(sch.name) }
+                        label = { Text(sch.name, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                     )
                 }
             }
@@ -284,11 +342,20 @@ fun Phase9StudentRegisterScreen(
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            placeholder = { Text("Search name, admission no., father/mother name, mobile, transport route…") },
+            placeholder = {
+                Text(
+                    text = "Search name, admission no., mobile, route",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
                 if (searchQuery.isNotBlank()) {
-                    IconButton(onClick = { searchQuery = "" }) {
+                    IconButton(
+                        onClick = { searchQuery = "" },
+                        modifier = Modifier.testTag("register_search_clear_button")
+                    ) {
                         Icon(Icons.Default.Close, contentDescription = "Clear search")
                     }
                 }
@@ -301,37 +368,37 @@ fun Phase9StudentRegisterScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Status, Class, Transport & Sibling filters
-        Row(
+        // Status, Transport, ID Selection & Family filters (wrapping FlowRow for phone widths)
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
+                .testTag("register_filter_chips_flow"),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             FilterChip(
                 selected = statusFilter == StudentRegisterStatus.ACTIVE,
                 onClick = { statusFilter = StudentRegisterStatus.ACTIVE },
-                label = { Text("Active ($activeCount)") },
+                label = { Text("Active ($activeCount)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 modifier = Modifier.testTag("register_filter_active")
             )
             FilterChip(
                 selected = statusFilter == StudentRegisterStatus.LEFT,
                 onClick = { statusFilter = StudentRegisterStatus.LEFT },
-                label = { Text("Left ($leftCount)") },
+                label = { Text("Left ($leftCount)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 modifier = Modifier.testTag("register_filter_left")
             )
             FilterChip(
                 selected = statusFilter == null,
                 onClick = { statusFilter = null },
-                label = { Text("All (${schoolStudents.size})") },
+                label = { Text("All (${schoolStudents.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 modifier = Modifier.testTag("register_filter_all")
             )
             FilterChip(
                 selected = transportFilter == true,
                 onClick = { transportFilter = if (transportFilter == true) null else true },
                 leadingIcon = { Icon(Icons.Default.DirectionsBus, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                label = { Text("Uses Transport ($transportCount)") },
+                label = { Text("Transport ($transportCount)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 modifier = Modifier.testTag("register_filter_transport")
             )
             FilterChip(
@@ -340,14 +407,22 @@ fun Phase9StudentRegisterScreen(
                     idCardSelectionMode = !idCardSelectionMode
                     if (!idCardSelectionMode) selectedIdsForIdCards.clear()
                 },
-                label = { Text(if (idCardSelectionMode) "Cancel ID Select" else "Select for ID Cards") }
+                label = {
+                    Text(
+                        text = if (idCardSelectionMode) "Cancel ID Select" else "Select for ID Cards",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                modifier = Modifier.testTag("register_filter_select_id_cards")
             )
             if (siblingGroupFilter != null) {
                 FilterChip(
                     selected = true,
                     onClick = { siblingGroupFilter = null },
                     leadingIcon = { Icon(Icons.Default.FamilyRestroom, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                    label = { Text("Family: $siblingGroupFilter ✕") }
+                    label = { Text("Family: $siblingGroupFilter ✕", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    modifier = Modifier.testTag("register_filter_family")
                 )
             }
         }
@@ -442,7 +517,8 @@ fun Phase9StudentRegisterScreen(
                         onPrintSingleIdCard = { viewModel.generateStudentIdCardsPdf(listOf(student), student.name) },
                         onOpenFees = { onOpenFeeCollectionForStudent(student) },
                         canViewCertificates = uiState.canViewCertificates,
-                        onOpenCertificates = { onOpenCertificatesForStudent(student) }
+                        onOpenCertificates = { onOpenCertificatesForStudent(student) },
+                        onOpenSessionHistory = { historyTarget = student }
                     )
                 }
             }
@@ -483,6 +559,44 @@ fun Phase9StudentRegisterScreen(
             onDismiss = { siblingLinkTarget = null }
         )
     }
+
+    if (historyTarget != null) {
+        val target = historyTarget!!
+        val allInSchool = uiState.allStudents.filter { it.schoolId == uiState.activeSchool.id }
+        val promInSchool = uiState.promotionRecords.filter { it.schoolId == uiState.activeSchoolDocId }
+        val entries = remember(target.id, allInSchool.size, promInSchool.size) {
+            com.example.domain.PromotionEngine.buildStudentSessionHistory(
+                admNo = target.admNo,
+                studentName = target.name,
+                fatherName = target.fatherName,
+                allStudentsInSchool = allInSchool,
+                promotionRecordsInSchool = promInSchool
+            )
+        }
+        AlertDialog(
+            onDismissRequest = { historyTarget = null },
+            title = { Text("Session History — ${target.name}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Adm No: ${target.admNo.ifBlank { "—" }}", style = MaterialTheme.typography.bodySmall)
+                    if (entries.isEmpty()) {
+                        Text("No multi-session records yet.")
+                    } else {
+                        entries.forEach { e ->
+                            Text(
+                                text = "• ${e.session}: ${e.className}${if (e.section.isNotBlank()) "-${e.section}" else ""}${if (e.rollNo > 0) " (Roll #${e.rollNo})" else ""} — ${e.statusLabel}" +
+                                    if (e.graceRemark.isNotBlank()) " [${e.graceRemark}]" else "",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { historyTarget = null }) { Text("Close") }
+            }
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -504,7 +618,8 @@ private fun StudentRegisterCard(
     onPrintSingleIdCard: () -> Unit,
     onOpenFees: () -> Unit,
     canViewCertificates: Boolean = false,
-    onOpenCertificates: () -> Unit = {}
+    onOpenCertificates: () -> Unit = {},
+    onOpenSessionHistory: () -> Unit = {}
 ) {
     val isActive = student.isActiveStatus
     val photoBitmap = remember(student.photoBase64) {
@@ -762,6 +877,14 @@ private fun StudentRegisterCard(
                             .testTag("register_open_certs_${student.admNo}")
                     )
                 }
+                AssistChip(
+                    onClick = onOpenSessionHistory,
+                    label = { Text("Session History") },
+                    leadingIcon = { Icon(Icons.Default.School, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("register_history_${student.admNo}")
+                )
             }
         }
     }

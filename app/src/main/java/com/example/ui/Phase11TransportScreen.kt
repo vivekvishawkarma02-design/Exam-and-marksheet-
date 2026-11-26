@@ -356,34 +356,57 @@ private fun TransportRouteCard(
                 }
             }
 
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Driver: ${route.driverName.ifBlank { "-" }} (${route.driverPhone.ifBlank { "-" }})",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = "Expected Income: ₹${summary.expectedMonthlyIncomeRs}/mo • Stops: ${route.stops.size}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Row {
-                    if (route.driverPhone.isNotBlank()) {
-                        IconButton(onClick = { onCallDriver(route.driverPhone) }, modifier = Modifier.minimumInteractiveComponentSize()) {
-                            Icon(Icons.Default.Call, contentDescription = "Call driver", tint = PassGreen)
+                Text(
+                    text = "Driver: ${route.driverName.ifBlank { "-" }} (${route.driverPhone.ifBlank { "-" }})",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "Expected Income: ₹${summary.expectedMonthlyIncomeRs}/mo • Stops: ${route.stops.size}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (route.driverPhone.isNotBlank() || canEdit) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (route.driverPhone.isNotBlank()) {
+                            OutlinedButton(
+                                onClick = { onCallDriver(route.driverPhone) },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                            ) {
+                                Icon(Icons.Default.Call, contentDescription = null, tint = PassGreen, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(p10Label(isHindi, "कॉल", "Call"), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
-                    }
-                    if (canEdit) {
-                        IconButton(onClick = onEdit, modifier = Modifier.minimumInteractiveComponentSize()) {
-                            Icon(Icons.Default.Edit, contentDescription = "Edit route")
-                        }
-                        IconButton(onClick = onDelete, modifier = Modifier.minimumInteractiveComponentSize()) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete route", tint = FailRed)
+                        if (canEdit) {
+                            OutlinedButton(
+                                onClick = onEdit,
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(p10Label(isHindi, "बदलें", "Edit"), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            IconButton(onClick = onDelete, modifier = Modifier.minimumInteractiveComponentSize()) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete route", tint = FailRed)
+                            }
                         }
                     }
                 }
@@ -400,9 +423,13 @@ private fun TransportRouteCard(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedButton(
                     onClick = onPrintRouteList,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp)
@@ -410,10 +437,15 @@ private fun TransportRouteCard(
                 ) {
                     Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text(p10Label(isHindi, "रूट सूची PDF", "Route PDF"))
+                    Text(
+                        text = p10Label(isHindi, "रूट PDF", "Route PDF"),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
                 OutlinedButton(
                     onClick = onPrintDriverList,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp)
@@ -421,7 +453,11 @@ private fun TransportRouteCard(
                 ) {
                     Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text(p10Label(isHindi, "ड्राइवर सूची PDF", "Driver PDF"))
+                    Text(
+                        text = p10Label(isHindi, "ड्राइवर PDF", "Driver PDF"),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
 

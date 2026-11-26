@@ -540,6 +540,7 @@ fun MarksEntryScreen(
             title = dialogTitle,
             logs = logsToShow,
             conflicts = uiState.markConflicts,
+            deletedUserUids = uiState.deletedUserUids,
             onDismiss = { showMarksHistoryDialog = false }
         )
     }

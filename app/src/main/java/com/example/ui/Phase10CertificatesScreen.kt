@@ -798,6 +798,7 @@ fun Phase10CertificatesScreen(
                                 cert = cert,
                                 isHindi = isHindi,
                                 canEdit = canEdit,
+                                deletedUserUids = uiState.deletedUserUids,
                                 onOpenPdf = { viewModel.generateCertificateA4Pdf(cert) },
                                 onCancelClick = {
                                     cancelTargetCert = cert
@@ -960,6 +961,7 @@ private fun CertificateRegisterCard(
     cert: SchoolCertificateRecord,
     isHindi: Boolean,
     canEdit: Boolean,
+    deletedUserUids: Set<String> = emptySet(),
     onOpenPdf: () -> Unit,
     onCancelClick: () -> Unit,
     onReissueClick: () -> Unit
@@ -1023,8 +1025,13 @@ private fun CertificateRegisterCard(
                 fontWeight = FontWeight.SemiBold
             )
 
+            val issuedByLabel = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+                authorUid = cert.issuedByUid,
+                storedName = cert.issuedByName,
+                deletedUserUids = deletedUserUids
+            )
             Text(
-                text = "${p10Label(isHindi, "तिथि", "Date")}: ${Phase6DateUtils.formatDisplayDate(cert.issueDateIso)} • ${p10Label(isHindi, "जारीकर्ता", "Issued by")}: ${cert.issuedByName}",
+                text = "${p10Label(isHindi, "तिथि", "Date")}: ${Phase6DateUtils.formatDisplayDate(cert.issueDateIso)} • ${p10Label(isHindi, "जारीकर्ता", "Issued by")}: $issuedByLabel",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

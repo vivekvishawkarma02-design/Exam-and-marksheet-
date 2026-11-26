@@ -695,8 +695,13 @@ fun Phase9FeeStructureTab(
                                     fontWeight = FontWeight.SemiBold,
                                     style = MaterialTheme.typography.bodyMedium
                                 )
+                                val updatedByLabel = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+                                    authorUid = ov.updatedByUid,
+                                    storedName = ov.updatedByName,
+                                    deletedUserUids = uiState.deletedUserUids
+                                )
                                 Text(
-                                    text = "Remark: ${ov.remark} • by ${ov.updatedByName}",
+                                    text = "Remark: ${ov.remark} • by $updatedByLabel",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

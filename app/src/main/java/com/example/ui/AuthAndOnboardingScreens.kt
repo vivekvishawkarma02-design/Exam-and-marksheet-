@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -92,6 +93,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -108,6 +110,7 @@ import com.example.data.cloud.EmailSignUpOutcome
 import com.example.data.cloud.GoogleAuthHelper
 import com.example.domain.DefaultSchoolTemplate
 import com.example.domain.EmailAuthMode
+import com.example.domain.LegalConfig
 import com.example.domain.OrgAccessEvaluator
 import com.example.domain.OrgRole
 import com.example.domain.SyncStatus
@@ -128,7 +131,9 @@ import kotlinx.coroutines.withContext
 
 enum class LegalDocType(val title: String) {
     PRIVACY_POLICY("Privacy Policy"),
-    TERMS_OF_SERVICE("Terms of Service")
+    TERMS_OF_SERVICE("Terms of Service"),
+    SUPPORT("Support & Help"),
+    DELETE_ACCOUNT("Delete Account & Data")
 }
 
 // =============================================================================
@@ -2393,7 +2398,7 @@ fun TeacherProfileOnboardingScreen(
 }
 
 // =============================================================================
-// 6. PRIVACY POLICY & TERMS OF SERVICE SCREEN (Play Store Readiness)
+// 6. PRIVACY POLICY, SUPPORT, ACCOUNT DELETION & TERMS SCREEN (Play Store Readiness)
 // =============================================================================
 @Composable
 fun PrivacyAndTermsScreen(
@@ -2402,6 +2407,13 @@ fun PrivacyAndTermsScreen(
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBack)
+    val uriHandler = LocalUriHandler.current
+    val externalUrl = when (docType) {
+        LegalDocType.PRIVACY_POLICY -> LegalConfig.PRIVACY_POLICY_URL
+        LegalDocType.SUPPORT -> LegalConfig.SUPPORT_URL
+        LegalDocType.DELETE_ACCOUNT -> LegalConfig.DELETE_ACCOUNT_URL
+        LegalDocType.TERMS_OF_SERVICE -> LegalConfig.PRIVACY_POLICY_URL
+    }
 
     Column(
         modifier = modifier
@@ -2421,7 +2433,10 @@ fun PrivacyAndTermsScreen(
                 Text(
                     text = docType.title,
                     style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -2433,39 +2448,87 @@ fun PrivacyAndTermsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (docType == LegalDocType.PRIVACY_POLICY) {
-                LegalSectionCard(
-                    title = "1. Data Stored in the Cloud",
-                    body = "School Report Card stores your account profile (name, email, user ID) and your organisation's academic records (schools, classes, students, marks, co-scholastic grades, attendance, logos, and audit logs) in Google Cloud Firestore with offline caching on your device."
-                )
-                LegalSectionCard(
-                    title = "2. Multi-Tenant Isolation & Access Control",
-                    body = "Every organisation's data is stored under its own isolated Firestore namespace and protected by zero-trust server-side security rules. Members can only access schools and modules explicitly granted by their organisation's Owner or Admin."
-                )
-                LegalSectionCard(
-                    title = "3. Sign Out & Local Cache Clearing",
-                    body = "Signing out clears the local Firestore offline cache on this phone so another person using the same device cannot view previously cached student or school records."
-                )
-                LegalSectionCard(
-                    title = "4. Account Deletion",
-                    body = "You may permanently delete your account at any time from the Organisation Picker or Settings screen. If you are the Owner of an organisation, you must first transfer ownership or export a backup and delete that organisation."
-                )
-                LegalSectionCard(
-                    title = "5. Publisher Policy Note",
-                    body = "Replace this placeholder policy URL with your live school/publisher Privacy Policy URL in Google Play Console before production release."
-                )
+            when (docType) {
+                LegalDocType.PRIVACY_POLICY -> {
+                    LegalSectionCard(
+                        title = "1. What Data This App Collects / कौन-सा डेटा एकत्र होता है",
+                        body = "Account details (name, email, Firebase user ID) and authorised school records entered by your staff: school info & logos, student profiles (including DOB for academic records & in-app birthday wishes), guardian mobile numbers, optional compressed photos (<150 KB, including student/staff avatars, expense bills, and class diary blackboard/homework photos), attendance, exam marks, class diary entries, fee receipts, cash book & admission enquiries, and staff salary records (Owner/permitted Admin only)."
+                    )
+                    LegalSectionCard(
+                        title = "2. Storage, Sync & Local Cache / डेटा कहाँ सेव रहता है",
+                        body = "Records are stored in Google Firebase (Firebase Authentication & Cloud Firestore) and cached on this phone for offline use. Signing out or deleting your account clears this phone's offline cache."
+                    )
+                    LegalSectionCard(
+                        title = "3. Who Can See Data / डेटा कौन देख सकता है",
+                        body = "Data is strictly isolated per organisation and role. Teachers only see schools, sections, and modules explicitly enabled by their Organisation Owner or Admin. We never sell or rent user or student data to third parties."
+                    )
+                    LegalSectionCard(
+                        title = "4. Children's Data Note / बच्चों के डेटा की सूचना",
+                        body = "This app is designed strictly for adult school staff (owners, principals, teachers, fee clerks)—not for children to use directly. Student academic records are managed exclusively by authorised school staff."
+                    )
+                    LegalSectionCard(
+                        title = "5. Retention, Deletion & Contact / संपर्क और डेटा हटाना",
+                        body = "Use Settings → Account → Delete My Account anytime to delete your account. Contact email: ${LegalConfig.CONTACT_EMAIL_PLACEHOLDER}"
+                    )
+                }
+
+                LegalDocType.SUPPORT -> {
+                    LegalSectionCard(
+                        title = "Support Contact / सहायता संपर्क",
+                        body = "For school onboarding, sign-in help, or account deletion requests (if you no longer have the app installed), email: ${LegalConfig.CONTACT_EMAIL_PLACEHOLDER}"
+                    )
+                    LegalSectionCard(
+                        title = "Common Quick Fixes / सामान्य समाधान",
+                        body = "• Offline saves: Marks, attendance, and fees save on this device first and upload automatically when internet reconnects.\n• Missing access: Ask your school's Owner or Admin to open Members and enable the required school/module permission.\n• Backup before big changes: Owners/Admins can export a full JSON + CSV backup from Home or Settings."
+                    )
+                }
+
+                LegalDocType.DELETE_ACCOUNT -> {
+                    LegalSectionCard(
+                        title = "How to Delete In-App / ऐप से खाता कैसे हटाएँ",
+                        body = "1. Open Settings → Account → Delete My Account (or Organisation Picker → Delete My Account).\n2. Review what will be deleted (your login, profile, memberships, teacher scopes, and device cache).\n3. Re-authenticate with your Password or Google Sign-In."
+                    )
+                    LegalSectionCard(
+                        title = "Normal Member vs Organisation Owner",
+                        body = "• Normal member (Teacher / Fee Clerk / Admin): School records you entered remain for school continuity, and your author name appears as \"deleted user\".\n• Only Owner of an organisation: Transfer ownership to another Admin in Members first, OR explicitly tick whole-organisation deletion and type the organisation code to remove the entire organisation and all school data."
+                    )
+                    LegalSectionCard(
+                        title = "Request by Email (If App Uninstalled)",
+                        body = "Email ${LegalConfig.CONTACT_EMAIL_PLACEHOLDER} from your registered account email with subject \"Delete Account Request\" and mention your Organisation Code."
+                    )
+                }
+
+                LegalDocType.TERMS_OF_SERVICE -> {
+                    LegalSectionCard(
+                        title = "1. Intended Use",
+                        body = "This application is intended for authorised school owners, administrators, office clerks, and teachers to manage school operations and academic report cards."
+                    )
+                    LegalSectionCard(
+                        title = "2. Organisation Ownership & Backups",
+                        body = "Organisation Owners and Admins are responsible for approving staff members, assigning module/school permissions accurately, and keeping periodic JSON backups."
+                    )
+                    LegalSectionCard(
+                        title = "3. Offline Cache & Revocation",
+                        body = "When an Admin removes a member, access is blocked immediately on Firebase servers and local cache clears when the member's phone connects to the internet."
+                    )
+                }
+            }
+
+            if (LegalConfig.isConfiguredUrl(externalUrl)) {
+                OutlinedButton(
+                    onClick = { runCatching { uriHandler.openUri(externalUrl) } },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("legal_doc_open_web_button")
+                ) {
+                    Text("Open Web Page")
+                }
             } else {
-                LegalSectionCard(
-                    title = "1. Acceptable Use",
-                    body = "This application is intended for authorized school administrators, office operators, and teachers to record student marks, attendance, and generate A4 academic report cards."
-                )
-                LegalSectionCard(
-                    title = "2. Organisation Ownership & Data Responsibility",
-                    body = "Organisation Owners and Admins are responsible for approving staff members, assigning appropriate school and module permissions, and maintaining periodic JSON backups before deleting an organisation."
-                )
-                LegalSectionCard(
-                    title = "3. Offline Access Notice",
-                    body = "Data is cached locally so staff can continue working offline. When an Admin removes a member, revocation takes effect immediately on the server and on the member's device the next time it connects to the internet."
+                Text(
+                    text = "Public web URL placeholder: $externalUrl (host the files in repo public/ folder and update LegalConfig.kt before Play release).",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

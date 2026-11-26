@@ -119,9 +119,12 @@ class Phase4Repository(
     // 1. REAL-TIME OBSERVERS (Only active when member can view 'teachers')
     // =========================================================================
     fun observePhase4Data(orgId: String, member: MemberAccessProfile): Flow<CloudPhase4Snapshot> {
-        val canReadPhase4 = OrgAccessEvaluator.canViewModule(member, AppModule.TEACHERS) ||
+        val canReadFullPhase4 = OrgAccessEvaluator.canViewModule(member, AppModule.TEACHERS) ||
             OrgAccessEvaluator.canEditModule(member, AppModule.TIMETABLE)
-        if (!canReadPhase4) {
+        val canReadTeachersAndAssignments = canReadFullPhase4 ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.RESULT_ANALYSIS) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.CLASS_DIARY)
+        if (!canReadTeachersAndAssignments) {
             return flowOf(CloudPhase4Snapshot())
         }
         val orgRef = db.collection("organisations").document(orgId)
@@ -139,18 +142,22 @@ class Phase4Repository(
                 )
             }
 
-        val periodFlow: Flow<Phase4Slice<SchoolPeriodStructure>> = orgRef
-            .collection("periodStructures")
-            .snapshots(MetadataChanges.INCLUDE)
-            .map { snap ->
-                val pCount = snap.documents.count { it.metadata.hasPendingWrites() }
-                val hasPending = snap.metadata.hasPendingWrites() || pCount > 0
-                Phase4Slice(
-                    items = snap.documents.map { parsePeriodStructure(it) },
-                    pendingCount = if (hasPending) pCount.coerceAtLeast(1) else 0,
-                    isFromCache = snap.metadata.isFromCache()
-                )
-            }
+        val periodFlow: Flow<Phase4Slice<SchoolPeriodStructure>> = if (canReadFullPhase4) {
+            orgRef
+                .collection("periodStructures")
+                .snapshots(MetadataChanges.INCLUDE)
+                .map { snap ->
+                    val pCount = snap.documents.count { it.metadata.hasPendingWrites() }
+                    val hasPending = snap.metadata.hasPendingWrites() || pCount > 0
+                    Phase4Slice(
+                        items = snap.documents.map { parsePeriodStructure(it) },
+                        pendingCount = if (hasPending) pCount.coerceAtLeast(1) else 0,
+                        isFromCache = snap.metadata.isFromCache()
+                    )
+                }
+        } else {
+            flowOf(Phase4Slice())
+        }
 
         val assignmentsFlow: Flow<Phase4Slice<ClassSectionAssignment>> = orgRef
             .collection("classAssignments")
@@ -165,18 +172,22 @@ class Phase4Repository(
                 )
             }
 
-        val rulesFlow: Flow<Phase4Slice<SubjectRule>> = orgRef
-            .collection("subjectRules")
-            .snapshots(MetadataChanges.INCLUDE)
-            .map { snap ->
-                val pCount = snap.documents.count { it.metadata.hasPendingWrites() }
-                val hasPending = snap.metadata.hasPendingWrites() || pCount > 0
-                Phase4Slice(
-                    items = snap.documents.map { parseSubjectRule(it) }.sortedBy { it.subjectName.lowercase() },
-                    pendingCount = if (hasPending) pCount.coerceAtLeast(1) else 0,
-                    isFromCache = snap.metadata.isFromCache()
-                )
-            }
+        val rulesFlow: Flow<Phase4Slice<SubjectRule>> = if (canReadFullPhase4) {
+            orgRef
+                .collection("subjectRules")
+                .snapshots(MetadataChanges.INCLUDE)
+                .map { snap ->
+                    val pCount = snap.documents.count { it.metadata.hasPendingWrites() }
+                    val hasPending = snap.metadata.hasPendingWrites() || pCount > 0
+                    Phase4Slice(
+                        items = snap.documents.map { parseSubjectRule(it) }.sortedBy { it.subjectName.lowercase() },
+                        pendingCount = if (hasPending) pCount.coerceAtLeast(1) else 0,
+                        isFromCache = snap.metadata.isFromCache()
+                    )
+                }
+        } else {
+            flowOf(Phase4Slice())
+        }
 
         return combine(teachersFlow, periodFlow, assignmentsFlow, rulesFlow) { t, p, a, r ->
             CloudPhase4Snapshot(
@@ -530,7 +541,8 @@ class Phase4Repository(
                 .coerceIn(1, 20),
             weeklyOffDays = rawOff.sortedBy { it.sortOrder },
             active = doc.getBoolean("active") ?: true,
-            linkedMemberUid = doc.getString("linkedMemberUid").orEmpty()
+            linkedMemberUid = doc.getString("linkedMemberUid").orEmpty(),
+            dob = doc.getString("dob").orEmpty()
         )
     }
 

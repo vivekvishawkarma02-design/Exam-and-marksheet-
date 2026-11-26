@@ -743,8 +743,13 @@ fun Phase9FeeReportsTab(
                                         style = MaterialTheme.typography.bodySmall,
                                         fontWeight = FontWeight.SemiBold
                                     )
+                                    val actorLabel = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+                                        authorUid = log.actorUid,
+                                        storedName = log.actorName,
+                                        deletedUserUids = uiState.deletedUserUids
+                                    )
                                     Text(
-                                        text = "By ${log.actorName} at ${fmt.format(Date(log.clientCreatedAtMs))}",
+                                        text = "By $actorLabel at ${fmt.format(Date(log.clientCreatedAtMs))}",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )

@@ -497,7 +497,12 @@ fun Phase14BulkImportScreen(
                                 text = "${log.session} • +${log.addedCount} added, ${log.updatedCount} updated, ${log.skippedCount} skipped, ${log.errorCount} errors",
                                 style = MaterialTheme.typography.bodySmall
                             )
-                            Text("$dt • ${log.actorName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            val actorLabel = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+                                authorUid = log.actorUid,
+                                storedName = log.actorName,
+                                deletedUserUids = uiState.deletedUserUids
+                            )
+                            Text("$dt • $actorLabel", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }

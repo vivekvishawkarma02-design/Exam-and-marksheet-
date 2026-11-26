@@ -1,5 +1,6 @@
 package com.example.data.cloud
 
+import com.example.domain.AuthorDisplayHelper
 import com.example.domain.DefaultSchoolTemplate
 import com.example.domain.DefaultSubjects
 import com.example.domain.MemberPermissions
@@ -1120,24 +1121,87 @@ class OrgCloudRepository(
         return try {
             requireOnline("delete an organisation")
             val orgRef = db.collection("organisations").document(org.id)
-            // Delete school subcollections first
+            val codeRef = db.collection("orgCodes").document(org.code)
+
+            // 1. Delete org root & reserve code FIRST while members/{ownerUid} is still OWNER.
+            // This flips !exists(orgPath(orgId)) / !existsAfter(orgPath(orgId)) to true so
+            // append-only subcollections allow Owner purge without loosening normal immutability.
+            val startBatch = db.batch()
+            if (org.code.isNotBlank()) {
+                startBatch.delete(codeRef)
+            }
+            startBatch.delete(orgRef)
+            startBatch.commit().await()
+
+            // 2. Delete all school subcollections + school docs
             val schoolsSnap = orgRef.collection("schools").get().await()
             for (schoolDoc in schoolsSnap.documents) {
-                for (sub in listOf("students", "marks", "coScholastic", "termInfo")) {
+                for (sub in listOf("students", "marks", "markEditLogs", "coScholastic", "termInfo")) {
                     deleteCollectionInChunks(schoolDoc.reference.collection(sub))
                 }
                 schoolDoc.reference.delete().await()
             }
-            deleteCollectionInChunks(orgRef.collection("joinRequests"))
-            deleteCollectionInChunks(orgRef.collection("inviteCodes"))
-            deleteCollectionInChunks(orgRef.collection("teachers"))
-            deleteCollectionInChunks(orgRef.collection("periodStructures"))
-            deleteCollectionInChunks(orgRef.collection("classAssignments"))
-            deleteCollectionInChunks(orgRef.collection("subjectRules"))
-            deleteCollectionInChunks(orgRef.collection("timetableCells"))
-            deleteCollectionInChunks(orgRef.collection("timetableLayouts"))
 
-            // Delete non-owner members first
+            // 3. Delete all organisation-level subcollections (Phases 2–14 + Phase 15 deletedUsers)
+            val orgSubcollections = listOf(
+                "joinRequests",
+                "inviteCodes",
+                "auditLog",
+                "deletedUsers",
+                "teachers",
+                "periodStructures",
+                "classAssignments",
+                "subjectRules",
+                "timetableCells",
+                "timetableLayouts",
+                "teacherLeaves",
+                "substitutions",
+                "timetableUndoSnapshots",
+                "teacherScopes",
+                "teacherAttendance",
+                "schoolCalendars",
+                "studentAttendance",
+                "studentAttendanceEditLogs",
+                "feeStructures",
+                "studentFeeOverrides",
+                "feeReceipts",
+                "feeMessageSentLogs",
+                "schoolNotices",
+                "feeAuditLogs",
+                "schoolCertificates",
+                "cashBookSettings",
+                "cashBookEntries",
+                "cashBookDayClosings",
+                "cashBookAuditLogs",
+                "enquirySettings",
+                "admissionEnquiries",
+                "examSchedules",
+                "examRooms",
+                "examSeatings",
+                "examInvigilatorDuties",
+                "stockTransactions",
+                "transportRoutes",
+                "salaryRuleConfigs",
+                "staffSalaryProfiles",
+                "salaryMonthlyRecords",
+                "staffSalaryAdvances",
+                "salaryMonthLocks",
+                "salaryAuditLogs",
+                "schoolClassOrders",
+                "sessionTransitions",
+                "promotionRecords",
+                "bulkImportLogs",
+                "backupExportLogs",
+                "classDiaryEntries",
+                "classDiaryHistory",
+                "schoolBirthdayConfigs",
+                "birthdayWishes"
+            )
+            for (sub in orgSubcollections) {
+                deleteCollectionInChunks(orgRef.collection(sub))
+            }
+
+            // 4. Delete non-owner members first (owner stays active until very end for rules authorization)
             val membersSnap = orgRef.collection("members").get().await()
             for (mDoc in membersSnap.documents) {
                 if (mDoc.id != ownerUid) {
@@ -1145,25 +1209,24 @@ class OrgCloudRepository(
                 }
             }
 
-            // Atomically delete org + owner member + orgCode + remove from owner's users/{uid}
+            // 5. Finally remove owner's member doc and remove org from users/{uid}
             val userRef = db.collection("users").document(ownerUid)
             val userSnap = userRef.get().await()
-            val updatedMemberships = (userSnap.get("memberships") as? List<*>)
-                ?.mapNotNull { CloudMembershipEntry.fromMap(it as? Map<*, *>) }
-                .orEmpty()
-                .filterNot { it.orgId == org.id }
-
             val finalBatch = db.batch()
-            finalBatch.delete(db.collection("orgCodes").document(org.code))
             finalBatch.delete(orgRef.collection("members").document(ownerUid))
-            finalBatch.delete(orgRef)
-            finalBatch.update(
-                userRef,
-                mapOf(
-                    "memberships" to updatedMemberships.map { it.toMap() },
-                    "updatedAt" to FieldValue.serverTimestamp()
+            if (userSnap.exists()) {
+                val updatedMemberships = (userSnap.get("memberships") as? List<*>)
+                    ?.mapNotNull { CloudMembershipEntry.fromMap(it as? Map<*, *>) }
+                    .orEmpty()
+                    .filterNot { it.orgId == org.id }
+                finalBatch.update(
+                    userRef,
+                    mapOf(
+                        "memberships" to updatedMemberships.map { it.toMap() },
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
                 )
-            )
+            }
             finalBatch.commit().await()
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -1294,30 +1357,106 @@ class OrgCloudRepository(
         }
     }
 
-    suspend fun deleteOwnAccount(memberships: List<CloudMembershipEntry>): Result<Unit> {
+    fun observeDeletedUserUids(orgId: String): Flow<Set<String>> =
+        db.collection("organisations").document(orgId)
+            .collection("deletedUsers")
+            .snapshots()
+            .map { snap -> snap.documents.map { it.id }.toSet() }
+
+    suspend fun deleteOwnAccount(
+        memberships: List<CloudMembershipEntry>,
+        pendingRequests: List<CloudPendingRequestRef> = emptyList(),
+        deleteOwnedOrgsConfirmed: Boolean = false
+    ): Result<Unit> {
         val user = auth.currentUser ?: return Result.failure(IllegalStateException("Not signed in"))
         val uid = user.uid
-        val guardError = OrgAccessEvaluator.canDeleteOwnAccount(memberships.map { it.toDomain() })
-        if (guardError != null) return Result.failure(IllegalStateException(guardError))
+        val domainMemberships = memberships.map { it.toDomain() }
+        val ownedOrgs = OrgAccessEvaluator.ownedActiveOrganisations(domainMemberships)
+        if (ownedOrgs.isNotEmpty() && !deleteOwnedOrgsConfirmed) {
+            val guardError = OrgAccessEvaluator.canDeleteOwnAccount(domainMemberships)
+                ?: "Transfer ownership or choose to delete your owned organisation(s) first."
+            return Result.failure(IllegalStateException(guardError))
+        }
 
         return try {
             requireOnline("delete your account")
-            // 1. Remove own member docs and pending requests across all memberships
-            for (m in memberships) {
+
+            // 1. If the owner explicitly confirmed deleting owned organisation(s), remove them completely first
+            for (owned in ownedOrgs) {
+                val orgSnap = runCatching {
+                    db.collection("organisations").document(owned.orgId).get().await()
+                }.getOrNull()
+                val resolvedCode = owned.orgCode.ifBlank { orgSnap?.getString("code").orEmpty() }
+                val resolvedName = owned.orgName.ifBlank { orgSnap?.getString("name").orEmpty() }
+                deleteOrganisation(
+                    CloudOrganisation(
+                        id = owned.orgId,
+                        name = resolvedName,
+                        code = resolvedCode,
+                        ownerUid = uid
+                    )
+                ).getOrThrow()
+            }
+
+            // 2. For normal (non-owner) memberships: preserve school records created by this user,
+            //    mark UID in deletedUsers so author renders as "deleted user", log event, and remove membership.
+            val ownedOrgIds = ownedOrgs.map { it.orgId }.toSet()
+            for (m in memberships.filterNot { it.orgId in ownedOrgIds }) {
+                val orgRef = db.collection("organisations").document(m.orgId)
                 try {
-                    db.collection("organisations").document(m.orgId)
-                        .collection("members").document(uid).delete().await()
+                    val batch = db.batch()
+                    batch.set(
+                        orgRef.collection("deletedUsers").document(uid),
+                        mapOf(
+                            "uid" to uid,
+                            "deletedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    batch.set(
+                        orgRef.collection("auditLog").document("audit_del_${uid.take(12)}_${System.currentTimeMillis()}"),
+                        mapOf(
+                            "actorUid" to uid,
+                            "actorName" to AuthorDisplayHelper.DELETED_USER_LABEL,
+                            "action" to "ACCOUNT_DELETED",
+                            "targetType" to "member",
+                            "targetId" to uid,
+                            "summary" to "Member deleted their own account; school records retained as ${AuthorDisplayHelper.DELETED_USER_LABEL}",
+                            "createdAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    batch.delete(orgRef.collection("members").document(uid))
+                    batch.delete(orgRef.collection("teacherScopes").document(uid))
+                    batch.commit().await()
                 } catch (_: Exception) {
-                    // Best-effort cleanup if already removed
+                    // Fallback: attempt member removal alone if already inactive/removed
+                    try {
+                        orgRef.collection("members").document(uid).delete().await()
+                    } catch (_: Exception) {
+                        // Already removed
+                    }
                 }
             }
-            // 2. Delete private users/{uid} doc
+
+            // 3. Remove any pending join requests belonging to this user
+            for (req in pendingRequests) {
+                if (req.orgId.isNotBlank() && req.orgId !in ownedOrgIds) {
+                    try {
+                        db.collection("organisations").document(req.orgId)
+                            .collection("joinRequests").document(uid).delete().await()
+                    } catch (_: Exception) {
+                        // Best-effort cleanup
+                    }
+                }
+            }
+
+            // 4. Delete private users/{uid} doc
             try {
                 db.collection("users").document(uid).delete().await()
             } catch (_: Exception) {
                 // Ignore if already deleted
             }
-            // 3. Delete Firebase Auth account
+
+            // 5. Delete Firebase Auth account
             user.delete().await()
             Result.success(Unit)
         } catch (e: CancellationException) {

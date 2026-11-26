@@ -519,6 +519,7 @@ fun Phase10CashBookScreen(
                         items(daySummary.activeOtherIncomes, key = { it.id }) { entry ->
                             CashBookEntryCard(
                                 entry = entry,
+                                deletedUserUids = uiState.deletedUserUids,
                                 isHindi = isHindi,
                                 canEdit = canEdit,
                                 onEdit = {
@@ -557,6 +558,7 @@ fun Phase10CashBookScreen(
                         items(daySummary.activeExpenses, key = { it.id }) { entry ->
                             CashBookEntryCard(
                                 entry = entry,
+                                deletedUserUids = uiState.deletedUserUids,
                                 isHindi = isHindi,
                                 canEdit = canEdit,
                                 onEdit = {
@@ -587,6 +589,7 @@ fun Phase10CashBookScreen(
                         items(daySummary.cancelledEntries, key = { it.id }) { entry ->
                             CashBookEntryCard(
                                 entry = entry,
+                                deletedUserUids = uiState.deletedUserUids,
                                 isHindi = isHindi,
                                 canEdit = false,
                                 onEdit = {},
@@ -898,7 +901,7 @@ fun Phase10CashBookScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(schoolAuditLogs.take(60), key = { it.id }) { log ->
-                            CashBookAuditRow(log)
+                            CashBookAuditRow(log, uiState.deletedUserUids)
                         }
                     }
                 }
@@ -937,6 +940,7 @@ private fun CashBookKpiCard(
 @Composable
 private fun CashBookEntryCard(
     entry: CashBookEntryRecord,
+    deletedUserUids: Set<String> = emptySet(),
     isHindi: Boolean,
     canEdit: Boolean,
     onEdit: () -> Unit,
@@ -944,6 +948,16 @@ private fun CashBookEntryCard(
     onViewPhoto: () -> Unit
 ) {
     val accent = if (entry.isExpense) Color(0xFFB71C1C) else Color(0xFF1B5E20)
+    val creatorLabel = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+        authorUid = entry.createdByUid,
+        storedName = entry.createdByName,
+        deletedUserUids = deletedUserUids
+    )
+    val editorLabel = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+        authorUid = entry.updatedByUid,
+        storedName = entry.updatedByName,
+        deletedUserUids = deletedUserUids
+    )
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -963,7 +977,7 @@ private fun CashBookEntryCard(
                         textDecoration = if (entry.isCancelled) TextDecoration.LineThrough else TextDecoration.None
                     )
                     Text(
-                        text = "${entry.paymentMode.label} • ${entry.createdByName}",
+                        text = "${entry.paymentMode.label} • $creatorLabel",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -995,7 +1009,7 @@ private fun CashBookEntryCard(
 
             if (entry.lastEditReason.isNotBlank() && !entry.isCancelled) {
                 Text(
-                    text = "${p10Label(isHindi, "संपादन कारण", "Edited")}: ${entry.lastEditReason} (${entry.updatedByName})",
+                    text = "${p10Label(isHindi, "संपादन कारण", "Edited")}: ${entry.lastEditReason} ($editorLabel)",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.tertiary
                 )
@@ -1717,7 +1731,12 @@ private fun CashBookAddEditEntryDialog(
 }
 
 @Composable
-private fun CashBookAuditRow(log: CashBookAuditLogRecord) {
+private fun CashBookAuditRow(log: CashBookAuditLogRecord, deletedUserUids: Set<String> = emptySet()) {
+    val actorLabel = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+        authorUid = log.actorUid,
+        storedName = log.actorName,
+        deletedUserUids = deletedUserUids
+    )
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
         shape = RoundedCornerShape(8.dp),
@@ -1732,7 +1751,7 @@ private fun CashBookAuditRow(log: CashBookAuditLogRecord) {
             if (log.reason.isNotBlank()) {
                 Text("Reason: ${log.reason}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
             }
-            Text("By: ${log.actorName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("By: $actorLabel", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

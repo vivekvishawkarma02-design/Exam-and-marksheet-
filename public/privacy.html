@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy — School Report Card / गोपनीयता नीति</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --card: #ffffff;
+      --primary: #16315c;
+      --text: #1c2430;
+      --muted: #4b5563;
+      --border: #dce3ee;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Devanagari", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+    }
+    main {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 28px 18px 48px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+    h1, h2 {
+      color: var(--primary);
+      margin-top: 0;
+    }
+    .lang-nav {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .lang-nav a {
+      background: #e8eef9;
+      color: var(--primary);
+      text-decoration: none;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-weight: 600;
+    }
+    ul { padding-left: 20px; }
+    .note {
+      background: #fff8e6;
+      border: 1px solid #f0d58c;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 0.95rem;
+    }
+    footer {
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+      margin-top: 24px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <h1>Privacy Policy — School Report Card</h1>
+      <p><strong>App Name:</strong> School Report Card<br />
+      <strong>Contact Email:</strong> <a href="mailto:[YOUR_CONTACT_EMAIL]">[YOUR_CONTACT_EMAIL]</a><br />
+      <strong>Last Updated:</strong> [YOUR_UPDATE_DATE]</p>
+      <div class="lang-nav">
+        <a href="#english">English Version</a>
+        <a href="#hindi">हिन्दी संस्करण</a>
+        <a href="delete-account.html">Delete Account &amp; Data</a>
+        <a href="support.html">Support</a>
+      </div>
+      <div class="note">
+        Replace <code>[YOUR_CONTACT_EMAIL]</code> and <code>[YOUR_UPDATE_DATE]</code> before publishing.
+        This page describes how the app actually handles data based on its code. Have a qualified advisor review it if your school district requires region-specific legal terms.
+      </div>
+    </div>
+
+    <section id="english" class="card">
+      <h2>English Privacy Policy</h2>
+
+      <h3>1. Who This App Is For (Important Children's Data Note)</h3>
+      <p>School Report Card is a school administration app built exclusively for <strong>adult school staff</strong> (school owners, principals, office operators, fee clerks, and teachers). It is <strong>not intended for direct use by children or students</strong>. Student information is entered and managed strictly by authorised school staff.</p>
+
+      <h3>2. What Data We Collect &amp; Store</h3>
+      <ul>
+        <li><strong>Staff Account Information:</strong> Your name, email address, Firebase user ID, mobile number (optional for teacher profiles), and role/permissions inside each school organisation.</li>
+        <li><strong>School &amp; Academic Records Entered by Authorised Staff:</strong> School names, logos, classes, subjects, timetables, student names, admission numbers, dates of birth (used for academic records, certificates, and optional in-app birthday wishes), guardian names and mobile numbers, optional compressed photos (kept under 150 KB using the Android Photo Picker, including profile photos and optional class diary blackboard/homework photos), daily attendance, class diary entries, exam marks, co-scholastic grades, and printable report cards/certificates.</li>
+        <li><strong>Operations &amp; Finance Records (Only When Enabled):</strong> Fee structures, fee receipts, guardian reminders, cash book income/expense entries (with optional bill photo), admission enquiries, stock, transport routes, and staff salary records (restricted to Organisation Owners and explicitly permitted Admins/Teachers for own slips).</li>
+        <li><strong>Audit &amp; Activity Logs:</strong> User IDs, staff names, timestamps, and short change summaries to prevent accidental or unauthorised changes.</li>
+      </ul>
+
+      <h3>3. What We Do NOT Collect</h3>
+      <p>We do <strong>not</strong> use location tracking, background contacts scraping, or third-party analytics trackers.</p>
+
+      <h3>4. Why Data Is Used</h3>
+      <p>All data is used strictly to provide school management, offline-capable sync between authorised staff devices, attendance &amp; marks calculation, class diary &amp; birthday reminders, fee management, and printable PDF report cards/certificates/slips.</p>
+
+      <h3>5. Where Data Is Stored</h3>
+      <p>Your account credentials and school organisation records are stored on <strong>Google Firebase</strong> (Firebase Authentication and Cloud Firestore) over encrypted HTTPS/TLS connections. For offline work in low-signal areas, Firestore stores a temporary local cache on the staff member's phone, which is cleared when signing out or deleting the account.</p>
+
+      <h3>6. Who Can See Data</h3>
+      <ul>
+        <li>Each school organisation is isolated. People outside your organisation cannot see your data.</li>
+        <li>Inside an organisation, Firebase server security rules restrict access according to the role, school list, and module permissions set by the Organisation Owner or Admin.</li>
+        <li>We <strong>never sell, rent, or trade</strong> user or student data to anyone.</li>
+      </ul>
+
+      <h3>7. Data Retention &amp; Deletion</h3>
+      <p>School records remain stored while your organisation actively uses the app. Staff can delete their own account at any time in the app via <strong>Settings &rarr; Account &rarr; Delete My Account</strong>, or request deletion by email if the app is uninstalled. See full instructions on <a href="delete-account.html">Delete Account &amp; Data</a>.</p>
+      <ul>
+        <li>If a <strong>normal staff member</strong> deletes their account, their login, profile, memberships, and device cache are deleted immediately. Historical school records they entered (marks, attendance, receipts) stay inside the school organisation for continuity, and the author name is shown as <code>"deleted user"</code>.</li>
+        <li>If the <strong>only Owner</strong> of an organisation deletes their account, they must first transfer ownership to another Admin OR explicitly choose to delete the entire organisation and all its school records.</li>
+      </ul>
+
+      <h3>8. Contact Us</h3>
+      <p>For privacy questions or deletion help, email: <a href="mailto:[YOUR_CONTACT_EMAIL]">[YOUR_CONTACT_EMAIL]</a></p>
+    </section>
+
+    <section id="hindi" class="card">
+      <h2>हिन्दी गोपनीयता नीति (Privacy Policy)</h2>
+
+      <h3>1. यह ऐप किसके लिए है (बच्चों के डेटा के बारे में स्पष्ट जानकारी)</h3>
+      <p>School Report Card केवल <strong>स्कूल के वयस्क स्टाफ</strong> (स्कूल मालिक, प्रधानाचार्य, ऑफिस क्लर्क, फीस क्लर्क और शिक्षक) के उपयोग के लिए बनाया गया है। यह ऐप <strong>बच्चों या छात्रों के सीधे उपयोग के लिए नहीं है</strong>। छात्रों का रिकॉर्ड केवल स्कूल के अधिकृत स्टाफ द्वारा दर्ज और संभाला जाता है।</p>
+
+      <h3>2. ऐप कौन-सा डेटा एकत्र और सेव करता है</h3>
+      <ul>
+        <li><strong>स्टाफ अकाउंट जानकारी:</strong> आपका नाम, ईमेल पता, Firebase यूज़र ID, मोबाइल नंबर (यदि टीचर प्रोफ़ाइल में दिया गया हो), और स्कूल संगठन में आपकी भूमिका व अनुमतियाँ।</li>
+        <li><strong>स्कूल व छात्र रिकॉर्ड (अधिकृत स्टाफ द्वारा दर्ज):</strong> स्कूल का नाम व लोगो, कक्षाएँ, विषय, टाइमटेबल, छात्र का नाम, प्रवेश संख्या, जन्मतिथि (रिपोर्ट कार्ड, सर्टिफिकेट व वैकल्पिक जन्मदिन शुभकामनाओं के लिए), अभिभावक का नाम व मोबाइल नंबर, वैकल्पिक छोटे फोटो (&lt;150 KB, Android Photo Picker से — प्रोफ़ाइल व क्लास डायरी ब्लैकबोर्ड/होमवर्क फोटो सहित), दैनिक उपस्थिति, क्लास डायरी, परीक्षा अंक, को-स्कोलास्टिक ग्रेड और रिपोर्ट कार्ड/सर्टिफिकेट।</li>
+        <li><strong>फीस, कैश बुक व अन्य स्कूल कार्य (अनुमति होने पर):</strong> फीस स्ट्रक्चर, फीस रसीद, कैश बुक आय/खर्च (बिल फोटो सहित), एडमिशन पूछताछ, स्टॉक, ट्रांसपोर्ट रूट, और स्टाफ वेतन रिकॉर्ड (केवल मालिक या अनुमति प्राप्त एडमिन के लिए)।</li>
+        <li><strong>ऑडिट लॉग:</strong> बदलाव करने वाले स्टाफ की ID/नाम और समय, ताकि गलत बदलाव या गड़बड़ी को रोका जा सके।</li>
+      </ul>
+
+      <h3>3. हम क्या एकत्र नहीं करते</h3>
+      <p>इस ऐप में कोई विज्ञापन (Ads SDK), एडवरटाइज़िंग ID, बैकग्राउंड लोकेशन ट्रैकिंग या थर्ड-पार्टी एनालिटिक्स ट्रैकर नहीं है।</p>
+
+      <h3>4. डेटा का उपयोग क्यों किया जाता है</h3>
+      <p>डेटा का उपयोग केवल स्कूल के रोज़मर्रा के काम, अधिकृत स्टाफ डिवाइस के बीच सुरक्षित सिंक, उपस्थिति व अंक गणना, फीस रसीद और PDF रिपोर्ट कार्ड बनाने के लिए किया जाता है।</p>
+
+      <h3>5. डेटा कहाँ सेव रहता है</h3>
+      <p>सभी अकाउंट और स्कूल रिकॉर्ड <strong>Google Firebase</strong> (Firebase Authentication और Cloud Firestore) में एन्क्रिप्टेड कनेक्शन के माध्यम से सेव रहते हैं। बिना इंटरनेट काम करने के लिए फोन में ऑफ़लाइन कैश रहता है, जो साइन-आउट करने या अकाउंट हटाने पर मिटा दिया जाता है।</p>
+
+      <h3>6. डेटा कौन देख सकता है</h3>
+      <ul>
+        <li>प्रत्येक संगठन (Organisation) का डेटा अलग और सुरक्षित रहता है। किसी अन्य स्कूल के सदस्य आपका डेटा नहीं देख सकते।</li>
+        <li>संगठन के अंदर भी Firebase सर्वर नियम हर सदस्य को केवल वही स्कूल और मॉड्यूल दिखाते हैं जिनकी अनुमति मालिक या एडमिन ने दी है।</li>
+        <li>हम किसी भी छात्र, अभिभावक या स्टाफ का डेटा <strong>कभी नहीं बेचते या किराए पर नहीं देते</strong>।</li>
+      </ul>
+
+      <h3>7. डेटा कितने समय रहता है और कैसे हटाएँ</h3>
+      <p>जब तक स्कूल संगठन ऐप का उपयोग करता है, रिकॉर्ड सेव रहते हैं। आप ऐप के अंदर <strong>Settings &rarr; Account &rarr; Delete My Account</strong> से कभी भी अपना अकाउंट हटा सकते हैं। पूरा विवरण <a href="delete-account.html">अकाउंट व डेटा हटाने का पेज</a> पर पढ़ें।</p>
+      <ul>
+        <li>सामान्य सदस्य (शिक्षक/क्लर्क/एडमिन) का अकाउंट हटाने पर उनका लॉगिन, प्रोफ़ाइल और सदस्यता तुरंत हट जाती है; उनके द्वारा दर्ज किए गए पुराने स्कूल रिकॉर्ड स्कूल के काम के लिए सुरक्षित रहते हैं और लेखक के नाम की जगह <code>"deleted user"</code> दिखता है।</li>
+        <li>यदि आप संगठन के <strong>अकेले मालिक (Owner)</strong> हैं, तो पहले किसी अन्य एडमिन को मालिकाना हक देना होगा या स्पष्ट पुष्टि के साथ पूरा संगठन और उसका सारा डेटा हटाने का विकल्प चुनना होगा।</li>
+      </ul>
+
+      <h3>8. संपर्क करें</h3>
+      <p>गोपनीयता से जुड़े किसी भी प्रश्न या सहायता के लिए ईमेल करें: <a href="mailto:[YOUR_CONTACT_EMAIL]">[YOUR_CONTACT_EMAIL]</a></p>
+    </section>
+
+    <footer>
+      School Report Card &bull; <a href="delete-account.html">Delete Account</a> &bull; <a href="support.html">Support</a>
+    </footer>
+  </main>
+</body>
+</html>

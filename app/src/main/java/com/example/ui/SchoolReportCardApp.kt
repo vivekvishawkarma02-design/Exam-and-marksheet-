@@ -116,6 +116,9 @@ object AppRoutes {
     const val ROUTE_SESSION_PROMOTION = "session_promotion"
     const val ROUTE_BULK_IMPORT = "bulk_import"
     const val ROUTE_BACKUP_EXPORT = "backup_export"
+    const val ROUTE_RESULT_ANALYSIS = "result_analysis"
+    const val ROUTE_CLASS_DIARY = "phase18_class_diary"
+    const val ROUTE_BIRTHDAYS = "phase18_birthdays"
 }
 
 private enum class OnboardingSubScreen {
@@ -280,6 +283,7 @@ private fun AuthenticatedSessionHost(
     var showDeleteAccountDialog by remember { mutableStateOf(false) }
     var isDeletingAccount by remember { mutableStateOf(false) }
     var deleteAccountError by remember { mutableStateOf<String?>(null) }
+    var jumpToMembersTrigger by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
         sessionViewModel.snackbar.collect { msg ->
@@ -406,6 +410,7 @@ private fun AuthenticatedSessionHost(
                 viewModel = schoolViewModel,
                 localMigrationSummary = sessionState.localMigrationSummary,
                 shouldAutoPromptMigration = sessionState.promptLocalMigrationForOrgId == selectedOrgId,
+                jumpToMembersTrigger = jumpToMembersTrigger,
                 onDismissAutoMigrationPrompt = sessionViewModel::dismissLocalMigrationPrompt,
                 onSwitchOrganisation = { notice -> sessionViewModel.exitOrganisationToPicker(notice) },
                 onSignOut = ::performSignOut,
@@ -425,11 +430,12 @@ private fun AuthenticatedSessionHost(
             userEmail = user.email.orEmpty(),
             isDeleting = isDeletingAccount,
             errorMessage = deleteAccountError,
-            onConfirmDeleteWithPassword = { password ->
+            onConfirmDeleteWithPassword = { password, deleteOwnedOrgs ->
                 deleteAccountError = null
                 isDeletingAccount = true
                 sessionViewModel.deleteOwnAccount(
                     reauthenticate = { GoogleAuthHelper.reauthenticateWithPassword(password) },
+                    deleteOwnedOrgsConfirmed = deleteOwnedOrgs,
                     onResult = { ok, err ->
                         isDeletingAccount = false
                         if (ok) {
@@ -441,11 +447,12 @@ private fun AuthenticatedSessionHost(
                     }
                 )
             },
-            onConfirmDeleteWithGoogle = {
+            onConfirmDeleteWithGoogle = { deleteOwnedOrgs ->
                 deleteAccountError = null
                 isDeletingAccount = true
                 sessionViewModel.deleteOwnAccount(
                     reauthenticate = { GoogleAuthHelper.reauthenticateWithGoogle(context, credentialManager) },
+                    deleteOwnedOrgsConfirmed = deleteOwnedOrgs,
                     onResult = { ok, err ->
                         isDeletingAccount = false
                         if (ok) {
@@ -457,6 +464,9 @@ private fun AuthenticatedSessionHost(
                     }
                 )
             },
+            onTransferOwnershipClick = if (selectedOrgId != null) {
+                { jumpToMembersTrigger++ }
+            } else null,
             onDismiss = {
                 if (!isDeletingAccount) {
                     deleteAccountError = null
@@ -472,6 +482,7 @@ private fun OrganisationWorkspace(
     viewModel: SchoolViewModel,
     localMigrationSummary: LocalMigrationSummary,
     shouldAutoPromptMigration: Boolean,
+    jumpToMembersTrigger: Int = 0,
     onDismissAutoMigrationPrompt: () -> Unit,
     onSwitchOrganisation: (String?) -> Unit,
     onSignOut: () -> Unit,
@@ -608,7 +619,8 @@ private fun OrganisationWorkspace(
         currentRoute == AppRoutes.ROUTE_ENQUIRY ||
         currentRoute == AppRoutes.ROUTE_EXAMS ||
         currentRoute == AppRoutes.ROUTE_STOCK ||
-        currentRoute == AppRoutes.ROUTE_TRANSPORT
+        currentRoute == AppRoutes.ROUTE_TRANSPORT ||
+        currentRoute == AppRoutes.ROUTE_RESULT_ANALYSIS
 
     fun navigateTopLevel(route: String) {
         navController.navigate(route) {
@@ -623,6 +635,12 @@ private fun OrganisationWorkspace(
     fun openSchoolsScreen() {
         if (uiState.canEdit(AppModule.SETTINGS) && currentRoute != AppRoutes.ROUTE_SCHOOLS) {
             navController.navigate(AppRoutes.ROUTE_SCHOOLS) { launchSingleTop = true }
+        }
+    }
+
+    LaunchedEffect(jumpToMembersTrigger) {
+        if (jumpToMembersTrigger > 0 && (uiState.canView(AppModule.MEMBERS) || uiState.isAdmin)) {
+            navigateTopLevel(AppRoutes.ROUTE_MEMBERS)
         }
     }
 
@@ -855,6 +873,21 @@ private fun OrganisationWorkspace(
                                     onNavigateToBackupExport = {
                                         if (uiState.canUseBackupExport) {
                                             navController.navigate(AppRoutes.ROUTE_BACKUP_EXPORT) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToResultAnalysis = {
+                                        if (uiState.canViewResultAnalysis) {
+                                            navController.navigate(AppRoutes.ROUTE_RESULT_ANALYSIS) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToClassDiary = {
+                                        if (uiState.canViewClassDiary) {
+                                            navController.navigate(AppRoutes.ROUTE_CLASS_DIARY) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToBirthdays = {
+                                        if (uiState.canViewBirthdays) {
+                                            navController.navigate(AppRoutes.ROUTE_BIRTHDAYS) { launchSingleTop = true }
                                         }
                                     },
                                     onPrintOwnSalarySlip = { slip, pageSize ->
@@ -1348,6 +1381,46 @@ private fun OrganisationWorkspace(
                                     }
                                 }
                             }
+
+                            composable(AppRoutes.ROUTE_RESULT_ANALYSIS) {
+                                if (uiState.canViewResultAnalysis) {
+                                    Phase17ResultAnalysisScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_CLASS_DIARY) {
+                                if (uiState.canViewClassDiary) {
+                                    Phase18ClassDiaryScreen(
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_BIRTHDAYS) {
+                                if (uiState.canViewBirthdays) {
+                                    Phase18BirthdaysScreen(
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1400,6 +1473,7 @@ private fun OrganisationWorkspace(
             title = "${uiState.activeSchool.name} — Marks Edit Log",
             logs = uiState.markEditLogs,
             conflicts = uiState.markConflicts,
+            deletedUserUids = uiState.deletedUserUids,
             onDismiss = { showConflictHistoryDialog = false }
         )
     }

@@ -210,11 +210,14 @@ class OrgAcademicRepository(
             OrgAccessEvaluator.canViewModule(member, AppModule.REPORTS) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.ATTENDANCE) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.SESSION_PROMOTION) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.RESULT_ANALYSIS) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.CLASS_DIARY) ||
             isClassTeacher
 
         val canReadMarks = OrgAccessEvaluator.canViewModule(member, AppModule.MARKS) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.REPORTS) ||
-            OrgAccessEvaluator.canViewModule(member, AppModule.SESSION_PROMOTION)
+            OrgAccessEvaluator.canViewModule(member, AppModule.SESSION_PROMOTION) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.RESULT_ANALYSIS)
 
         val canReadMarkLogs = OrgAccessEvaluator.isAdmin(member) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.MARKS)

@@ -87,8 +87,13 @@ class OrgAccessEvaluatorTest {
         val ownerPerms = MemberPermissions.presetFor(OrgRole.OWNER)
         val adminPerms = MemberPermissions.presetFor(OrgRole.ADMIN)
         AppModule.entries.forEach { module ->
-            assertEquals(AccessLevel.EDIT, ownerPerms.levelFor(module))
-            val expectedAdminLevel = if (module == AppModule.SALARY) AccessLevel.NONE else AccessLevel.EDIT
+            val expectedOwnerLevel = if (module == AppModule.RESULT_ANALYSIS) AccessLevel.VIEW else AccessLevel.EDIT
+            assertEquals(expectedOwnerLevel, ownerPerms.levelFor(module))
+            val expectedAdminLevel = when (module) {
+                AppModule.SALARY -> AccessLevel.NONE
+                AppModule.RESULT_ANALYSIS -> AccessLevel.VIEW
+                else -> AccessLevel.EDIT
+            }
             assertEquals(expectedAdminLevel, adminPerms.levelFor(module))
         }
 

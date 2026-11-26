@@ -12,12 +12,15 @@ android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
+  val appVersionCode = findProperty("APP_VERSION_CODE")?.toString()?.trim()?.toIntOrNull() ?: 1
+  val appVersionName = findProperty("APP_VERSION_NAME")?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: "1.0.0"
+
   defaultConfig {
     applicationId = "com.aistudio.cpireportcard.ghzpkr"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = appVersionCode
+    versionName = appVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -43,7 +46,8 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
@@ -67,6 +71,7 @@ android {
     unitTests {
       isIncludeAndroidResources = true
       all {
+        it.maxHeapSize = "2g"
         it.systemProperty(
           "robolectric.dependency.repo.url",
           "https://maven-central.storage-download.googleapis.com/maven2"

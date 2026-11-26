@@ -38,6 +38,10 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Gavel
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Restore
@@ -75,11 +79,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
+import com.example.R
 import com.example.data.LegacyBackupPayload
 import com.example.data.LegacyImportTarget
 import com.example.data.SchoolEntity
@@ -87,6 +94,7 @@ import com.example.data.SubjectEntity
 import com.example.data.cloud.LocalMigrationSummary
 import com.example.domain.AppModule
 import com.example.domain.ExamType
+import com.example.domain.LegalConfig
 import com.example.ui.theme.AbsentAmber
 import com.example.ui.theme.AbsentAmberContainer
 import com.example.util.PdfExportHelper
@@ -261,25 +269,25 @@ fun SettingsScreen(
                             onClick = onSwitchOrganisation,
                             modifier = Modifier
                                 .weight(1f)
-                                .height(46.dp)
+                                .heightIn(min = 48.dp)
                                 .testTag("settings_switch_org_button"),
-                            contentPadding = PaddingValues(horizontal = 8.dp)
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                         ) {
                             Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Switch Org", maxLines = 1)
+                            Text("Switch Org", maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                         OutlinedButton(
                             onClick = onSignOut,
                             modifier = Modifier
                                 .weight(1f)
-                                .height(46.dp)
+                                .heightIn(min = 48.dp)
                                 .testTag("settings_sign_out_button"),
-                            contentPadding = PaddingValues(horizontal = 8.dp)
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                         ) {
                             Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Sign Out", maxLines = 1)
+                            Text("Sign Out", maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
 
@@ -291,21 +299,23 @@ fun SettingsScreen(
                             onClick = { onOpenLegalDoc(LegalDocType.PRIVACY_POLICY) },
                             modifier = Modifier
                                 .weight(1f)
+                                .heightIn(min = 48.dp)
                                 .testTag("settings_privacy_policy_button")
                         ) {
                             Icon(Icons.Default.PrivacyTip, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Privacy Policy")
+                            Text("Privacy Policy", maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                         TextButton(
                             onClick = { onOpenLegalDoc(LegalDocType.TERMS_OF_SERVICE) },
                             modifier = Modifier
                                 .weight(1f)
+                                .heightIn(min = 48.dp)
                                 .testTag("settings_terms_button")
                         ) {
                             Icon(Icons.Default.Gavel, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Terms")
+                            Text("Terms", maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
 
@@ -317,7 +327,7 @@ fun SettingsScreen(
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(46.dp)
+                                .heightIn(min = 48.dp)
                                 .testTag("settings_leave_org_button")
                         ) {
                             Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -332,7 +342,7 @@ fun SettingsScreen(
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(46.dp)
+                                .heightIn(min = 48.dp)
                                 .testTag("settings_delete_org_button")
                         ) {
                             Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -346,6 +356,7 @@ fun SettingsScreen(
                         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .heightIn(min = 48.dp)
                             .testTag("settings_delete_account_button")
                     ) {
                         Text("Delete My Account")
@@ -1175,6 +1186,15 @@ fun SettingsScreen(
                 }
             }
         }
+
+        // LAST CARD: About App, Version, Privacy Policy, Support & Deletion Guide (Always visible)
+        item {
+            SettingsAboutAndLegalCard(
+                versionName = BuildConfig.VERSION_NAME,
+                versionCode = BuildConfig.VERSION_CODE,
+                onOpenLegalDoc = onOpenLegalDoc
+            )
+        }
     }
 
     if (confirmLeaveOrg) {
@@ -1476,6 +1496,106 @@ private fun LegacyBackupMigrationDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun SettingsAboutAndLegalCard(
+    versionName: String,
+    versionCode: Int,
+    onOpenLegalDoc: (LegalDocType) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("settings_about_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "About ${stringResource(R.string.app_name)}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Version $versionName (Build $versionCode)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("settings_about_version_text")
+                    )
+                }
+            }
+
+            Text(
+                text = "Support contact: ${LegalConfig.CONTACT_EMAIL_PLACEHOLDER}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { onOpenLegalDoc(LegalDocType.PRIVACY_POLICY) },
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("settings_about_privacy_button")
+                ) {
+                    Icon(Icons.Default.PrivacyTip, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Privacy Policy")
+                }
+                OutlinedButton(
+                    onClick = { onOpenLegalDoc(LegalDocType.SUPPORT) },
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("settings_about_support_button")
+                ) {
+                    Icon(Icons.Default.HelpOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Support & Help")
+                }
+                OutlinedButton(
+                    onClick = { onOpenLegalDoc(LegalDocType.TERMS_OF_SERVICE) },
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("settings_about_terms_button")
+                ) {
+                    Icon(Icons.Default.Gavel, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Terms")
+                }
+                OutlinedButton(
+                    onClick = { onOpenLegalDoc(LegalDocType.DELETE_ACCOUNT) },
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("settings_about_delete_account_button")
+                ) {
+                    Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Delete Account Info")
+                }
+            }
+        }
+    }
 }
 
 @Composable

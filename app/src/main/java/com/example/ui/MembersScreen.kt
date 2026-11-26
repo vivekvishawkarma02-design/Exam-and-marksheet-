@@ -335,7 +335,7 @@ fun MembersScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(uiState.auditLogs, key = { it.id }) { log ->
-                            AuditLogRowCard(log = log)
+                            AuditLogRowCard(log = log, deletedUserUids = uiState.deletedUserUids)
                         }
                     }
                 }
@@ -750,10 +750,15 @@ private fun InviteCodeCard(
 }
 
 @Composable
-private fun AuditLogRowCard(log: CloudAuditLog) {
+private fun AuditLogRowCard(log: CloudAuditLog, deletedUserUids: Set<String> = emptySet()) {
     val timeText = log.createdAt?.toDate()?.let {
         SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.US).format(it)
     } ?: "Just now"
+    val resolvedAuthor = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+        authorUid = log.actorUid,
+        storedName = log.actorName,
+        deletedUserUids = deletedUserUids
+    )
     Card(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -779,7 +784,7 @@ private fun AuditLogRowCard(log: CloudAuditLog) {
             }
             Text(log.summary, style = MaterialTheme.typography.bodySmall)
             Text(
-                text = "By ${log.actorName}",
+                text = "By $resolvedAuthor",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -896,8 +901,9 @@ private fun MemberAccessEditorDialog(
                 Text("Module Permissions", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                 AppModule.entries.forEach { module ->
                     val isSalaryModule = module == AppModule.SALARY
+                    val isViewOnlyModule = module == AppModule.RESULT_ANALYSIS
                     val currentLvl = if (role == OrgRole.ADMIN && !isSalaryModule) {
-                        AccessLevel.EDIT
+                        if (isViewOnlyModule) AccessLevel.VIEW else AccessLevel.EDIT
                     } else {
                         permissions.levelFor(module)
                     }
@@ -906,17 +912,22 @@ private fun MemberAccessEditorDialog(
                     } else {
                         role != OrgRole.ADMIN
                     }
+                    val allowedLevels = if (isViewOnlyModule) {
+                        listOf(AccessLevel.NONE, AccessLevel.VIEW)
+                    } else {
+                        AccessLevel.entries
+                    }
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        val headerText = if (isSalaryModule) {
-                            "${module.label} (Owner-Only Grant)"
-                        } else {
-                            module.label
+                        val headerText = when {
+                            isSalaryModule -> "${module.label} (Owner-Only Grant)"
+                            isViewOnlyModule -> "${module.label} (View-Only Module)"
+                            else -> module.label
                         }
                         Text(headerText, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            AccessLevel.entries.forEach { lvl ->
+                            allowedLevels.forEach { lvl ->
                                 FilterChip(
-                                    selected = currentLvl == lvl,
+                                    selected = currentLvl == lvl || (isViewOnlyModule && lvl == AccessLevel.VIEW && currentLvl == AccessLevel.EDIT),
                                     enabled = canChangeThisModule,
                                     onClick = { permissions = permissions.withModule(module, lvl) },
                                     label = {

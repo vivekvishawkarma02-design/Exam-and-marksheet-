@@ -81,7 +81,8 @@ data class TeacherProfile(
     val maxConsecutivePeriods: Int = 3,
     val weeklyOffDays: List<DayOfWeekCode> = emptyList(),
     val active: Boolean = true,
-    val linkedMemberUid: String = ""
+    val linkedMemberUid: String = "",
+    val dob: String = ""
 ) {
     val hasLogin: Boolean get() = linkedMemberUid.isNotBlank()
 }

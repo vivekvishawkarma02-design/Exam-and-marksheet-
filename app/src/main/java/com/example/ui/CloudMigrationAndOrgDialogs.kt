@@ -63,12 +63,18 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import com.example.data.cloud.CloudMarkEditLog
 import com.example.data.cloud.CloudMembershipEntry
 import com.example.data.cloud.LocalMigrationSummary
 import com.example.data.cloud.MigrationProgress
 import com.example.domain.AuthMethod
+import com.example.domain.AuthorDisplayHelper
 import com.example.domain.MarkComponent
 import com.example.domain.MarkConflictNotice
 import com.example.domain.OfflineSyncEngine
@@ -400,6 +406,7 @@ fun StudentMarksHistoryDialog(
     title: String,
     logs: List<CloudMarkEditLog>,
     conflicts: List<MarkConflictNotice> = emptyList(),
+    deletedUserUids: Set<String> = emptySet(),
     onDismiss: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.US) }
@@ -539,8 +546,13 @@ fun StudentMarksHistoryDialog(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
+                                        val resolvedEditor = AuthorDisplayHelper.resolveAuthorName(
+                                            authorUid = entry.editorUid,
+                                            storedName = entry.editorName,
+                                            deletedUserUids = deletedUserUids
+                                        )
                                         Text(
-                                            text = "By ${entry.editorName.ifBlank { "Staff" }}",
+                                            text = "By $resolvedEditor",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -736,44 +748,204 @@ fun DeleteAccountDialog(
     userEmail: String,
     isDeleting: Boolean,
     errorMessage: String?,
-    onConfirmDeleteWithPassword: (password: String) -> Unit,
-    onConfirmDeleteWithGoogle: () -> Unit,
+    onConfirmDeleteWithPassword: (password: String, deleteOwnedOrgsConfirmed: Boolean) -> Unit,
+    onConfirmDeleteWithGoogle: (deleteOwnedOrgsConfirmed: Boolean) -> Unit,
+    onTransferOwnershipClick: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
-    val guardError = remember(memberships) {
-        OrgAccessEvaluator.canDeleteOwnAccount(memberships.map { it.toDomain() })
-    }
+    val domainMemberships = remember(memberships) { memberships.map { it.toDomain() } }
+    val ownedOrgs = remember(domainMemberships) { OrgAccessEvaluator.ownedActiveOrganisations(domainMemberships) }
+    val isSoleOwner = ownedOrgs.isNotEmpty()
+
+    var deleteWholeOrgConfirmed by remember { mutableStateOf(false) }
+    var typedOrgConfirmation by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
 
+    val ownerValidationError = remember(domainMemberships, deleteWholeOrgConfirmed, typedOrgConfirmation) {
+        if (!isSoleOwner || !deleteWholeOrgConfirmed) null
+        else OrgAccessEvaluator.validateOwnerAccountAndOrgDeletion(domainMemberships, typedOrgConfirmation)
+    }
+
+    val canSubmitDeletion = if (!isSoleOwner) {
+        !isDeleting && (reauthMethod == AuthMethod.GOOGLE || password.isNotBlank())
+    } else {
+        !isDeleting &&
+            deleteWholeOrgConfirmed &&
+            ownerValidationError == null &&
+            (reauthMethod == AuthMethod.GOOGLE || password.isNotBlank())
+    }
+
     AlertDialog(
         onDismissRequest = { if (!isDeleting) onDismiss() },
-        title = { Text("Delete My Account", style = MaterialTheme.typography.titleLarge, color = FailRed) },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier.padding(horizontal = 20.dp),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.WarningAmber, contentDescription = null, tint = FailRed)
+                Text(
+                    text = "Delete My Account",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = FailRed
+                )
+            }
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (guardError != null) {
-                    Surface(shape = RoundedCornerShape(10.dp), color = FailRedContainer) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = FailRedContainer,
+                    border = BorderStroke(1.dp, FailRed.copy(alpha = 0.35f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = guardError,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = FailRed,
-                            modifier = Modifier.padding(10.dp)
+                            text = "What WILL be deleted immediately:",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = FailRed
+                        )
+                        Text(
+                            text = "• Your Firebase sign-in login (${userEmail.ifBlank { "current user" }}) and user profile\n• All organisation memberships, role permissions, teacher scopes & pending join requests\n• Local offline cache and preferences stored on this phone",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
-                    Text(
-                        text = "Open that organisation, go to Members to transfer ownership to another Admin, or go to Settings to export a backup and delete the organisation first.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    Text(
-                        text = "This permanently deletes your account (${userEmail.ifBlank { "current user" }}), removes your profile and memberships, and clears cached data on this phone. This action cannot be undone.",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                }
 
+                if (!isSoleOwner) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = "What will NOT be deleted (unless an Owner deletes the organisation):",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "• School records you created (student marks, attendance sheets, fee receipts, certificates, cash book entries & audit logs) remain in the organisation so school work is not broken.\n• Your author name on those historical entries will display as \"${AuthorDisplayHelper.DELETED_USER_LABEL}\".",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = AbsentAmberContainer,
+                        border = BorderStroke(1.dp, AbsentAmber.copy(alpha = 0.45f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "You are the Owner of: ${ownedOrgs.joinToString(", ") { "${it.orgName} (@${it.orgCode})" }}",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Choose one option before deleting your account:",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (onTransferOwnershipClick != null) {
+                                OutlinedButton(
+                                    onClick = {
+                                        onDismiss()
+                                        onTransferOwnershipClick()
+                                    },
+                                    enabled = !isDeleting,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 48.dp)
+                                        .testTag("delete_account_transfer_ownership_button")
+                                ) {
+                                    Text("1. Transfer Ownership First (Recommended)")
+                                }
+                            } else {
+                                Text(
+                                    text = "1. Transfer Ownership (Recommended): Open your organisation → Members → select an Admin → Make Owner.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (deleteWholeOrgConfirmed) FailRedContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        border = BorderStroke(1.dp, if (deleteWholeOrgConfirmed) FailRed else MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !isDeleting) {
+                                        deleteWholeOrgConfirmed = !deleteWholeOrgConfirmed
+                                    }
+                                    .testTag("delete_account_whole_org_checkbox_row")
+                            ) {
+                                Checkbox(
+                                    checked = deleteWholeOrgConfirmed,
+                                    onCheckedChange = { deleteWholeOrgConfirmed = it },
+                                    enabled = !isDeleting,
+                                    colors = CheckboxDefaults.colors(checkedColor = FailRed),
+                                    modifier = Modifier.testTag("delete_account_whole_org_checkbox")
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "2. Delete the whole organisation(s) & all data instead",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (deleteWholeOrgConfirmed) FailRed else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+
+                            if (deleteWholeOrgConfirmed) {
+                                Text(
+                                    text = "PERMANENT WARNING — EVERYTHING BELOW WILL BE DESTROYED FOREVER:\n• All schools, classes, teachers, timetables & students\n• All marks, co-scholastic grades & attendance sheets\n• All fee structures, receipts, certificates, cash book & salary records\n• All staff memberships & invite codes (Tip: Export a JSON backup in Settings first if needed)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = FailRed
+                                )
+                                val expectedPrompt = if (ownedOrgs.size == 1) {
+                                    "Type '${ownedOrgs.first().orgCode}' to confirm"
+                                } else {
+                                    "Type DELETE ALL ORGANISATIONS to confirm"
+                                }
+                                OutlinedTextField(
+                                    value = typedOrgConfirmation,
+                                    onValueChange = { typedOrgConfirmation = it },
+                                    label = { Text(expectedPrompt) },
+                                    singleLine = true,
+                                    enabled = !isDeleting,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("delete_account_org_confirm_input")
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (!isSoleOwner || deleteWholeOrgConfirmed) {
                     if (reauthMethod == AuthMethod.EMAIL_PASSWORD) {
                         Text(
-                            text = "For security, enter your password to confirm deletion:",
+                            text = "Re-authentication required — enter your password:",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -804,46 +976,48 @@ fun DeleteAccountDialog(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "For security, you will be asked to re-authenticate with Google before your account is permanently deleted.",
+                                text = "Re-authentication required: Tapping the button below asks you to confirm with your Google account before deletion.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.padding(10.dp)
                             )
                         }
                     }
+                }
 
-                    if (!errorMessage.isNullOrBlank()) {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = FailRedContainer,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("delete_account_error")
-                        ) {
-                            Text(
-                                text = errorMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = FailRed,
-                                modifier = Modifier.padding(10.dp)
-                            )
-                        }
+                if (!errorMessage.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = FailRedContainer,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("delete_account_error")
+                    ) {
+                        Text(
+                            text = errorMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = FailRed,
+                            modifier = Modifier.padding(10.dp)
+                        )
                     }
                 }
             }
         },
         confirmButton = {
-            if (guardError == null) {
+            if (!isSoleOwner || deleteWholeOrgConfirmed) {
                 Button(
                     onClick = {
                         if (reauthMethod == AuthMethod.EMAIL_PASSWORD) {
-                            onConfirmDeleteWithPassword(password)
+                            onConfirmDeleteWithPassword(password, isSoleOwner && deleteWholeOrgConfirmed)
                         } else {
-                            onConfirmDeleteWithGoogle()
+                            onConfirmDeleteWithGoogle(isSoleOwner && deleteWholeOrgConfirmed)
                         }
                     },
-                    enabled = !isDeleting && (reauthMethod == AuthMethod.GOOGLE || password.isNotBlank()),
+                    enabled = canSubmitDeletion,
                     colors = ButtonDefaults.buttonColors(containerColor = FailRed),
-                    modifier = Modifier.testTag("confirm_delete_account_button")
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("confirm_delete_account_button")
                 ) {
                     if (isDeleting) {
                         CircularProgressIndicator(
@@ -852,23 +1026,35 @@ fun DeleteAccountDialog(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Verifying…")
+                        Text("Deleting…")
                     } else {
                         Text(
-                            if (reauthMethod == AuthMethod.GOOGLE) "Verify with Google & Delete"
-                            else "Verify & Delete Account"
+                            when {
+                                isSoleOwner && reauthMethod == AuthMethod.GOOGLE -> "Verify Google & Delete Org + Account"
+                                isSoleOwner -> "Verify & Delete Org + Account"
+                                reauthMethod == AuthMethod.GOOGLE -> "Verify with Google & Delete"
+                                else -> "Verify & Delete Account"
+                            }
                         )
                     }
                 }
             } else {
-                Button(onClick = onDismiss) {
-                    Text("Understood")
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Close")
                 }
             }
         },
         dismissButton = {
-            if (guardError == null && !isDeleting) {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+            if ((!isSoleOwner || deleteWholeOrgConfirmed) && !isDeleting) {
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Cancel")
+                }
             }
         }
     )

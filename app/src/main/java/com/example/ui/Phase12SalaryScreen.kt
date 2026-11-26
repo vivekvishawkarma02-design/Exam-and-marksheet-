@@ -360,6 +360,7 @@ fun Phase12SalaryScreen(
                     isOwner = isOwner,
                     ruleConfig = ruleConfig,
                     auditLogs = auditLogsForSchool,
+                    deletedUserUids = uiState.deletedUserUids,
                     onSaveRuleConfig = { updated ->
                         viewModel.saveSalaryRuleConfigForActiveSchool(updated)
                     }
@@ -1223,6 +1224,7 @@ private fun SalaryRulesAndAuditTab(
     isOwner: Boolean,
     ruleConfig: SalaryRuleConfig,
     auditLogs: List<SalaryAuditLogRecord>,
+    deletedUserUids: Set<String> = emptySet(),
     onSaveRuleConfig: (SalaryRuleConfig) -> Unit
 ) {
     var perDayBasis by remember(ruleConfig) { mutableStateOf(ruleConfig.perDayBasis) }
@@ -1410,8 +1412,14 @@ private fun SalaryRulesAndAuditTab(
                     if (log.reason.isNotBlank()) {
                         Text("Reason: ${log.reason}", style = MaterialTheme.typography.bodySmall)
                     }
-                    if (log.actorName.isNotBlank()) {
-                        Text("By: ${log.actorName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    val actorLabel = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+                        authorUid = log.actorUid,
+                        storedName = log.actorName,
+                        deletedUserUids = deletedUserUids,
+                        fallback = ""
+                    )
+                    if (actorLabel.isNotBlank()) {
+                        Text("By: $actorLabel", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }

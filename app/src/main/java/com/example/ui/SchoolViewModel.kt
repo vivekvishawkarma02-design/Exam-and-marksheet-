@@ -51,6 +51,7 @@ import com.example.data.cloud.CloudPhase10Snapshot
 import com.example.data.cloud.CloudPhase11Snapshot
 import com.example.data.cloud.CloudPhase12Snapshot
 import com.example.data.cloud.CloudPhase14Snapshot
+import com.example.data.cloud.CloudPhase18Snapshot
 import com.example.data.cloud.Phase4Repository
 import com.example.data.cloud.Phase6Repository
 import com.example.data.cloud.Phase7Repository
@@ -60,6 +61,7 @@ import com.example.data.cloud.Phase10Repository
 import com.example.data.cloud.Phase11Repository
 import com.example.data.cloud.Phase12Repository
 import com.example.data.cloud.Phase14Repository
+import com.example.data.cloud.Phase18Repository
 import com.example.data.cloud.StableDocId
 import com.example.data.cloud.TermAttendanceRecalcItem
 import com.example.data.cloud.TimetableRepository
@@ -100,9 +102,19 @@ import com.example.domain.StockEngine
 import com.example.domain.StockItemSummary
 import com.example.domain.StockTransactionRecord
 import com.example.domain.TransportRouteRecord
+import com.example.domain.BirthdayOccurrenceItem
+import com.example.domain.BirthdaySummaryBundle
+import com.example.domain.BirthdayWishRecord
+import com.example.domain.ClassDiaryEntryRecord
+import com.example.domain.ClassDiaryHistoryRecord
+import com.example.domain.DiaryMissingClassSection
+import com.example.domain.Phase18AccessEvaluator
+import com.example.domain.Phase18DiaryAndBirthdayEngine
+import com.example.domain.SchoolBirthdayConfig
 import com.example.domain.AssignmentWarning
 import com.example.domain.AttendanceConflictNotice
 import com.example.domain.AttendanceSummary
+import com.example.domain.AuthorDisplayHelper
 import com.example.domain.AutoGenerateConfig
 import com.example.domain.AutoGenerateEngine
 import com.example.domain.AutoGenerateProgress
@@ -137,6 +149,7 @@ import com.example.domain.Phase7AccessEvaluator
 import com.example.domain.ReportCalculations
 import com.example.domain.ReportReadinessEngine
 import com.example.domain.ReportType
+import com.example.domain.ResultAnalysisAccessEvaluator
 import com.example.domain.ResultStatus
 import com.example.domain.SchoolAcademicBundleForPending
 import com.example.domain.SchoolPeriodStructure
@@ -415,7 +428,14 @@ data class SchoolUiState(
     val phase14FeeStructures: List<FeeStructureConfig> = emptyList(),
     val phase14FeeOverrides: List<StudentFeeOverride> = emptyList(),
     val phase14FeeReceipts: List<FeeReceiptRecord> = emptyList(),
-    val phase14SchoolCalendars: List<SchoolCalendarConfig> = emptyList()
+    val phase14SchoolCalendars: List<SchoolCalendarConfig> = emptyList(),
+    // Phase 15: Track UIDs of deleted users so preserved historical records show "deleted user"
+    val deletedUserUids: Set<String> = emptySet(),
+    // Phase 18: Class Diary and Birthdays
+    val classDiaryEntries: List<ClassDiaryEntryRecord> = emptyList(),
+    val classDiaryHistory: List<ClassDiaryHistoryRecord> = emptyList(),
+    val schoolBirthdayConfigs: List<SchoolBirthdayConfig> = emptyList(),
+    val birthdayWishes: List<BirthdayWishRecord> = emptyList()
 ) {
     val canViewFees: Boolean
         get() = activeOrg == null || Phase9AccessEvaluator.canViewFees(accessProfile)
@@ -491,6 +511,96 @@ data class SchoolUiState(
 
     val canUndoSessionStart: Boolean
         get() = activeOrg == null || Phase14AccessEvaluator.canUndoSessionStart(accessProfile)
+
+    val canViewResultAnalysis: Boolean
+        get() = activeOrg == null || ResultAnalysisAccessEvaluator.canViewResultAnalysis(accessProfile, activeSchoolDocId)
+
+    val canExportResultAnalysisCsv: Boolean
+        get() = activeOrg == null || ResultAnalysisAccessEvaluator.canExportCsv(accessProfile)
+
+    val canViewClassDiary: Boolean
+        get() = activeOrg == null || Phase18AccessEvaluator.canViewClassDiary(
+            member = accessProfile,
+            teacherScope = effectiveOwnTeacherScope,
+            schoolId = activeSchoolDocId
+        )
+
+    val canViewDiaryNotWrittenToday: Boolean
+        get() = activeOrg == null || Phase18AccessEvaluator.canViewDiaryNotWrittenTodayList(accessProfile)
+
+    val canViewBirthdays: Boolean
+        get() = activeOrg == null || Phase18AccessEvaluator.canViewBirthdays(
+            member = accessProfile,
+            teacherScope = effectiveOwnTeacherScope,
+            schoolId = activeSchoolDocId
+        )
+
+    val canManageBirthdaySettings: Boolean
+        get() = activeOrg == null || Phase18AccessEvaluator.canManageBirthdaySettings(
+            member = accessProfile,
+            schoolId = activeSchoolDocId
+        )
+
+    fun birthdayConfigForSchool(schoolDocId: String = activeSchoolDocId): SchoolBirthdayConfig =
+        schoolBirthdayConfigs.firstOrNull { it.schoolId == schoolDocId }
+            ?: SchoolBirthdayConfig.defaultForSchool(schoolDocId)
+
+    val activeSchoolBirthdayConfig: SchoolBirthdayConfig
+        get() = birthdayConfigForSchool(activeSchoolDocId)
+
+    fun diaryNotWrittenTodayForActiveSchool(
+        todayIso: String = Phase6DateUtils.todayIso(),
+        schoolDocId: String = activeSchoolDocId
+    ): List<DiaryMissingClassSection> {
+        val schLongId = schoolRecordsByDocId[schoolDocId]?.stableId ?: activeSchool.id
+        val clsOrder = classesForSchool(schLongId).map { it.name }
+        val activeStu = allStudents.filter { it.schoolId == schLongId && it.session == filter.session }
+        return Phase18DiaryAndBirthdayEngine.computeDiaryNotWrittenToday(
+            schoolId = schoolDocId,
+            session = filter.session,
+            todayIso = todayIso,
+            activeStudents = activeStu,
+            configuredClasses = clsOrder,
+            classAssignments = classAssignments,
+            teachers = effectivePhase12Teachers,
+            allDiaryEntries = classDiaryEntries,
+            classOrder = clsOrder
+        )
+    }
+
+    fun birthdaySummaryForActiveSchool(
+        todayIso: String = Phase6DateUtils.todayIso(),
+        schoolDocId: String = activeSchoolDocId
+    ): BirthdaySummaryBundle {
+        val schLongId = schoolRecordsByDocId[schoolDocId]?.stableId ?: activeSchool.id
+        val schName = schoolRecordsByDocId[schoolDocId]?.name ?: activeSchool.name
+        val clsOrder = classesForSchool(schLongId).map { it.name }
+        val activeStu = allStudents.filter { it.schoolId == schLongId && it.session == filter.session }
+        val allTeachersForSchool = effectivePhase12Teachers.filter {
+            it.schoolIds.isEmpty() || schoolDocId in it.schoolIds
+        }
+        return Phase18DiaryAndBirthdayEngine.computeBirthdaySummary(
+            schoolId = schoolDocId,
+            session = filter.session,
+            todayIso = todayIso,
+            students = activeStu,
+            teachers = allTeachersForSchool,
+            config = birthdayConfigForSchool(schoolDocId),
+            wishes = birthdayWishes.filter { it.schoolId == schoolDocId },
+            member = if (activeOrg == null) null else accessProfile,
+            teacherScope = effectiveOwnTeacherScope,
+            classOrder = clsOrder,
+            windowDays = 7,
+            schoolName = schName,
+            useHindiTemplate = phase10HindiLabels
+        )
+    }
+
+    fun allowedSchoolsForResultAnalysis(): List<SchoolEntity> =
+        activeSchools.filter { sch ->
+            val docId = schoolDocIdByLongId[sch.id].orEmpty()
+            activeOrg == null || (docId.isNotBlank() && OrgAccessEvaluator.canAccessSchool(accessProfile, docId))
+        }
 
     val backupReminderStatus: BackupReminderStatus
         get() = BackupReminderEngine.computeStatus(settings.lastBackupEpochMs)
@@ -1597,7 +1707,8 @@ class SchoolViewModel(
     internal val phase10Repo: Phase10Repository = Phase10Repository(orgRepo),
     internal val phase11Repo: Phase11Repository = Phase11Repository(orgRepo),
     internal val phase12Repo: Phase12Repository = Phase12Repository(orgRepo),
-    internal val phase14Repo: Phase14Repository = Phase14Repository(orgRepo)
+    internal val phase14Repo: Phase14Repository = Phase14Repository(orgRepo),
+    internal val phase18Repo: Phase18Repository = Phase18Repository(orgRepo)
 ) : ViewModel() {
 
     internal val _filter = MutableStateFlow(FilterSelection())
@@ -1656,6 +1767,7 @@ class SchoolViewModel(
     private val _phase11Snapshot = MutableStateFlow(CloudPhase11Snapshot())
     private val _phase12Snapshot = MutableStateFlow(CloudPhase12Snapshot())
     private val _phase14Snapshot = MutableStateFlow(CloudPhase14Snapshot())
+    private val _phase18Snapshot = MutableStateFlow(CloudPhase18Snapshot())
     internal val _phase10HindiLabels = MutableStateFlow(offlinePrefs.getHindiLabelsEnabled(true))
     internal val _firstTimeGuideSkipped = MutableStateFlow(offlinePrefs.isFirstTimeGuideSkipped(currentUserId, orgId))
     private val _attendanceConflicts = MutableStateFlow<List<AttendanceConflictNotice>>(emptyList())
@@ -1664,6 +1776,7 @@ class SchoolViewModel(
     private val _joinRequests = MutableStateFlow<List<CloudJoinRequest>>(emptyList())
     private val _inviteCodes = MutableStateFlow<List<CloudInviteCode>>(emptyList())
     private val _auditLogs = MutableStateFlow<List<CloudAuditLog>>(emptyList())
+    private val _deletedUserUids = MutableStateFlow<Set<String>>(emptySet())
     private val _isOnline = MutableStateFlow(connectivityMonitor.isCurrentlyOnline())
 
     // In-memory lookups from stable Long IDs back to Firestore doc IDs
@@ -1691,7 +1804,7 @@ class SchoolViewModel(
 
     private val combinedSyncErrorFlow = combine(
         combine(academicRepo.syncError, phase4Repo.syncError, timetableRepo.syncError) { a, b, c -> a ?: b ?: c },
-        combine(phase6Repo.syncError, phase7Repo.syncError, phase8Repo.syncError) { d, e, f -> d ?: e ?: f },
+        combine(phase6Repo.syncError, phase7Repo.syncError, phase8Repo.syncError, phase18Repo.syncError) { d, e, f, p18 -> d ?: e ?: f ?: p18 },
         combine(phase9Repo.syncError, phase10Repo.syncError, phase11Repo.syncError, phase12Repo.syncError, phase14Repo.syncError) { p9, p10, p11, p12, p14 -> p9 ?: p10 ?: p11 ?: p12 ?: p14 }
     ) { left, right, p914Err -> left ?: right ?: p914Err }
 
@@ -1707,8 +1820,9 @@ class SchoolViewModel(
 
     private val phase12And14Flow = combine(
         _phase12Snapshot,
-        _phase14Snapshot
-    ) { p12, p14 -> p12 to p14 }
+        _phase14Snapshot,
+        _phase18Snapshot
+    ) { p12, p14, p18 -> Triple(p12, p14, p18) }
 
     private val phase10And11Flow = combine(
         _phase10Snapshot,
@@ -1716,8 +1830,8 @@ class SchoolViewModel(
         phase12And14Flow,
         _phase10HindiLabels,
         _firstTimeGuideSkipped
-    ) { p10, p11, p1214, hindiLabels, guideSkipped ->
-        Phase10To12Slice(p10, p11, p1214.first, p1214.second, hindiLabels, guideSkipped)
+    ) { p10, p11, p121418, hindiLabels, guideSkipped ->
+        Phase10To12Slice(p10, p11, p121418.first, p121418.second, p121418.third, hindiLabels, guideSkipped)
     }
 
     private val phase8To10Flow = combine(
@@ -1726,7 +1840,7 @@ class SchoolViewModel(
         _phase9Snapshot,
         phase10And11Flow
     ) { p8, attConflicts, p9, p1012 ->
-        Phase8To10Bundle(p8, attConflicts, p9, p1012.phase10, p1012.phase11, p1012.phase12, p1012.phase14, p1012.phase10HindiLabels, p1012.firstTimeGuideSkipped)
+        Phase8To10Bundle(p8, attConflicts, p9, p1012.phase10, p1012.phase11, p1012.phase12, p1012.phase14, p1012.phase18, p1012.phase10HindiLabels, p1012.firstTimeGuideSkipped)
     }
 
     private val phase4To8Flow = combine(
@@ -1746,19 +1860,20 @@ class SchoolViewModel(
             phase11 = p810.phase11,
             phase12 = p810.phase12,
             phase14 = p810.phase14,
+            phase18 = p810.phase18,
             phase10HindiLabels = p810.phase10HindiLabels,
             firstTimeGuideSkipped = p810.firstTimeGuideSkipped
         )
     }
 
     private val syncExtrasFlow = combine(
-        combinedSyncErrorFlow,
-        academicRepo.lastSyncedAtMs,
+        combine(combinedSyncErrorFlow, academicRepo.lastSyncedAtMs) { err, ts -> err to ts },
         _markConflicts,
         _isInitialized,
-        _membershipRevoked
-    ) { syncErr, lastSynced, conflicts, init, rev ->
-        SyncExtrasBundle(syncErr, lastSynced, conflicts, init, rev)
+        _membershipRevoked,
+        _deletedUserUids
+    ) { errTs, conflicts, init, rev, deletedUids ->
+        SyncExtrasBundle(errTs.first, errTs.second, conflicts, init, rev, deletedUids)
     }
 
     private val adminCollectionsFlow = combine(
@@ -1787,6 +1902,7 @@ class SchoolViewModel(
             phase11 = p78.phase11,
             phase12 = p78.phase12,
             phase14 = p78.phase14,
+            phase18 = p78.phase18,
             phase10HindiLabels = p78.phase10HindiLabels,
             firstTimeGuideSkipped = p78.firstTimeGuideSkipped
         )
@@ -1834,7 +1950,8 @@ class SchoolViewModel(
             admin.phase10.pendingWriteCount +
             admin.phase11.pendingWriteCount +
             admin.phase12.pendingWriteCount +
-            admin.phase14.pendingWriteCount
+            admin.phase14.pendingWriteCount +
+            admin.phase18.pendingWriteCount
 
         val syncUi = OfflineSyncEngine.computeSyncUiState(
             isOnline = core.isOnline,
@@ -1949,7 +2066,12 @@ class SchoolViewModel(
             phase14FeeStructures = admin.phase14.sharedFeeStructures,
             phase14FeeOverrides = admin.phase14.sharedFeeOverrides,
             phase14FeeReceipts = admin.phase14.sharedFeeReceipts,
-            phase14SchoolCalendars = admin.phase14.sharedSchoolCalendars
+            phase14SchoolCalendars = admin.phase14.sharedSchoolCalendars,
+            deletedUserUids = extras.deletedUserUids,
+            classDiaryEntries = admin.phase18.classDiaryEntries,
+            classDiaryHistory = admin.phase18.classDiaryHistory,
+            schoolBirthdayConfigs = admin.phase18.schoolBirthdayConfigs,
+            birthdayWishes = admin.phase18.birthdayWishes
         )
     }.stateIn(
         scope = viewModelScope,
@@ -2088,7 +2210,10 @@ class SchoolViewModel(
                 _ownMember.map { it?.toAccessProfile() },
                 _schoolsSnapshot.map { it.schools },
                 _filter.map { it.schoolId },
-                _phase7Snapshot.map { StudentAttendanceAccessEvaluator.hasAnyClassTeacherSection(it.ownTeacherScope) }
+                _phase7Snapshot.map {
+                    StudentAttendanceAccessEvaluator.hasAnyClassTeacherSection(it.ownTeacherScope) ||
+                        Phase18AccessEvaluator.hasAnyTeacherDiaryAssignment(it.ownTeacherScope)
+                }
             ) { tick, profile, schools, selectedSchoolId, isCt ->
                 val targetSchool = schools.firstOrNull { it.stableId == selectedSchoolId }
                     ?: schools.firstOrNull { it.active }
@@ -2167,6 +2292,19 @@ class SchoolViewModel(
                 .collect { _auditLogs.value = it }
         }
 
+        // 7.5 Phase 15 Deleted Users tombstones (so preserved records render author as "deleted user")
+        viewModelScope.launch {
+            combine(_observerRestartTick, _ownMember) { tick, member ->
+                tick to OrgAccessEvaluator.isActive(member?.toAccessProfile())
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { (_, active) ->
+                    if (!active) flowOf(emptySet())
+                    else orgRepo.observeDeletedUserUids(orgId).catch { handleListenerError(it, "deletedUsers"); emit(emptySet()) }
+                }
+                .collect { _deletedUserUids.value = it }
+        }
+
         // 8. Phase 4: Teachers, Period Structures, Class Assignments & Subject Rules
         // Active for AppModule.TEACHERS viewers/editors OR AppModule.TIMETABLE editors (for conflict checks)
         viewModelScope.launch {
@@ -2177,7 +2315,9 @@ class SchoolViewModel(
                 .flatMapLatest { (_, profile) ->
                     val canReadPhase4 = profile != null && (
                         OrgAccessEvaluator.canViewModule(profile, AppModule.TEACHERS) ||
-                            OrgAccessEvaluator.canEditModule(profile, AppModule.TIMETABLE)
+                            OrgAccessEvaluator.canEditModule(profile, AppModule.TIMETABLE) ||
+                            OrgAccessEvaluator.canViewModule(profile, AppModule.RESULT_ANALYSIS) ||
+                            OrgAccessEvaluator.canViewModule(profile, AppModule.CLASS_DIARY)
                         )
                     if (!canReadPhase4) {
                         flowOf(CloudPhase4Snapshot())
@@ -2528,6 +2668,37 @@ class SchoolViewModel(
                 }
                 .collect { snap ->
                     _phase14Snapshot.value = snap
+                }
+        }
+
+        // 15. Phase 18 Class Diary & Birthdays
+        viewModelScope.launch {
+            combine(
+                _observerRestartTick,
+                _ownMember.map { it?.toAccessProfile() },
+                _phase7Snapshot.map { it.ownTeacherScope }
+            ) { tick, profile, scope ->
+                Triple(tick, profile, scope)
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { (_, profile, scope) ->
+                    if (profile == null || !OrgAccessEvaluator.isActive(profile)) {
+                        flowOf(CloudPhase18Snapshot())
+                    } else {
+                        phase18Repo.observePhase18Data(orgId, profile, scope)
+                            .catch { e ->
+                                val cause = (e as? FirebaseFirestoreException) ?: (e.cause as? FirebaseFirestoreException)
+                                if (cause != null) {
+                                    handleFirestoreError(cause, OperationType.LIST, "organisations/$orgId/classDiaryEntries")
+                                    emit(CloudPhase18Snapshot())
+                                    return@catch
+                                }
+                                if (e is CancellationException) throw e
+                            }
+                    }
+                }
+                .collect { snap ->
+                    _phase18Snapshot.value = snap
                 }
         }
     }
@@ -6329,6 +6500,7 @@ private data class Phase10To12Slice(
     val phase11: CloudPhase11Snapshot,
     val phase12: CloudPhase12Snapshot,
     val phase14: CloudPhase14Snapshot,
+    val phase18: CloudPhase18Snapshot,
     val phase10HindiLabels: Boolean,
     val firstTimeGuideSkipped: Boolean
 )
@@ -6341,6 +6513,7 @@ private data class Phase8To10Bundle(
     val phase11: CloudPhase11Snapshot,
     val phase12: CloudPhase12Snapshot,
     val phase14: CloudPhase14Snapshot,
+    val phase18: CloudPhase18Snapshot,
     val phase10HindiLabels: Boolean,
     val firstTimeGuideSkipped: Boolean
 )
@@ -6356,6 +6529,7 @@ private data class Phase7And8Bundle(
     val phase11: CloudPhase11Snapshot,
     val phase12: CloudPhase12Snapshot,
     val phase14: CloudPhase14Snapshot,
+    val phase18: CloudPhase18Snapshot,
     val phase10HindiLabels: Boolean,
     val firstTimeGuideSkipped: Boolean
 )
@@ -6379,6 +6553,7 @@ private data class AdminAndPhase4Bundle(
     val phase11: CloudPhase11Snapshot,
     val phase12: CloudPhase12Snapshot,
     val phase14: CloudPhase14Snapshot,
+    val phase18: CloudPhase18Snapshot,
     val phase10HindiLabels: Boolean,
     val firstTimeGuideSkipped: Boolean
 )
@@ -6396,5 +6571,6 @@ private data class SyncExtrasBundle(
     val lastSyncedAtMs: Long,
     val conflicts: List<MarkConflictNotice>,
     val isInitialized: Boolean,
-    val membershipRevoked: Boolean
+    val membershipRevoked: Boolean,
+    val deletedUserUids: Set<String>
 )

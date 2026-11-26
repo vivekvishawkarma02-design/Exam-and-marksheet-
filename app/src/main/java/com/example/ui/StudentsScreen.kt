@@ -312,6 +312,7 @@ fun StudentsScreen(
         StudentMarksHistoryDialog(
             title = "${st.name} — Marks History",
             logs = uiState.markEditLogsForStudent(st.id),
+            deletedUserUids = uiState.deletedUserUids,
             onDismiss = { historyStudent = null }
         )
     }

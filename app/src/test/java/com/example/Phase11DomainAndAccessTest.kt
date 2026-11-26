@@ -191,8 +191,8 @@ class Phase11DomainAndAccessTest {
             "enquiry" to "edit"
         )
         val parsed = MemberPermissions.fromMap(legacyPhase10Map)
-        assertEquals(19, AppModule.entries.size)
-        assertEquals(19, parsed.toFirestoreMap().size)
+        assertEquals(21, AppModule.entries.size)
+        assertEquals(21, parsed.toFirestoreMap().size)
         assertEquals(AccessLevel.NONE, parsed.exams)
         assertEquals(AccessLevel.NONE, parsed.stock)
         assertEquals(AccessLevel.NONE, parsed.transport)

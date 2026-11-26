@@ -478,7 +478,12 @@ fun Phase8DailyAttendanceTab(
                                 )
                                 Text(
                                     text = if (savedSheet != null) {
-                                        if (hasLocalChanges) "Unsaved changes" else "Saved by ${savedSheet.updatedByName.ifBlank { "Staff" }}"
+                                        val savedBy = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+                                            authorUid = savedSheet.updatedByUid,
+                                            storedName = savedSheet.updatedByName,
+                                            deletedUserUids = uiState.deletedUserUids
+                                        )
+                                        if (hasLocalChanges) "Unsaved changes" else "Saved by $savedBy"
                                     } else {
                                         "Not saved yet"
                                     },
@@ -911,8 +916,13 @@ fun Phase8DailyAttendanceTab(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                         ) {
                             Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                val editorLabel = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+                                    authorUid = log.editorUid,
+                                    storedName = log.editorName,
+                                    deletedUserUids = uiState.deletedUserUids
+                                )
                                 Text(
-                                    text = "${log.editorName} • ${df.format(Date(log.clientEditedAtMs))}",
+                                    text = "$editorLabel • ${df.format(Date(log.clientEditedAtMs))}",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold
                                 )

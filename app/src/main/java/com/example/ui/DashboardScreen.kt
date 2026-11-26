@@ -23,11 +23,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.AssignmentLate
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.Cake
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ContactPhone
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -39,6 +41,7 @@ import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HowToReg
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.School
@@ -136,6 +139,9 @@ fun DashboardScreen(
     onNavigateToSessionPromotion: () -> Unit = {},
     onNavigateToBulkImport: () -> Unit = {},
     onNavigateToBackupExport: () -> Unit = {},
+    onNavigateToResultAnalysis: () -> Unit = {},
+    onNavigateToClassDiary: () -> Unit = {},
+    onNavigateToBirthdays: () -> Unit = {},
     onPrintOwnSalarySlip: (SalaryMonthlyRecord, SalarySlipPageSize) -> Unit = { _, _ -> },
     onOpenPendingMarksItem: (PendingMarksItem) -> Unit = {},
     onOpenCoScholasticSection: (String, String, String) -> Unit = { _, _, _ -> },
@@ -438,6 +444,54 @@ fun DashboardScreen(
                 )
             )
         }
+        if (uiState.canViewResultAnalysis) {
+            add(
+                QuickActionSpec(
+                    title = p10Label(isHindi, "रिज़ल्ट विश्लेषण", "Result Analysis"),
+                    subtitle = p10Label(
+                        isHindi,
+                        "टॉपर्स, विषय, कमज़ोर छात्र व PDF",
+                        "Toppers, subjects, weak list & PDF"
+                    ),
+                    icon = Icons.Default.Analytics,
+                    accent = tertiaryColor,
+                    testTag = "tile_result_analysis",
+                    onClick = onNavigateToResultAnalysis
+                )
+            )
+        }
+        if (uiState.canViewClassDiary) {
+            add(
+                QuickActionSpec(
+                    title = p10Label(isHindi, "कक्षा डायरी", "Class Diary"),
+                    subtitle = p10Label(
+                        isHindi,
+                        "कक्षा कार्य, गृहकार्य, व्हाट्सएप व साप्ताहिक PDF",
+                        "Classwork, homework, share & weekly PDF"
+                    ),
+                    icon = Icons.Default.MenuBook,
+                    accent = primaryColor,
+                    testTag = "tile_class_diary",
+                    onClick = onNavigateToClassDiary
+                )
+            )
+        }
+        if (uiState.canViewBirthdays) {
+            add(
+                QuickActionSpec(
+                    title = p10Label(isHindi, "जन्मदिन", "Birthdays"),
+                    subtitle = p10Label(
+                        isHindi,
+                        "आज व अगले 7 दिन, व्हाट्सएप बधाई व कार्ड",
+                        "Today & next 7 days, WhatsApp wishes & card"
+                    ),
+                    icon = Icons.Default.Cake,
+                    accent = secondaryColor,
+                    testTag = "tile_birthdays",
+                    onClick = onNavigateToBirthdays
+                )
+            )
+        }
         if (canViewTeachers) {
             val activeTeachers = uiState.teachers.count { it.active }
             add(
@@ -731,6 +785,154 @@ fun DashboardScreen(
                                 onOpenPendingMarks = onNavigateToPendingMarks,
                                 onOpenLeaveTab = { onOpenTimetableSubstitutions(todayIso) }
                             )
+                        }
+                    }
+                }
+            }
+
+            // Phase 18: "Diary not written today" tile on Today Home for Owner and Admins
+            if (uiState.canViewDiaryNotWrittenToday && uiState.canViewClassDiary) {
+                item {
+                    val missingDiaryList = remember(uiState.allStudents, uiState.classAssignments, uiState.classDiaryEntries, todayIso) {
+                        uiState.diaryNotWrittenTodayForActiveSchool(todayIso)
+                    }
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onNavigateToClassDiary)
+                            .testTag("today_diary_not_written_tile"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (missingDiaryList.isEmpty()) {
+                                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+                            } else {
+                                AbsentAmberContainer
+                            }
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MenuBook,
+                                contentDescription = "Class Diary status",
+                                tint = if (missingDiaryList.isEmpty()) MaterialTheme.colorScheme.primary else AbsentAmber
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (missingDiaryList.isEmpty()) {
+                                        p10Label(isHindi, "कक्षा डायरी: आज सभी कक्षाओं में लिखी गई", "Class Diary: Written for all classes today")
+                                    } else {
+                                        p10Label(
+                                            isHindi,
+                                            "आज डायरी नहीं लिखी गई: ${missingDiaryList.size} कक्षा/सेक्शन",
+                                            "Diary not written today: ${missingDiaryList.size} class-section(s)"
+                                        )
+                                    },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (missingDiaryList.isNotEmpty()) {
+                                    Text(
+                                        text = missingDiaryList.take(5).joinToString(", ") { "${it.className}-${it.section}" } +
+                                            if (missingDiaryList.size > 5) " +${missingDiaryList.size - 5}" else "",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Button(
+                                onClick = onNavigateToClassDiary,
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("today_open_class_diary_btn")
+                            ) {
+                                Text(p10Label(isHindi, "डायरी खोलें", "Open Diary"))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Phase 18: Today's Birthdays & Next 7 Days count tile on Today Home
+            if (uiState.canViewBirthdays && uiState.activeSchoolBirthdayConfig.birthdayWishesEnabled) {
+                item {
+                    val bdaySummary = remember(
+                        uiState.allStudents,
+                        uiState.effectivePhase12Teachers,
+                        uiState.schoolBirthdayConfigs,
+                        uiState.birthdayWishes,
+                        todayIso
+                    ) {
+                        uiState.birthdaySummaryForActiveSchool(todayIso)
+                    }
+                    val todayCount = bdaySummary.todayItems.size
+                    val next7Count = bdaySummary.upcoming7DaysItems.size
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onNavigateToBirthdays)
+                            .testTag("today_birthdays_tile"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (todayCount > 0) {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                            }
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Cake,
+                                contentDescription = "Birthdays today",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = p10Label(
+                                        isHindi,
+                                        "🎂 आज के जन्मदिन: $todayCount • अगले 7 दिन: $next7Count",
+                                        "🎂 Today's Birthdays: $todayCount • Next 7 Days: $next7Count"
+                                    ),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                val subLine = if (todayCount > 0) {
+                                    bdaySummary.todayItems.take(3).joinToString(", ") { "${it.name} (${it.classGroupLabel})" }
+                                } else {
+                                    p10Label(
+                                        isHindi,
+                                        "व्हाट्सएप बधाई और जन्मदिन कार्ड भेजने के लिए टैप करें",
+                                        "Tap to view birthdays, send WhatsApp wishes or share card"
+                                    )
+                                }
+                                Text(
+                                    text = subLine,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = onNavigateToBirthdays,
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("today_open_birthdays_btn")
+                            ) {
+                                Text(p10Label(isHindi, "जन्मदिन", "Birthdays"))
+                            }
                         }
                     }
                 }

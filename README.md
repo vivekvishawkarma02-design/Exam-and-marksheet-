@@ -485,4 +485,83 @@ gradle :app:testDebugUnitTest
 
 # Run Firestore security rules unit tests against the local Firestore emulator
 firebase emulators:exec --only firestore --project demo-no-project "node --test firestore.test.js"
+
+# Build signed release Android App Bundle (.aab) when upload keystore env vars are configured
+gradle :app:bundleRelease --no-daemon
 ```
+
+---
+
+## Phase 15: Play Store Readiness, Phone Upload Keystore & Release AAB
+
+Phase 15 prepares **School Report Card** for Google Play production release without altering any Phase 1–14 calculations, report card layouts, module access rules, or the committed `debug.keystore` workflow (`.github/workflows/build-apk.yml`).
+
+### What Was Added for Play Store Compliance
+1. **In-App & Web Account Deletion:**
+   - **Settings -> Account -> Delete my account** clearly lists what is deleted vs retained, requires re-authentication (Email/Password or Google Sign-In), removes normal members' Auth login/profile/membership/scope/`users/{uid}` while attributing historical school records to `"deleted user"`, and blocks sole Owners until they transfer ownership or explicitly confirm whole-organisation deletion (typing the organisation code).
+   - Public bilingual (Hindi + English) pages in `public/`: `public/privacy.html`, `public/delete-account.html`, and `public/support.html`.
+2. **In-App About & Legal Links (`Settings -> About`):**
+   - Shows current app version (`BuildConfig.VERSION_NAME` / `VERSION_CODE`), contact email placeholder, and opens Privacy Policy, Support, Terms of Service, and Delete Account & Data guides in-app or via HTTPS URL configured in `app/src/main/java/com/example/domain/LegalConfig.kt`.
+3. **Zero PII Logs, Cleartext Disabled, R8 & Versioning:**
+   - `android:usesCleartextTraffic="false"` in `AndroidManifest.xml`; PII removed from diagnostic logs.
+   - R8 shrinking/obfuscation (`isMinifyEnabled = true`, `isShrinkResources = true`) enabled **only** for `release` builds with Firebase/Room/Credential Manager/model keep rules in `app/proguard-rules.pro`.
+   - Centralized `APP_VERSION_CODE` and `APP_VERSION_NAME` in `gradle.properties` (overridable via `-PAPP_VERSION_CODE=...` / `-PAPP_VERSION_NAME=...`).
+4. **Store Assets & Checklists:**
+   - `/PLAY_STORE_STEPS.md` — simple Hindi step-by-step Play Console upload guide & owner checklist.
+   - `/PLAY_DATA_SAFETY.md` — Play Console Data Safety questionnaire mapping.
+   - `/store_listing/` — bilingual Play Store listing copy (`store_listing.md`), `icon_512x512.png`, and `feature_graphic_1024x500.png`.
+
+### Phone-Only Upload Keystore & Signed Release AAB Workflows
+
+You never commit `.jks` upload keystores, passwords, or `google-services.json` to Git:
+
+1. **Generate Upload Keystore Once (From Your Phone Browser):**
+   - Push the repository to GitHub (**Push to GitHub**), open **Actions -> Create Upload Keystore (One-Time) -> Run workflow**.
+   - Download the 1-day private artifact (`upload-keystore-private-1day`) immediately containing `my-upload-key.jks` and `PASSWORDS_AND_BASE64.txt`.
+   - Copy the **SHA-1** and **SHA-256** printed in the workflow Summary and register them in **Firebase Console -> Project Settings -> Android App**.
+   - **CRITICAL KEY-LOSS WARNING:** Save `my-upload-key.jks` and `PASSWORDS_AND_BASE64.txt` in at least two secure offline/encrypted places. If you lose this upload key, you cannot publish updates to Play Store without requesting a key reset from Google Play Support.
+2. **Add GitHub Repository Secrets (`Settings -> Secrets and variables -> Actions`):**
+   - `UPLOAD_KEYSTORE_BASE64`, `STORE_PASSWORD`, `KEY_PASSWORD`, and `GOOGLE_SERVICES_JSON`.
+3. **Build Signed Release AAB:**
+   - Run **Actions -> Build Signed Release AAB** (or push a `v*` tag like `v1.0.0`) and download `app-release.aab` from the workflow artifacts to upload manually to Play Console. (And once Play App Signing is active, also copy Play Console's **App signing key certificate SHA-1 & SHA-256** into Firebase Console so Google Sign-In works for Play Store users.)
+
+---
+
+## Phase 17: Result Analysis (Strictly Read-Only Analytics & Offline A4 PDFs)
+
+Phase 17 adds a **read-only Result Analysis** module that computes academic analytics directly from existing cached marks and student records while reusing `ReportCalculations` (`A1`–`E` grades and `>= 33%` per-subject pass rule) with zero duplication and zero changes to marks entry or report card layouts.
+
+1. **20th Access Module (`Result Analysis` / `resultAnalysis`):**
+   - View-only module (`No access` / `View only`; missing key defaults to `No access`; Owner and Admins have full access).
+   - **Teacher Scope Isolation:** Teachers with `Result Analysis: View` see analysis **only for the classes, sections, and subjects assigned to them** (`teacherScopes`), enforced in the UI, data layer (`ResultAnalysisAccessEvaluator.scopeDataForMember`), and `firestore.rules`.
+2. **Seven Mobile-First Views (Filter by School, Session, Class, Section & Exam: `UT-I`, `UT-II`, `Half-Yearly`, `Yearly`, or `All`):**
+   - **Class Overview:** Students appeared, pass/fail counts, pass %, class average %, highest & lowest marks, and `A1`–`E` grade distribution bars.
+   - **Toppers:** Top `N` (default 10, editable) per Section, per Class, or School-wide with 3 clear selectable tie-breaking rules (`1, 2, 2, 4 • Include all tied`, `1, 2, 2, 3 • Dense + all tied`, `1, 2, 2, 4 • Strict top N`).
+   - **Subject-Wise Analysis:** Sorted **weakest subject first** (by pass %, average %, fail count) with assigned subject teacher names from Phase 4.
+   - **Weak Students:** Students failing one or more subjects or scoring below a configurable threshold percentage (default `40%`), listing the exact failed/low subjects.
+   - **Student Progress Over the Year:** Side-by-side `UT-I`, `Half-Yearly`, `UT-II`, `Yearly`, and `Overall` scores per subject with `↑` (improving), `↓` (dropping), or `→` (steady) indicators, plus a **manual Copy / Share Guardian Progress Message** (never sent automatically).
+   - **Class & Section Comparison:** Compare sections of the same class or classes across the school (`Pass %`, `Avg %`, `High`, `Low`).
+   - **Missing Marks Warning & List:** Automatic warning banner and detailed missing-component list whenever marks are incomplete for the selected filter.
+3. **Offline A4 PDFs & Owner/Admin CSV Export:**
+   - Offline A4 Portrait PDFs (with school name & logo header) for **Class Result Summary**, **Topper List**, **Subject-Wise Analysis**, **Weak Students List**, and **Single Student Progress Sheet** with in-app preview, Print, Save, and Share.
+   - Full analysis **CSV export** gated strictly to **Owner and Admins**.
+
+---
+
+## Phase 18: Class Diary and Birthdays
+
+Phase 18 adds a fast daily **Class Diary** and an offline-capable **Birthdays** module while preserving Phases 1–17 unchanged.
+
+1. **21st Access Module (`Class Diary` / `classDiary`) & Automatic Teacher Scope:**
+   - Supports `No access` / `View only` / `View and edit` (missing key defaults to `No access`; Owner and Admins have full access).
+   - **Zero-Setup Teacher Writing:** Any assigned **Class Teacher** (`teacherScopes/{uid}.classTeacherSections`) or **Subject Teacher** (`teacherScopes/{uid}.assignedClassSectionSubjects`) can automatically view and write the diary for their own assigned class-section and subject without any extra permission toggle, enforced in both the Compose UI and `firestore.rules`.
+2. **Class Diary (`classDiaryEntries`, `classDiaryHistory`):**
+   - **Sub-1-Minute Daily Entry:** Pick Class, Section, and Date (default Today), tap a subject chip (ordered with the teacher's own assigned subjects first, combined with Phase 3 class subjects), and enter **Classwork (what was taught)**, **Homework**, an optional **Note**, and an optional **Blackboard / Homework Photo** (via Android's zero-permission Photo Picker, compressed offline-safe `< 150 KB`).
+   - **Author-Only Edit & Delete with Admin Override & History Kept:** Only the original author (`authorUid`) or an Admin (`OWNER` / `ADMIN`) can edit or delete an entry. Every create, edit, and delete preserves full revision history (`editHistory` + append-only `classDiaryHistory`).
+   - **1-Tap "Share as Message":** Builds a clean bilingual/English WhatsApp-ready class diary summary (Date, Class-Section, each subject's classwork/homework/note, and School Name) to copy or share via the Android share sheet (never sent automatically).
+   - **Weekly View, A4 Weekly Diary PDF & "Diary Not Written Today":** View the full 7-day Monday–Sunday diary for a class, export an offline **A4 Portrait Weekly Diary PDF**, and (for Owner & Admins) inspect the **"Diary not written today"** class/section list on the Today home screen and inside Class Diary.
+3. **Birthdays (`schoolBirthdayConfigs`, `birthdayWishes`):**
+   - Uses active Student Register records (`status != "LEFT"`) and Phase 4 teacher/staff DOBs, visible to anyone with access to `Students`, `Student Register`, or `Teachers`.
+   - Lists **Today's Birthdays** and the **Next 7 Days** grouped by class (plus `Staff / Teachers`), with a count tile on the Today home screen. Correctly handles **29 February** birthdays (celebrated on **28 February** in non-leap years, **29 February** in leap years) and **December-to-January year rollover**.
+   - **1-Tap WhatsApp Wishes, Copy Message, Wished Mark & Birthday Card Image/PDF:** Open `wa.me` with `+91` normalized guardian mobile and an editable template containing `{name}` and `{school}` (never automatic), copy the message, mark as **"Wished"** so nobody is wished twice, or generate a shareable **Birthday Card PNG Image or A4 PDF** with school name, logo, student/staff name, class, and wishes text.
+   - **Opt-Out Controls:** Per-school toggle to turn birthday wishes off (`birthdayWishesEnabled`) and per-student / per-staff exclusion list.

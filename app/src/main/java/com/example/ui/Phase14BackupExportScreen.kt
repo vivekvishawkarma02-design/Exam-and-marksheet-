@@ -304,7 +304,12 @@ fun Phase14BackupExportScreen(
                                     if (log.includedSalaryCsv) " • incl. Salary" else "",
                                 style = MaterialTheme.typography.bodySmall
                             )
-                            Text("$dt • ${log.actorName} (${log.actorRole})", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            val actorLabel = com.example.domain.AuthorDisplayHelper.resolveAuthorName(
+                                authorUid = log.actorUid,
+                                storedName = log.actorName,
+                                deletedUserUids = uiState.deletedUserUids
+                            )
+                            Text("$dt • $actorLabel (${log.actorRole})", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }

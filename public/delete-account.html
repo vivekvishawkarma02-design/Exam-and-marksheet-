@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Delete Account &amp; Data — School Report Card</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --card: #ffffff;
+      --primary: #16315c;
+      --danger: #9f1c1c;
+      --text: #1c2430;
+      --muted: #4b5563;
+      --border: #dce3ee;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Devanagari", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+    }
+    main {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 28px 18px 48px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+    h1, h2 { color: var(--primary); margin-top: 0; }
+    .warn {
+      background: #fdf2f2;
+      border: 1px solid #efb8b8;
+      border-radius: 10px;
+      padding: 12px 14px;
+      color: var(--danger);
+    }
+    ol, ul { padding-left: 20px; }
+    .links a {
+      color: var(--primary);
+      font-weight: 600;
+      margin-right: 16px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <h1>Delete Your Account &amp; Data — School Report Card</h1>
+      <p><strong>Contact Email for Deletion Requests:</strong> <a href="mailto:[YOUR_CONTACT_EMAIL]">[YOUR_CONTACT_EMAIL]</a></p>
+      <div class="links">
+        <a href="privacy.html">Privacy Policy</a>
+        <a href="support.html">Support</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Option 1: Delete Immediately Inside the App (Recommended)</h2>
+      <ol>
+        <li>Open <strong>School Report Card</strong> and sign in with the Google or Email account you want to delete.</li>
+        <li>Go to <strong>Settings &rarr; Account &rarr; Delete My Account</strong> (or tap <strong>Delete My Account</strong> at the bottom of the Organisation Picker screen).</li>
+        <li>Review the summary of what is deleted vs. what remains in your school organisation.</li>
+        <li>Re-authenticate when asked (enter your password or confirm with Google Sign-In).</li>
+        <li>Your account deletion completes right away on Firebase servers and clears the local cache on your phone.</li>
+      </ol>
+
+      <h3>What Happens for a Normal Member (Teacher / Fee Clerk / Admin)</h3>
+      <ul>
+        <li><strong>Deleted immediately:</strong> Your Firebase Auth login, private user profile, all organisation memberships, teacher scopes, pending join requests, and device cache.</li>
+        <li><strong>Kept for school continuity:</strong> Student records, exam marks, attendance sheets, fee receipts, certificates, cash book entries, and audit logs created by you remain inside the school organisation, and your author label is displayed as <code>"deleted user"</code>.</li>
+      </ul>
+
+      <h3>What Happens for the Only Owner of an Organisation</h3>
+      <div class="warn">
+        If you are the sole <strong>Owner</strong> of one or more school organisations, you must choose one of two options inside the app:
+        <ol>
+          <li><strong>Transfer Ownership First:</strong> Open your organisation &rarr; Members &rarr; select an Admin &rarr; Make Owner, then delete your personal account; <em>OR</em></li>
+          <li><strong>Delete the Whole Organisation &amp; Account:</strong> Tick the whole-organisation deletion option, confirm by typing your Organisation Code, and re-authenticate. This permanently deletes all schools, classes, students, marks, attendance, fee receipts, certificates, cash book, salary records, memberships, invite codes, and your login.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Option 2: Request Deletion If You Uninstalled the App</h2>
+      <p>If you no longer have the app installed on your phone, send an email to <a href="mailto:[YOUR_CONTACT_EMAIL]">[YOUR_CONTACT_EMAIL]</a> from the <strong>exact email address</strong> registered on your account:</p>
+      <ul>
+        <li><strong>Subject:</strong> Delete Account Request — School Report Card</li>
+        <li><strong>Include:</strong> Your registered email address, Organisation Code (if known), and whether you want only your staff login removed or (if you are the sole Owner) the entire organisation deleted.</li>
+      </ul>
+      <p>After verifying account ownership, we process manual deletion requests and reply to confirm once removed.</p>
+    </div>
+
+    <div class="card">
+      <h2>हिन्दी में निर्देश (खाता और डेटा कैसे हटाएँ)</h2>
+      <ol>
+        <li><strong>ऐप के अंदर से तुरंत हटाएँ:</strong> ऐप में लॉगिन करें &rarr; <strong>Settings &rarr; Account &rarr; Delete My Account</strong> (या Organisation Picker स्क्रीन के नीचे <strong>Delete My Account</strong>) पर टैप करें।</li>
+        <li><strong>दोबारा पुष्टि करें:</strong> सुरक्षा के लिए अपना पासवर्ड या Google लॉगिन दोबारा कन्फ़र्म करें।</li>
+        <li><strong>सामान्य सदस्य (शिक्षक / क्लर्क / एडमिन):</strong> आपका लॉगिन, प्रोफ़ाइल, सदस्यता और फोन कैश तुरंत हट जाता है। स्कूल के जरूरी रिकॉर्ड (अंक, उपस्थिति, फीस रसीद आदि) स्कूल में सुरक्षित रहते हैं और लेखक का नाम <code>"deleted user"</code> दिखता है।</li>
+        <li><strong>संगठन मालिक (Owner):</strong> पहले किसी एडमिन को मालिकाना हक सौंपें (Transfer Ownership), या पूरा संगठन और उसका सारा डेटा हटाने की लिखित पुष्टि (Organisation Code टाइप करके) करें।</li>
+        <li><strong>ऐप डिलीट कर चुके हैं तो:</strong> अपने रजिस्टर्ड ईमेल से <a href="mailto:[YOUR_CONTACT_EMAIL]">[YOUR_CONTACT_EMAIL]</a> पर <em>"Delete Account Request"</em> लिखकर ईमेल भेजें।</li>
+      </ol>
+    </div>
+  </main>
+</body>
+</html>

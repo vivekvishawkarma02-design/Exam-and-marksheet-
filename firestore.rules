@@ -40,14 +40,14 @@ service cloud.firestore {
 
     function isValidPermissionsMap(perms) {
       return perms is map &&
-        perms.size() >= 8 && perms.size() <= 19 &&
+        perms.size() >= 8 && perms.size() <= 21 &&
         perms.keys().hasAll(['students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members']) &&
         perms.keys().hasOnly([
           'students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members',
           'attendance', 'fees', 'studentRegister',
           'certificates', 'cashBook', 'enquiry',
           'exams', 'stock', 'transport',
-          'salary', 'sessionPromotion'
+          'salary', 'sessionPromotion', 'resultAnalysis', 'classDiary'
         ]) &&
         perms.students in ['none', 'view', 'edit'] &&
         perms.marks in ['none', 'view', 'edit'] &&
@@ -67,7 +67,9 @@ service cloud.firestore {
         (!('stock' in perms) || perms.stock in ['none', 'view', 'edit']) &&
         (!('transport' in perms) || perms.transport in ['none', 'view', 'edit']) &&
         (!('salary' in perms) || perms.salary in ['none', 'view', 'edit']) &&
-        (!('sessionPromotion' in perms) || perms.sessionPromotion in ['none', 'view', 'edit']);
+        (!('sessionPromotion' in perms) || perms.sessionPromotion in ['none', 'view', 'edit']) &&
+        (!('resultAnalysis' in perms) || perms.resultAnalysis in ['none', 'view', 'edit']) &&
+        (!('classDiary' in perms) || perms.classDiary in ['none', 'view', 'edit']);
     }
 
     function isValidStringList(listVal, maxLen) {
@@ -241,6 +243,83 @@ service cloud.firestore {
           isExamOpenForTeacher(orgId, schoolId, componentKey) &&
           (teacherAssignedByScope || teacherAssignedLegacy)
         )
+      );
+    }
+
+    function hasAnyTeacherSubjectScope(orgId) {
+      let m = memberData(orgId);
+      let hasScope = exists(teacherScopePath(orgId, request.auth.uid));
+      return (hasScope && get(teacherScopePath(orgId, request.auth.uid)).data.assignedClassSectionSubjects.size() > 0) ||
+        (!hasScope && m.assignedClassSubjects.size() > 0);
+    }
+
+    function canTeacherReadMarkByScope(orgId, schoolId, data) {
+      let m = memberData(orgId);
+      let hasScope = exists(teacherScopePath(orgId, request.auth.uid));
+      let hasStudent = exists(studentDocPath(orgId, schoolId, data.studentId));
+      let st = hasStudent ? get(studentDocPath(orgId, schoolId, data.studentId)).data : {};
+      let scopedMatch = hasScope && hasStudent &&
+        (schoolId + '|' + st.className + '|' + st.section + '|' + data.subjectName) in get(teacherScopePath(orgId, request.auth.uid)).data.assignedClassSectionSubjects;
+      let legacyMatch = !hasScope && m.assignedClassSubjects.size() > 0 &&
+        (schoolId + '|' + data.className + '|' + data.subjectName) in m.assignedClassSubjects;
+      return m.role != 'TEACHER' || scopedMatch || legacyMatch;
+    }
+
+    function canReadStudents(orgId, schoolId) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasStandardModule = isAdmin ||
+        ('students' in p && p.students in ['view', 'edit']) ||
+        ('studentRegister' in p && p.studentRegister in ['view', 'edit']) ||
+        ('fees' in p && p.fees in ['view', 'edit']) ||
+        ('certificates' in p && p.certificates in ['view', 'edit']) ||
+        ('enquiry' in p && p.enquiry in ['view', 'edit']) ||
+        ('exams' in p && p.exams in ['view', 'edit']) ||
+        ('transport' in p && p.transport in ['view', 'edit']) ||
+        ('marks' in p && p.marks in ['view', 'edit']) ||
+        ('coScholastic' in p && p.coScholastic in ['view', 'edit']) ||
+        ('reports' in p && p.reports in ['view', 'edit']) ||
+        ('attendance' in p && p.attendance in ['view', 'edit']) ||
+        ('sessionPromotion' in p && p.sessionPromotion in ['view', 'edit']) ||
+        ('classDiary' in p && p.classDiary in ['view', 'edit']);
+      let hasResultAnalysis = ('resultAnalysis' in p && p.resultAnalysis in ['view', 'edit']) &&
+        (m.role != 'TEACHER' || hasAnyTeacherSubjectScope(orgId));
+      return memberExists(orgId) && m.status == 'active' && inSchool && (
+        hasStandardModule || hasResultAnalysis || hasAnyClassTeacherSection(orgId) || hasAnyTeacherSubjectScope(orgId)
+      );
+    }
+
+    function canGetMark(orgId, schoolId, data) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasFullMarksRead = isAdmin ||
+        ('marks' in p && p.marks in ['view', 'edit']) ||
+        ('reports' in p && p.reports in ['view', 'edit']) ||
+        ('sessionPromotion' in p && p.sessionPromotion in ['view', 'edit']);
+      let hasScopedResultRead = ('resultAnalysis' in p && p.resultAnalysis in ['view', 'edit']) &&
+        canTeacherReadMarkByScope(orgId, schoolId, data);
+      return memberExists(orgId) && m.status == 'active' && inSchool && (
+        hasFullMarksRead || hasScopedResultRead
+      );
+    }
+
+    function canListMarks(orgId, schoolId) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasFullMarksRead = isAdmin ||
+        ('marks' in p && p.marks in ['view', 'edit']) ||
+        ('reports' in p && p.reports in ['view', 'edit']) ||
+        ('sessionPromotion' in p && p.sessionPromotion in ['view', 'edit']);
+      let hasScopedResultList = ('resultAnalysis' in p && p.resultAnalysis in ['view', 'edit']) &&
+        (m.role != 'TEACHER' || hasAnyTeacherSubjectScope(orgId));
+      return memberExists(orgId) && m.status == 'active' && inSchool && (
+        hasFullMarksRead || hasScopedResultList
       );
     }
 
@@ -633,7 +712,7 @@ service cloud.firestore {
         data.keys().hasOnly([
           'name', 'mobile', 'email', 'photoBase64', 'subjects', 'schoolIds',
           'maxPeriodsPerDay', 'maxConsecutivePeriods', 'weeklyOffDays',
-          'active', 'linkedMemberUid', 'createdAt', 'updatedAt'
+          'active', 'linkedMemberUid', 'dob', 'createdAt', 'updatedAt'
         ]) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
         data.mobile is string && data.mobile.size() <= 40 &&
@@ -646,6 +725,7 @@ service cloud.firestore {
         isValidStringList(data.weeklyOffDays, 7) &&
         data.active is bool &&
         data.linkedMemberUid is string && data.linkedMemberUid.size() <= 128 &&
+        (!('dob' in data) || (data.dob is string && data.dob.size() <= 40)) &&
         isValidTimestamp(data.createdAt) &&
         isValidTimestamp(data.updatedAt);
     }
@@ -1922,6 +2002,197 @@ service cloud.firestore {
     }
 
     // =========================================================================
+    // PHASE 18 VALIDATORS & RBAC HELPERS: CLASS DIARY ('classDiary') & BIRTHDAYS
+    // =========================================================================
+    function canReadClassDiaryForSchool(orgId, schoolId) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasDiaryPerm = isAdmin || ('classDiary' in p && p.classDiary in ['view', 'edit']);
+      let hasScope = exists(teacherScopePath(orgId, request.auth.uid));
+      let hasTeacherAssignment = (hasScope && (
+          get(teacherScopePath(orgId, request.auth.uid)).data.classTeacherSections.size() > 0 ||
+          get(teacherScopePath(orgId, request.auth.uid)).data.assignedClassSectionSubjects.size() > 0
+        )) || m.assignedClassSubjects.size() > 0;
+      return memberExists(orgId) && m.status == 'active' && inSchool && (
+        hasDiaryPerm || hasTeacherAssignment
+      );
+    }
+
+    function canWriteClassDiaryEntry(orgId, schoolId, className, section, subjectName) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasModuleEditPerm = isAdmin || ('classDiary' in p && p.classDiary == 'edit');
+      let hasScope = exists(teacherScopePath(orgId, request.auth.uid));
+      let isCtForSection = hasScope &&
+        (schoolId + '|' + className + '|' + section) in get(teacherScopePath(orgId, request.auth.uid)).data.classTeacherSections;
+      let isSubjTeacherScoped = hasScope &&
+        (schoolId + '|' + className + '|' + section + '|' + subjectName) in get(teacherScopePath(orgId, request.auth.uid)).data.assignedClassSectionSubjects;
+      let isSubjTeacherLegacy = m.assignedClassSubjects.size() > 0 && (
+        (schoolId + '|' + className + '|' + section + '|' + subjectName) in m.assignedClassSubjects ||
+        (schoolId + '|' + className + '|' + subjectName) in m.assignedClassSubjects
+      );
+      let isAssignedTeacher = isCtForSection || isSubjTeacherScoped || isSubjTeacherLegacy;
+      let allowedByRole = isAdmin ||
+        (m.role != 'TEACHER' && hasModuleEditPerm) ||
+        isAssignedTeacher ||
+        (hasModuleEditPerm && !hasScope && m.assignedClassSubjects.size() == 0);
+      return memberExists(orgId) && m.status == 'active' && inSchool && allowedByRole;
+    }
+
+    function canReadBirthdaysForSchool(orgId, schoolId) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasAccess = isAdmin ||
+        ('students' in p && p.students in ['view', 'edit']) ||
+        ('studentRegister' in p && p.studentRegister in ['view', 'edit']) ||
+        ('teachers' in p && p.teachers in ['view', 'edit']);
+      return memberExists(orgId) && m.status == 'active' && inSchool && hasAccess;
+    }
+
+    function canManageBirthdayConfigForSchool(orgId, schoolId) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasEdit = isAdmin ||
+        ('students' in p && p.students == 'edit') ||
+        ('studentRegister' in p && p.studentRegister == 'edit') ||
+        ('teachers' in p && p.teachers == 'edit') ||
+        ('settings' in p && p.settings == 'edit');
+      return memberExists(orgId) && m.status == 'active' && inSchool && hasEdit;
+    }
+
+    function isValidClassDiaryEntry(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'dateIso', 'className', 'section', 'subjectName',
+          'classwork', 'homework', 'note', 'photoBase64',
+          'authorUid', 'authorName', 'createdAtMs',
+          'updatedByUid', 'updatedByName', 'updatedAtMs',
+          'editHistory', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'dateIso', 'className', 'section', 'subjectName',
+          'classwork', 'homework', 'note', 'photoBase64',
+          'authorUid', 'authorName', 'createdAtMs',
+          'lastEditedByUid', 'lastEditedByName',
+          'updatedByUid', 'updatedByName', 'updatedAtMs',
+          'editHistory', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        isValidIsoDate(data.dateIso) &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+        data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 80 &&
+        data.classwork is string && data.classwork.size() <= 2000 &&
+        data.homework is string && data.homework.size() <= 2000 &&
+        data.note is string && data.note.size() <= 1000 &&
+        (data.classwork.size() > 0 || data.homework.size() > 0 || data.note.size() > 0) &&
+        data.photoBase64 is string && data.photoBase64.size() <= 260000 &&
+        data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128 &&
+        data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120 &&
+        data.createdAtMs is int && data.createdAtMs >= 0 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.updatedAtMs is int && data.updatedAtMs >= 0 &&
+        data.editHistory is list && data.editHistory.size() <= 50 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidClassDiaryHistory(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'entryId', 'dateIso', 'className', 'section', 'subjectName',
+          'action', 'classwork', 'homework', 'note',
+          'previousClasswork', 'previousHomework', 'previousNote',
+          'actorUid', 'actorName', 'timestampMs', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'entryId', 'dateIso', 'className', 'section', 'subjectName',
+          'action', 'classwork', 'homework', 'note',
+          'previousClasswork', 'previousHomework', 'previousNote',
+          'classworkSnapshot', 'homeworkSnapshot', 'noteSnapshot',
+          'authorUid', 'authorName',
+          'actorUid', 'actorName', 'timestampMs', 'createdAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        isValidId(data.entryId) &&
+        isValidIsoDate(data.dateIso) &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
+        data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 80 &&
+        data.action in ['CREATED', 'EDITED', 'DELETED'] &&
+        data.classwork is string && data.classwork.size() <= 2000 &&
+        data.homework is string && data.homework.size() <= 2000 &&
+        data.note is string && data.note.size() <= 1000 &&
+        data.previousClasswork is string && data.previousClasswork.size() <= 2000 &&
+        data.previousHomework is string && data.previousHomework.size() <= 2000 &&
+        data.previousNote is string && data.previousNote.size() <= 1000 &&
+        data.actorUid == request.auth.uid &&
+        data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
+        data.timestampMs is int && data.timestampMs >= 0 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidSchoolBirthdayConfig(data, schoolId) {
+      return data.keys().hasAll([
+          'schoolId', 'birthdayWishesEnabled', 'wishTemplateEn', 'wishTemplateHi',
+          'excludedStudentKeys', 'excludedTeacherIds', 'staffDobByTeacherId',
+          'updatedByUid', 'updatedByName', 'updatedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'birthdayWishesEnabled', 'wishTemplateEn', 'wishTemplateHi',
+          'templateEn', 'templateHi',
+          'excludedStudentKeys', 'excludedTeacherIds', 'staffDobByTeacherId',
+          'updatedByUid', 'updatedByName', 'updatedAtMs', 'updatedAt'
+        ]) &&
+        data.schoolId == schoolId &&
+        data.birthdayWishesEnabled is bool &&
+        data.wishTemplateEn is string && data.wishTemplateEn.size() >= 1 && data.wishTemplateEn.size() <= 600 &&
+        data.wishTemplateHi is string && data.wishTemplateHi.size() >= 1 && data.wishTemplateHi.size() <= 600 &&
+        isValidStringList(data.excludedStudentKeys, 500) &&
+        isValidStringList(data.excludedTeacherIds, 200) &&
+        data.staffDobByTeacherId is map && data.staffDobByTeacherId.size() <= 200 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.updatedAtMs is int && data.updatedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidBirthdayWish(data) {
+      return data.keys().hasAll([
+          'schoolId', 'personType', 'personId', 'personName',
+          'celebrationDateIso', 'celebrationYear',
+          'wishedByUid', 'wishedByName', 'wishedAtMs', 'channel', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'personType', 'personId', 'personName',
+          'className', 'section',
+          'celebrationDateIso', 'celebrationYear',
+          'wishedByUid', 'wishedByName', 'wishedAtMs', 'channel',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.personType in ['STUDENT', 'TEACHER'] &&
+        data.personId is string && data.personId.size() >= 1 && data.personId.size() <= 128 &&
+        data.personName is string && data.personName.size() >= 1 && data.personName.size() <= 120 &&
+        isValidIsoDate(data.celebrationDateIso) &&
+        data.celebrationYear is int && data.celebrationYear >= 2000 && data.celebrationYear <= 2100 &&
+        data.wishedByUid == request.auth.uid &&
+        data.wishedByName is string && data.wishedByName.size() >= 1 && data.wishedByName.size() <= 120 &&
+        data.wishedAtMs is int && data.wishedAtMs >= 0 &&
+        data.channel in ['WHATSAPP', 'COPY', 'CARD', 'MANUAL', 'SHARE'] &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    // =========================================================================
     // 1. PRIVATE USER ACCOUNT & MEMBERSHIPS INDEX
     // =========================================================================
     match /users/{uid} {
@@ -2187,6 +2458,22 @@ service cloud.firestore {
       }
 
       // -----------------------------------------------------------------------
+      // 3d-2. DELETED USER MARKERS (Non-PII UID markers for "deleted user" attribution)
+      // -----------------------------------------------------------------------
+      match /deletedUsers/{deletedUid} {
+        allow get, list: if isSignedIn() && isActiveMember(orgId);
+        allow create: if isSignedIn() &&
+          isValidId(deletedUid) &&
+          request.auth.uid == deletedUid &&
+          isActiveMember(orgId) &&
+          incoming().keys().hasOnly(['uid', 'deletedAt']) &&
+          incoming().uid == deletedUid &&
+          isValidTimestamp(incoming().deletedAt);
+        allow update: if false;
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
+      }
+
+      // -----------------------------------------------------------------------
       // 3e. SCHOOLS & SCHOOL-SCOPED ACADEMIC DATA
       // -----------------------------------------------------------------------
       match /schools/{schoolId} {
@@ -2231,24 +2518,9 @@ service cloud.firestore {
 
         allow delete: if isSignedIn() && isValidId(schoolId) && isOrgAdmin(orgId);
 
-        // --- STUDENTS (Controlled by 'students' OR 'studentRegister'; readable by 'fees', 'certificates', 'enquiry'; create also by 'enquiry'; mark-left update also by 'certificates') ---
+        // --- STUDENTS (Controlled by 'students' OR 'studentRegister'; readable by 'fees', 'certificates', 'enquiry', 'resultAnalysis'; create also by 'enquiry'; mark-left update also by 'certificates') ---
         match /students/{studentId} {
-          allow get, list: if isSignedIn() &&
-            canAccessSchool(orgId, schoolId) && (
-              hasModuleView(orgId, 'students') ||
-              hasModuleView(orgId, 'studentRegister') ||
-              hasModuleView(orgId, 'fees') ||
-              hasModuleView(orgId, 'certificates') ||
-              hasModuleView(orgId, 'enquiry') ||
-              hasModuleView(orgId, 'exams') ||
-              hasModuleView(orgId, 'transport') ||
-              hasModuleView(orgId, 'marks') ||
-              hasModuleView(orgId, 'coScholastic') ||
-              hasModuleView(orgId, 'reports') ||
-              hasModuleView(orgId, 'attendance') ||
-              hasModuleView(orgId, 'sessionPromotion') ||
-              hasAnyClassTeacherSection(orgId)
-            );
+          allow get, list: if isSignedIn() && canReadStudents(orgId, schoolId);
 
           allow create: if isSignedIn() &&
             isValidId(studentId) &&
@@ -2278,12 +2550,9 @@ service cloud.firestore {
 
         // --- MARKS ---
         match /marks/{markId} {
-          allow get, list: if isSignedIn() &&
-            canAccessSchool(orgId, schoolId) && (
-              hasModuleView(orgId, 'marks') ||
-              hasModuleView(orgId, 'reports') ||
-              hasModuleView(orgId, 'sessionPromotion')
-            );
+          allow get: if isSignedIn() && canGetMark(orgId, schoolId, resource.data);
+
+          allow list: if isSignedIn() && canListMarks(orgId, schoolId);
 
           allow create: if isSignedIn() &&
             isValidId(markId) &&
@@ -2322,7 +2591,7 @@ service cloud.firestore {
             canEditMarkScope(orgId, schoolId, incoming().studentId, incoming().className, incoming().subjectName, incoming().componentKey);
 
           allow update: if false;
-          allow delete: if false;
+          allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
         }
 
         // --- CO-SCHOLASTIC ---
@@ -2414,6 +2683,8 @@ service cloud.firestore {
           hasModuleView(orgId, 'teachers') ||
           hasModuleEdit(orgId, 'timetable') ||
           hasModuleView(orgId, 'exams') ||
+          hasModuleView(orgId, 'resultAnalysis') ||
+          hasModuleView(orgId, 'classDiary') ||
           hasSalaryView(orgId) ||
           ((hasModuleView(orgId, 'timetable') || hasModuleView(orgId, 'marks')) && resource.data.linkedMemberUid == request.auth.uid)
         );
@@ -2477,7 +2748,12 @@ service cloud.firestore {
       }
 
       match /classAssignments/{assignmentId} {
-        allow get, list: if isSignedIn() && (hasModuleView(orgId, 'teachers') || hasModuleEdit(orgId, 'timetable'));
+        allow get, list: if isSignedIn() && (
+          hasModuleView(orgId, 'teachers') ||
+          hasModuleEdit(orgId, 'timetable') ||
+          hasModuleView(orgId, 'resultAnalysis') ||
+          hasModuleView(orgId, 'classDiary')
+        );
 
         allow create: if isSignedIn() &&
           isValidId(assignmentId) &&
@@ -2676,7 +2952,7 @@ service cloud.firestore {
       // -----------------------------------------------------------------------
       match /teacherScopes/{memberUid} {
         allow get: if isSignedIn() && isValidId(memberUid) && (
-          request.auth.uid == memberUid ||
+          (request.auth.uid == memberUid && isActiveMember(orgId)) ||
           isOrgAdmin(orgId) ||
           hasModuleView(orgId, 'teachers') ||
           (isActiveMember(orgId) && memberData(orgId).role != 'TEACHER' && (hasModuleView(orgId, 'marks') || hasModuleView(orgId, 'reports')))
@@ -2699,7 +2975,8 @@ service cloud.firestore {
           isValidId(memberUid) && (
             isOrgAdmin(orgId) ||
             hasModuleEdit(orgId, 'teachers') ||
-            hasModuleEdit(orgId, 'members')
+            hasModuleEdit(orgId, 'members') ||
+            (request.auth.uid == memberUid && !existsAfter(memberPath(orgId, memberUid)))
           );
       }
 
@@ -2831,7 +3108,7 @@ service cloud.firestore {
           );
 
         allow update: if false;
-        allow delete: if false;
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
 
       // -----------------------------------------------------------------------
@@ -2947,8 +3224,8 @@ service cloud.firestore {
             'status', 'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason', 'updatedAt'
           ]);
 
-        // Receipts are NEVER deleted
-        allow delete: if false;
+        // Receipts are NEVER deleted individually; only Owner teardown of deleted org may purge them
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
 
       match /feeMessageSentLogs/{logId} {
@@ -3008,7 +3285,7 @@ service cloud.firestore {
           canAccessSchool(orgId, incoming().schoolId);
 
         allow update: if false;
-        allow delete: if false;
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
 
       // -----------------------------------------------------------------------
@@ -3046,8 +3323,8 @@ service cloud.firestore {
             'status', 'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason', 'updatedAt'
           ]);
 
-        // Certificates are NEVER deleted
-        allow delete: if false;
+        // Certificates are NEVER deleted individually; only Owner teardown of deleted org may purge them
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
 
       match /cashBookSettings/{settingId} {
@@ -3069,7 +3346,7 @@ service cloud.firestore {
           canAccessSchool(orgId, incoming().schoolId) &&
           (isOrgAdmin(orgId) || incoming().expenseApprovalLimitRs == existing().expenseApprovalLimitRs);
 
-        allow delete: if false;
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
 
       match /cashBookEntries/{entryId} {
@@ -3126,8 +3403,8 @@ service cloud.firestore {
             )
           );
 
-        // Cash book entries are NEVER silently deleted
-        allow delete: if false;
+        // Cash book entries are NEVER silently deleted individually; only Owner teardown of deleted org may purge them
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
 
       match /cashBookDayClosings/{closingId} {
@@ -3148,7 +3425,7 @@ service cloud.firestore {
           hasModuleEdit(orgId, 'cashBook') &&
           canAccessSchool(orgId, incoming().schoolId);
 
-        allow delete: if false;
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
 
       match /cashBookAuditLogs/{logId} {
@@ -3161,7 +3438,7 @@ service cloud.firestore {
           canAccessSchool(orgId, incoming().schoolId);
 
         allow update: if false;
-        allow delete: if false;
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
 
       match /enquirySettings/{settingId} {
@@ -3181,7 +3458,7 @@ service cloud.firestore {
           hasModuleEdit(orgId, 'enquiry') &&
           canAccessSchool(orgId, incoming().schoolId);
 
-        allow delete: if false;
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
 
       match /admissionEnquiries/{enquiryId} {
@@ -3294,9 +3571,9 @@ service cloud.firestore {
           hasModuleEdit(orgId, 'stock') &&
           canAccessSchool(orgId, incoming().schoolId);
 
-        // Append-only audit trail for stock movements
+        // Append-only audit trail for stock movements (only Owner org teardown may purge)
         allow update: if false;
-        allow delete: if false;
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
 
       match /transportRoutes/{routeId} {
@@ -3545,6 +3822,127 @@ service cloud.firestore {
 
         allow update: if false;
         allow delete: if isSignedIn() && isValidId(logId) && isOrgOwner(orgId);
+      }
+
+      // -----------------------------------------------------------------------
+      // 3p. PHASE 18: CLASS DIARY ('classDiary') AND BIRTHDAYS
+      // - Missing 'classDiary' key = no access, EXCEPT assigned Class Teachers and
+      //   Subject Teachers can automatically view & write diary entries for their own
+      //   assigned class-section and subject without extra permission setup.
+      // - Edit & delete of a diary entry is allowed ONLY by the original author
+      //   (authorUid == request.auth.uid) OR an Admin (OWNER / ADMIN), with revision
+      //   history preserved.
+      // - Birthdays ('schoolBirthdayConfigs', 'birthdayWishes') are visible to anyone
+      //   with access to Students ('students'), Student Register ('studentRegister'),
+      //   or Teachers ('teachers').
+      // -----------------------------------------------------------------------
+
+      match /classDiaryEntries/{entryId} {
+        allow get, list: if isSignedIn() &&
+          canReadClassDiaryForSchool(orgId, resource.data.schoolId);
+
+        allow create: if isSignedIn() &&
+          isValidId(entryId) &&
+          isValidClassDiaryEntry(incoming()) &&
+          incoming().authorUid == request.auth.uid &&
+          incoming().editHistory.size() == 0 &&
+          canWriteClassDiaryEntry(
+            orgId,
+            incoming().schoolId,
+            incoming().className,
+            incoming().section,
+            incoming().subjectName
+          );
+
+        allow update: if isSignedIn() &&
+          isValidId(entryId) &&
+          isValidClassDiaryEntry(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().session == existing().session &&
+          incoming().dateIso == existing().dateIso &&
+          incoming().className == existing().className &&
+          incoming().section == existing().section &&
+          incoming().subjectName == existing().subjectName &&
+          incoming().authorUid == existing().authorUid &&
+          incoming().authorName == existing().authorName &&
+          incoming().createdAtMs == existing().createdAtMs &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().editHistory.size() >= existing().editHistory.size() && (
+            isOrgAdmin(orgId) ||
+            (
+              existing().authorUid == request.auth.uid &&
+              canWriteClassDiaryEntry(
+                orgId,
+                existing().schoolId,
+                existing().className,
+                existing().section,
+                existing().subjectName
+              )
+            )
+          );
+
+        allow delete: if isSignedIn() &&
+          isValidId(entryId) && (
+            isOrgAdmin(orgId) ||
+            (
+              existing().authorUid == request.auth.uid &&
+              canWriteClassDiaryEntry(
+                orgId,
+                existing().schoolId,
+                existing().className,
+                existing().section,
+                existing().subjectName
+              )
+            )
+          );
+      }
+
+      match /classDiaryHistory/{historyId} {
+        allow get, list: if isSignedIn() &&
+          canReadClassDiaryForSchool(orgId, resource.data.schoolId);
+
+        allow create: if isSignedIn() &&
+          isValidId(historyId) &&
+          isValidClassDiaryHistory(incoming()) &&
+          canWriteClassDiaryEntry(
+            orgId,
+            incoming().schoolId,
+            incoming().className,
+            incoming().section,
+            incoming().subjectName
+          );
+
+        // Append-only audit history of diary creations, edits, and deletions
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(historyId) && isOrgOwner(orgId);
+      }
+
+      match /schoolBirthdayConfigs/{schoolId} {
+        allow get, list: if isSignedIn() &&
+          canReadBirthdaysForSchool(orgId, schoolId);
+
+        allow create, update: if isSignedIn() &&
+          isValidId(schoolId) &&
+          isValidSchoolBirthdayConfig(incoming(), schoolId) &&
+          canManageBirthdayConfigForSchool(orgId, schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(schoolId) &&
+          isOrgOwner(orgId);
+      }
+
+      match /birthdayWishes/{wishId} {
+        allow get, list: if isSignedIn() &&
+          canReadBirthdaysForSchool(orgId, resource.data.schoolId);
+
+        allow create, update: if isSignedIn() &&
+          isValidId(wishId) &&
+          isValidBirthdayWish(incoming()) &&
+          canReadBirthdaysForSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(wishId) &&
+          canReadBirthdaysForSchool(orgId, existing().schoolId);
       }
     }
   }

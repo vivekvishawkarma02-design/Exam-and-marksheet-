@@ -458,9 +458,12 @@ class OrgSessionViewModel(
 
     fun deleteOwnAccount(
         reauthenticate: suspend () -> Result<Unit>,
+        deleteOwnedOrgsConfirmed: Boolean = false,
         onResult: (ok: Boolean, error: String?) -> Unit
     ) {
-        val memberships = _state.value.userAccount?.memberships.orEmpty()
+        val account = _state.value.userAccount
+        val memberships = account?.memberships.orEmpty()
+        val pendingRequests = account?.pendingRequests.orEmpty()
         viewModelScope.launch {
             _state.update { it.copy(isSubmitting = true, errorMessage = null) }
             // 1. Re-authenticate FIRST so we never delete Firestore docs if verification fails
@@ -472,11 +475,16 @@ class OrgSessionViewModel(
                 onResult(false, msg)
                 return@launch
             }
-            // 2. Delete memberships, private user profile, and Firebase Auth account
+            // 2. Delete owned orgs (if confirmed), memberships, deletedUsers tombstone, user profile, and Firebase Auth account
             val res = withContext(Dispatchers.IO) {
-                orgRepo.deleteOwnAccount(memberships)
+                orgRepo.deleteOwnAccount(
+                    memberships = memberships,
+                    pendingRequests = pendingRequests,
+                    deleteOwnedOrgsConfirmed = deleteOwnedOrgsConfirmed
+                )
             }
             res.onSuccess {
+                offlinePrefs.clearAll()
                 _state.update { it.copy(isSubmitting = false, selectedOrgId = null) }
                 onResult(true, null)
             }.onFailure { err ->

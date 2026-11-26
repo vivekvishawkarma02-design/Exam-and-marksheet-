@@ -4205,13 +4205,823 @@ test("20. Phase 14: Session & Promotion ('sessionPromotion'), Bulk Import & Back
   await assertFails(editorOrg.collection("backupExportLogs").doc("bk_owner_sal").get());
 });
 
+// =============================================================================
+// 21. PHASE 15: PLAY STORE ACCOUNT DELETION, DELETED-USER ATTRIBUTION & TEARDOWN
+// =============================================================================
+test("21. Phase 15: Normal member deletion preserves records + blocks deleted user, and Sole Owner org teardown cleans append-only collections", async () => {
+  await seedOrgWithOwnerAndSchools();
+  const ts = pastDate(5000);
 
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    const orgRef = db.collection("organisations").doc(ORG_ID);
+    await orgRef.collection("members").doc(TEACHER_UID).set(
+      makeMemberPayload(TEACHER_UID, {
+        name: "Mrs. Sharma",
+        role: "TEACHER",
+        schools: [SCHOOL_1],
+        permissions: { ...teacherPermissions("edit"), attendance: "edit", fees: "edit" },
+      })
+    );
+    await orgRef.collection("members").doc(ADMIN_UID).set(
+      makeMemberPayload(ADMIN_UID, {
+        name: "Mr. Admin",
+        role: "ADMIN",
+        allSchools: true,
+        schools: [],
+        permissions: fullPermissions("edit"),
+      })
+    );
+    await orgRef.collection("teacherScopes").doc(TEACHER_UID).set({
+      uid: TEACHER_UID,
+      teacherId: "tchr_sharma",
+      teacherName: "Mrs. Sharma",
+      assignedClassSectionSubjects: [`${SCHOOL_1}|2nd|A|Maths`],
+      classTeacherSections: [`${SCHOOL_1}|2nd|A`],
+      updatedByUid: OWNER_UID,
+      updatedAt: ts,
+    });
+    await db.collection("users").doc(TEACHER_UID).set({
+      uid: TEACHER_UID,
+      name: "Mrs. Sharma",
+      email: "sharma@example.org",
+      memberships: [{ orgId: ORG_ID, orgName: "STS Group of Schools", orgCode: ORG_CODE, role: "TEACHER", status: "active" }],
+      pendingRequests: [],
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await db.collection("users").doc(OWNER_UID).set({
+      uid: OWNER_UID,
+      name: "Principal A",
+      email: "owner@sts.edu",
+      memberships: [{ orgId: ORG_ID, orgName: "STS Group of Schools", orgCode: ORG_CODE, role: "OWNER", status: "active" }],
+      pendingRequests: [],
+      createdAt: ts,
+      updatedAt: ts,
+    });
 
+    // Historical records created by Teacher before deleting account (including append-only feeReceipt & markEditLog)
+    await orgRef.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_stu1_maths").set({
+      studentId: "stu_1",
+      schoolId: SCHOOL_1,
+      className: "2nd",
+      subjectName: "Maths",
+      componentKey: "T1_UT",
+      rawValue: "27",
+      updatedByUid: TEACHER_UID,
+      updatedByName: "Mrs. Sharma",
+      clientEditedAtMs: Date.now() - 1000,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await orgRef.collection("schools").doc(SCHOOL_1).collection("markEditLogs").doc("mel_1").set({
+      markDocId: "m_stu1_maths",
+      studentId: "stu_1",
+      studentName: "Aarav Sharma",
+      schoolId: SCHOOL_1,
+      className: "2nd",
+      subjectName: "Maths",
+      componentKey: "T1_UT",
+      oldValue: "",
+      newValue: "27",
+      editorUid: TEACHER_UID,
+      editorName: "Mrs. Sharma",
+      clientEditedAtMs: Date.now() - 1000,
+      createdAt: ts,
+    });
+    await orgRef.collection("feeReceipts").doc("rec_1").set({
+      receiptNo: "RCPT-001",
+      schoolId: SCHOOL_1,
+      session: "2026-2027",
+      studentId: "stu_1",
+      studentName: "Aarav Sharma",
+      admNo: "ADM-101",
+      className: "2nd",
+      section: "A",
+      dateIso: "2026-07-10",
+      paymentMode: "CASH",
+      referenceNo: "",
+      status: "PAID",
+      lineItems: [{ key: "T1", label: "Tuition Jul", amountRs: 1000 }],
+      totalAmountRs: 1000,
+      cancelledByUid: "",
+      cancelledByName: "",
+      cancelReason: "",
+      cancelledAtMs: 0,
+      collectedByUid: TEACHER_UID,
+      collectedByName: "Mrs. Sharma",
+      clientCreatedAtMs: Date.now() - 1000,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await orgRef.collection("cashBookEntries").doc("cb_1").set({
+      schoolId: SCHOOL_1,
+      dateIso: "2026-07-10",
+      entryType: "INFLOW",
+      category: "Fees",
+      title: "Tuition",
+      note: "",
+      amountRs: 1000,
+      paymentMode: "CASH",
+      referenceNo: "",
+      receiptNo: "CB-001",
+      linkedSourceType: "FEE_RECEIPT",
+      linkedSourceId: "rec_1",
+      voided: false,
+      voidReason: "",
+      voidedByUid: "",
+      voidedByName: "",
+      voidedAtMs: 0,
+      enteredByUid: TEACHER_UID,
+      enteredByName: "Mrs. Sharma",
+      clientCreatedAtMs: Date.now() - 1000,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await orgRef.collection("studentAttendanceEditLogs").doc("attlog_1").set({
+      attendanceDocId: "att_1",
+      dateIso: "2026-07-10",
+      schoolId: SCHOOL_1,
+      className: "2nd",
+      section: "A",
+      studentId: "stu_1",
+      studentName: "Aarav Sharma",
+      oldStatus: "",
+      newStatus: "P",
+      reason: "Morning roll call",
+      editorUid: TEACHER_UID,
+      editorName: "Mrs. Sharma",
+      clientEditedAtMs: Date.now() - 1000,
+      createdAt: ts,
+    });
+  });
 
+  const teacherRootDb = testEnv.authenticatedContext(TEACHER_UID).firestore();
+  const teacherOrg = teacherRootDb.collection("organisations").doc(ORG_ID);
+  const adminOrg = testEnv.authenticatedContext(ADMIN_UID).firestore().collection("organisations").doc(ORG_ID);
+  const ownerRootDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+  const ownerOrg = ownerRootDb.collection("organisations").doc(ORG_ID);
 
+  // 1. Teacher CANNOT forge another member's deletedUsers tombstone
+  await assertFails(
+    teacherOrg.collection("deletedUsers").doc(ADMIN_UID).set({
+      uid: ADMIN_UID,
+      deletedAt: ts,
+    })
+  );
 
+  // 2. Normal member atomically creates deletedUsers tombstone, logs ACCOUNT_DELETED, deletes own membership & teacherScopes
+  const delBatch = teacherRootDb.batch();
+  delBatch.set(teacherOrg.collection("deletedUsers").doc(TEACHER_UID), {
+    uid: TEACHER_UID,
+    deletedAt: ts,
+  });
+  delBatch.set(teacherOrg.collection("auditLog").doc("audit_del_teacher"), {
+    actorUid: TEACHER_UID,
+    actorName: "deleted user",
+    action: "ACCOUNT_DELETED",
+    targetType: "member",
+    targetId: TEACHER_UID,
+    summary: "Member deleted their own account",
+    createdAt: ts,
+  });
+  delBatch.delete(teacherOrg.collection("members").doc(TEACHER_UID));
+  delBatch.delete(teacherOrg.collection("teacherScopes").doc(TEACHER_UID));
+  await assertSucceeds(delBatch.commit());
+  await assertSucceeds(teacherRootDb.collection("users").doc(TEACHER_UID).delete());
 
+  // 3. Deleted user can NO LONGER read anything in the organisation (zero leaks!)
+  await assertFails(teacherOrg.get());
+  await assertFails(teacherOrg.collection("members").get());
+  await assertFails(teacherOrg.collection("schools").get());
+  await assertFails(teacherOrg.collection("schools").doc(SCHOOL_1).get());
+  await assertFails(teacherOrg.collection("schools").doc(SCHOOL_1).collection("students").get());
+  await assertFails(teacherOrg.collection("schools").doc(SCHOOL_1).collection("marks").get());
+  await assertFails(teacherOrg.collection("feeReceipts").get());
+  await assertFails(teacherOrg.collection("cashBookEntries").get());
+  await assertFails(teacherOrg.collection("auditLog").get());
+  await assertFails(teacherOrg.collection("deletedUsers").doc(TEACHER_UID).get());
+  await assertFails(teacherOrg.collection("teacherScopes").doc(TEACHER_UID).get());
+  await assertFails(teacherRootDb.collection("users").get());
 
+  // Existing Admin CAN still read preserved school records and deletedUsers UID tombstone ("deleted user")
+  await assertSucceeds(adminOrg.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_stu1_maths").get());
+  await assertSucceeds(adminOrg.collection("feeReceipts").doc("rec_1").get());
+  await assertSucceeds(adminOrg.collection("deletedUsers").doc(TEACHER_UID).get());
+  // Nobody can tamper/update deletedUsers tombstone
+  await assertFails(adminOrg.collection("deletedUsers").doc(TEACHER_UID).set({ uid: TEACHER_UID, deletedAt: ts }));
 
+  // 4. While org root still exists, even Owner CANNOT delete append-only records or own OWNER member doc
+  await assertFails(ownerOrg.collection("feeReceipts").doc("rec_1").delete());
+  await assertFails(ownerOrg.collection("cashBookEntries").doc("cb_1").delete());
+  await assertFails(ownerOrg.collection("schools").doc(SCHOOL_1).collection("markEditLogs").doc("mel_1").delete());
+  await assertFails(ownerOrg.collection("studentAttendanceEditLogs").doc("attlog_1").delete());
+  await assertFails(ownerOrg.collection("deletedUsers").doc(TEACHER_UID).delete());
+  await assertFails(ownerOrg.collection("members").doc(OWNER_UID).delete());
 
+  // 5. Sole Owner confirms whole-organisation deletion: deletes orgCodes + org root FIRST
+  const startTeardown = ownerRootDb.batch();
+  startTeardown.delete(ownerRootDb.collection("orgCodes").doc(ORG_CODE));
+  startTeardown.delete(ownerOrg);
+  await assertSucceeds(startTeardown.commit());
 
+  // Now Owner CAN purge append-only collections, subcollections, non-owner members, and finally owner member & users/{ownerUid}
+  await assertSucceeds(ownerOrg.collection("schools").doc(SCHOOL_1).collection("markEditLogs").doc("mel_1").delete());
+  await assertSucceeds(ownerOrg.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_stu1_maths").delete());
+  await assertSucceeds(ownerOrg.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_1").delete());
+  await assertSucceeds(ownerOrg.collection("schools").doc(SCHOOL_1).delete());
+  await assertSucceeds(ownerOrg.collection("schools").doc(SCHOOL_2).collection("students").doc("stu_2").delete());
+  await assertSucceeds(ownerOrg.collection("schools").doc(SCHOOL_2).delete());
+  await assertSucceeds(ownerOrg.collection("feeReceipts").doc("rec_1").delete());
+  await assertSucceeds(ownerOrg.collection("cashBookEntries").doc("cb_1").delete());
+  await assertSucceeds(ownerOrg.collection("studentAttendanceEditLogs").doc("attlog_1").delete());
+  await assertSucceeds(ownerOrg.collection("deletedUsers").doc(TEACHER_UID).delete());
+  await assertSucceeds(ownerOrg.collection("auditLog").doc("audit_del_teacher").delete());
+  await assertSucceeds(ownerOrg.collection("members").doc(ADMIN_UID).delete());
+  await assertSucceeds(ownerOrg.collection("members").doc(OWNER_UID).delete());
+  await assertSucceeds(ownerRootDb.collection("users").doc(OWNER_UID).delete());
+
+  // Former owner & former admin now denied everywhere
+  await assertFails(ownerOrg.collection("schools").get());
+  await assertFails(adminOrg.collection("schools").get());
+  await assertFails(ownerOrg.collection("feeReceipts").get());
+});
+
+// =============================================================================
+// 22. PHASE 17: RESULT ANALYSIS MODULE ACCESS, READ-ONLY & TEACHER SCOPE RULES
+// =============================================================================
+test("Phase 17: Result Analysis enforces missing-key denial, read-only access, and teacher class/subject scope", async () => {
+  await seedOrgWithOwnerAndSchools();
+
+  const RA_NO_KEY_UID = "uid_p17_no_key";
+  const RA_VIEWER_UID = "uid_p17_viewer";
+  const RA_TEACHER_EMPTY_UID = "uid_p17_teacher_empty";
+  const RA_TEACHER_SCOPED_UID = "uid_p17_teacher_scoped";
+  const ts = pastDate();
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    const orgRef = db.collection("organisations").doc(ORG_ID);
+
+    // 1. Admin member
+    await orgRef.collection("members").doc(ADMIN_UID).set(
+      makeMemberPayload(ADMIN_UID, {
+        role: "ADMIN",
+        allSchools: true,
+        schools: [],
+        permissions: fullPermissions("edit"),
+      })
+    );
+
+    // 2. Member with missing resultAnalysis key (and no marks/reports/students/teachers)
+    await orgRef.collection("members").doc(RA_NO_KEY_UID).set(
+      makeMemberPayload(RA_NO_KEY_UID, {
+        role: "OTHER",
+        allSchools: true,
+        schools: [],
+        permissions: {
+          students: "none",
+          marks: "none",
+          coScholastic: "none",
+          reports: "none",
+          timetable: "none",
+          teachers: "none",
+          settings: "none",
+          members: "none",
+        },
+      })
+    );
+
+    // 3. Non-teacher viewer with ONLY resultAnalysis: 'view' (all other academic/staff keys 'none')
+    await orgRef.collection("members").doc(RA_VIEWER_UID).set(
+      makeMemberPayload(RA_VIEWER_UID, {
+        role: "OFFICE_OPERATOR",
+        allSchools: false,
+        schools: [SCHOOL_1],
+        permissions: {
+          students: "none",
+          marks: "none",
+          coScholastic: "none",
+          reports: "none",
+          timetable: "none",
+          teachers: "none",
+          settings: "none",
+          members: "none",
+          resultAnalysis: "view",
+        },
+      })
+    );
+
+    // 4. Teacher with resultAnalysis: 'view' and NO teacherScopes
+    await orgRef.collection("members").doc(RA_TEACHER_EMPTY_UID).set(
+      makeMemberPayload(RA_TEACHER_EMPTY_UID, {
+        role: "TEACHER",
+        allSchools: false,
+        schools: [SCHOOL_1],
+        permissions: {
+          students: "none",
+          marks: "none",
+          coScholastic: "none",
+          reports: "none",
+          timetable: "none",
+          teachers: "none",
+          settings: "none",
+          members: "none",
+          resultAnalysis: "view",
+        },
+        assignedClassSubjects: [],
+      })
+    );
+
+    // 5. Teacher with resultAnalysis: 'view' and teacherScopes ONLY for SCHOOL_1|2nd|A|Maths
+    await orgRef.collection("members").doc(RA_TEACHER_SCOPED_UID).set(
+      makeMemberPayload(RA_TEACHER_SCOPED_UID, {
+        role: "TEACHER",
+        allSchools: false,
+        schools: [SCHOOL_1],
+        permissions: {
+          students: "none",
+          marks: "none",
+          coScholastic: "none",
+          reports: "none",
+          timetable: "none",
+          teachers: "none",
+          settings: "none",
+          members: "none",
+          resultAnalysis: "view",
+        },
+      })
+    );
+    await orgRef.collection("teacherScopes").doc(RA_TEACHER_SCOPED_UID).set({
+      uid: RA_TEACHER_SCOPED_UID,
+      teacherId: "t_p17",
+      teacherName: "Mrs. Verma",
+      assignedClassSectionSubjects: [`${SCHOOL_1}|2nd|A|Maths`],
+      classTeacherSections: [],
+      updatedByUid: OWNER_UID,
+      updatedAt: ts,
+    });
+
+    // Seed teacher + classAssignment
+    await orgRef.collection("teachers").doc("t_p17").set({
+      name: "Mrs. Verma",
+      shortCode: "MV",
+      mobile: "9000000111",
+      email: "verma@sts.edu",
+      active: true,
+      maxPeriodsPerWeek: 30,
+      maxPeriodsPerDay: 6,
+      linkedMemberUid: RA_TEACHER_SCOPED_UID,
+      schoolIds: [SCHOOL_1],
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await orgRef.collection("classAssignments").doc("ca_2a").set({
+      schoolId: SCHOOL_1,
+      className: "2nd",
+      section: "A",
+      classTeacherId: "t_p17",
+      subjectAssignments: [{ subjectName: "Maths", teacherId: "t_p17", teacherName: "Mrs. Verma" }],
+      updatedAt: ts,
+    });
+
+    // Seed students in SCHOOL_1 (2nd-A and 3rd-B) and SCHOOL_2
+    await orgRef.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_2a").set(
+      makeStudentPayload(SCHOOL_1, { className: "2nd", section: "A", name: "Aarav 2A" })
+    );
+    await orgRef.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_3b").set(
+      makeStudentPayload(SCHOOL_1, { className: "3rd", section: "B", name: "Diya 3B" })
+    );
+    await orgRef.collection("schools").doc(SCHOOL_2).collection("students").doc("stu_s2").set(
+      makeStudentPayload(SCHOOL_2, { className: "2nd", section: "A", name: "Kabir S2" })
+    );
+
+    // Seed marks: assigned 2nd-A Maths, unassigned 2nd-A English, unassigned 3rd-B Maths, and SCHOOL_2
+    await orgRef.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_2a_maths").set({
+      studentId: "stu_2a",
+      schoolId: SCHOOL_1,
+      className: "2nd",
+      subjectName: "Maths",
+      componentKey: "T1_EXAM",
+      rawValue: "45",
+      updatedByUid: OWNER_UID,
+      updatedByName: "Principal",
+      clientEditedAtMs: Date.now() - 1000,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await orgRef.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_2a_eng").set({
+      studentId: "stu_2a",
+      schoolId: SCHOOL_1,
+      className: "2nd",
+      subjectName: "English",
+      componentKey: "T1_EXAM",
+      rawValue: "20",
+      updatedByUid: OWNER_UID,
+      updatedByName: "Principal",
+      clientEditedAtMs: Date.now() - 1000,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await orgRef.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_3b_maths").set({
+      studentId: "stu_3b",
+      schoolId: SCHOOL_1,
+      className: "3rd",
+      subjectName: "Maths",
+      componentKey: "T1_EXAM",
+      rawValue: "50",
+      updatedByUid: OWNER_UID,
+      updatedByName: "Principal",
+      clientEditedAtMs: Date.now() - 1000,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await orgRef.collection("schools").doc(SCHOOL_2).collection("marks").doc("m_s2_maths").set({
+      studentId: "stu_s2",
+      schoolId: SCHOOL_2,
+      className: "2nd",
+      subjectName: "Maths",
+      componentKey: "T1_EXAM",
+      rawValue: "48",
+      updatedByUid: OWNER_UID,
+      updatedByName: "Principal",
+      clientEditedAtMs: Date.now() - 1000,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+  });
+
+  const ownerOrg = testEnv.authenticatedContext(OWNER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const adminOrg = testEnv.authenticatedContext(ADMIN_UID).firestore().collection("organisations").doc(ORG_ID);
+  const noKeyOrg = testEnv.authenticatedContext(RA_NO_KEY_UID).firestore().collection("organisations").doc(ORG_ID);
+  const viewerOrg = testEnv.authenticatedContext(RA_VIEWER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const emptyTeacherOrg = testEnv.authenticatedContext(RA_TEACHER_EMPTY_UID).firestore().collection("organisations").doc(ORG_ID);
+  const scopedTeacherOrg = testEnv.authenticatedContext(RA_TEACHER_SCOPED_UID).firestore().collection("organisations").doc(ORG_ID);
+
+  // 1. Owner & Admin have full read access for Result Analysis
+  await assertSucceeds(ownerOrg.collection("schools").doc(SCHOOL_1).collection("marks").get());
+  await assertSucceeds(adminOrg.collection("schools").doc(SCHOOL_1).collection("marks").get());
+  await assertSucceeds(adminOrg.collection("teachers").get());
+  await assertSucceeds(adminOrg.collection("classAssignments").get());
+
+  // 2. Missing resultAnalysis key => NO access (denied everywhere)
+  await assertFails(noKeyOrg.collection("schools").doc(SCHOOL_1).collection("students").get());
+  await assertFails(noKeyOrg.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_2a_maths").get());
+  await assertFails(noKeyOrg.collection("teachers").get());
+  await assertFails(noKeyOrg.collection("classAssignments").get());
+
+  // 3. Non-teacher with resultAnalysis: 'view' CAN read SCHOOL_1 data, CANNOT read SCHOOL_2, CANNOT write anywhere
+  await assertSucceeds(viewerOrg.collection("schools").doc(SCHOOL_1).collection("students").get());
+  await assertSucceeds(viewerOrg.collection("schools").doc(SCHOOL_1).collection("marks").get());
+  await assertSucceeds(viewerOrg.collection("teachers").get());
+  await assertSucceeds(viewerOrg.collection("classAssignments").get());
+  await assertFails(viewerOrg.collection("schools").doc(SCHOOL_2).collection("marks").get());
+  await assertFails(
+    viewerOrg.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_2a_maths").update({ rawValue: "59" })
+  );
+  await assertFails(
+    viewerOrg.collection("schools").doc(SCHOOL_1).collection("students").doc("stu_2a").update({ name: "Tampered" })
+  );
+  await assertFails(viewerOrg.collection("teachers").doc("t_p17").update({ name: "Tampered" }));
+
+  // 4. Unassigned teacher with resultAnalysis: 'view' CANNOT read marks or students
+  await assertFails(emptyTeacherOrg.collection("schools").doc(SCHOOL_1).collection("students").get());
+  await assertFails(emptyTeacherOrg.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_2a_maths").get());
+
+  // 5. Scoped teacher (SCHOOL_1|2nd|A|Maths) CAN get assigned mark & teacher/classAssignments; DENIED unassigned subject/class/school & writes
+  await assertSucceeds(scopedTeacherOrg.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_2a_maths").get());
+  await assertSucceeds(scopedTeacherOrg.collection("teachers").get());
+  await assertSucceeds(scopedTeacherOrg.collection("classAssignments").get());
+  await assertFails(scopedTeacherOrg.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_2a_eng").get());
+  await assertFails(scopedTeacherOrg.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_3b_maths").get());
+  await assertFails(scopedTeacherOrg.collection("schools").doc(SCHOOL_2).collection("marks").doc("m_s2_maths").get());
+  await assertFails(
+    scopedTeacherOrg.collection("schools").doc(SCHOOL_1).collection("marks").doc("m_2a_maths").update({ rawValue: "60" })
+  );
+});
+
+// =============================================================================
+// 23. PHASE 18: CLASS DIARY ('classDiary', 21st MODULE) & BIRTHDAYS SECURITY RULES
+// =============================================================================
+test("Phase 18: Class Diary ('classDiary') missing-key denial, automatic class/subject teacher scope without extra setup, author-only edit/delete with admin override & history kept, and Birthdays visibility", async () => {
+  await seedOrgWithOwnerAndSchools();
+  const ts = pastDate();
+
+  const ADMIN_UID = "uid_p18_admin";
+  const NO_KEY_UID = "uid_p18_no_key";             // Missing 'classDiary', no teacher scope, no students/teachers access
+  const DIARY_VIEWER_UID = "uid_p18_viewer";       // classDiary: 'view' for SCHOOL_1
+  const SUBJ_TEACHER_UID = "uid_p18_subj_tchr";    // Missing 'classDiary' key, assigned ONLY to SCHOOL_1|5th|A|Maths
+  const CLASS_TEACHER_UID = "uid_p18_class_tchr";  // Missing 'classDiary' key, Class Teacher of SCHOOL_1|5th|A
+  const REG_VIEWER_UID = "uid_p18_reg_viewer";     // studentRegister: 'view' for SCHOOL_1 (Birthdays access)
+
+  const makeMemberDoc = (uid, role, status, allSchools, schools, permissions) =>
+    makeMemberPayload(uid, {
+      role,
+      status,
+      allSchools,
+      schools,
+      permissions,
+    });
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    const orgRef = db.collection("organisations").doc(ORG_ID);
+
+    // 1. Admin
+    await orgRef.collection("members").doc(ADMIN_UID).set(
+      makeMemberDoc(ADMIN_UID, "ADMIN", "active", true, [], fullPermissions("edit"))
+    );
+
+    // 2. Member with missing 'classDiary' key and no students/studentRegister/teachers access
+    const noKeyPerms = fullPermissions("none");
+    delete noKeyPerms.classDiary;
+    await orgRef.collection("members").doc(NO_KEY_UID).set(
+      makeMemberDoc(NO_KEY_UID, "OTHER", "active", false, [SCHOOL_1], noKeyPerms)
+    );
+
+    // 3. Member with classDiary: 'view' on SCHOOL_1
+    await orgRef.collection("members").doc(DIARY_VIEWER_UID).set(
+      makeMemberDoc(
+        DIARY_VIEWER_UID,
+        "OFFICE_OPERATOR",
+        "active",
+        false,
+        [SCHOOL_1],
+        { ...fullPermissions("none"), classDiary: "view" }
+      )
+    );
+
+    // 4. Subject Teacher with NO 'classDiary' key in permissions, assigned to SCHOOL_1|5th|A|Maths
+    const subjTeacherPerms = fullPermissions("none");
+    delete subjTeacherPerms.classDiary;
+    await orgRef.collection("members").doc(SUBJ_TEACHER_UID).set(
+      makeMemberDoc(SUBJ_TEACHER_UID, "TEACHER", "active", false, [SCHOOL_1], subjTeacherPerms)
+    );
+    await orgRef.collection("teacherScopes").doc(SUBJ_TEACHER_UID).set({
+      uid: SUBJ_TEACHER_UID,
+      teacherId: "t_p18_subj",
+      teacherName: "Mr. Maths Teacher",
+      assignedClassSectionSubjects: [`${SCHOOL_1}|5th|A|Maths`],
+      classTeacherSections: [],
+      updatedByUid: OWNER_UID,
+      updatedAt: ts,
+    });
+
+    // 5. Class Teacher with NO 'classDiary' key in permissions, Class Teacher of SCHOOL_1|5th|A
+    const classTeacherPerms = fullPermissions("none");
+    delete classTeacherPerms.classDiary;
+    await orgRef.collection("members").doc(CLASS_TEACHER_UID).set(
+      makeMemberDoc(CLASS_TEACHER_UID, "TEACHER", "active", false, [SCHOOL_1], classTeacherPerms)
+    );
+    await orgRef.collection("teacherScopes").doc(CLASS_TEACHER_UID).set({
+      uid: CLASS_TEACHER_UID,
+      teacherId: "t_p18_ct",
+      teacherName: "Mrs. Class Teacher",
+      assignedClassSectionSubjects: [`${SCHOOL_1}|5th|A|Hindi`],
+      classTeacherSections: [`${SCHOOL_1}|5th|A`],
+      updatedByUid: OWNER_UID,
+      updatedAt: ts,
+    });
+
+    // 6. Member with studentRegister: 'view' on SCHOOL_1 (has Birthdays access, no Class Diary access)
+    await orgRef.collection("members").doc(REG_VIEWER_UID).set(
+      makeMemberDoc(
+        REG_VIEWER_UID,
+        "OFFICE_OPERATOR",
+        "active",
+        false,
+        [SCHOOL_1],
+        { ...fullPermissions("none"), studentRegister: "view" }
+      )
+    );
+  });
+
+  const ownerOrg = testEnv.authenticatedContext(OWNER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const adminOrg = testEnv.authenticatedContext(ADMIN_UID).firestore().collection("organisations").doc(ORG_ID);
+  const noKeyOrg = testEnv.authenticatedContext(NO_KEY_UID).firestore().collection("organisations").doc(ORG_ID);
+  const viewerOrg = testEnv.authenticatedContext(DIARY_VIEWER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const subjTeacherOrg = testEnv.authenticatedContext(SUBJ_TEACHER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const classTeacherOrg = testEnv.authenticatedContext(CLASS_TEACHER_UID).firestore().collection("organisations").doc(ORG_ID);
+  const regViewerOrg = testEnv.authenticatedContext(REG_VIEWER_UID).firestore().collection("organisations").doc(ORG_ID);
+
+  const makeDiaryPayload = (authorUid, authorName, overrides = {}) => ({
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    dateIso: "2026-08-18",
+    className: "5th",
+    section: "A",
+    subjectName: "Maths",
+    classwork: "Fractions exercise 4.2",
+    homework: "Solve Q1 to Q8 in notebook",
+    note: "Bring geometry box tomorrow",
+    photoBase64: "",
+    authorUid,
+    authorName,
+    createdAtMs: 1755480000000,
+    updatedByUid: authorUid,
+    updatedByName: authorName,
+    updatedAtMs: 1755480000000,
+    editHistory: [],
+    createdAt: ts,
+    updatedAt: ts,
+    ...overrides,
+  });
+
+  const makeHistoryPayload = (entryId, actorUid, actorName, action = "CREATED", overrides = {}) => ({
+    schoolId: SCHOOL_1,
+    session: "2026-2027",
+    entryId,
+    dateIso: "2026-08-18",
+    className: "5th",
+    section: "A",
+    subjectName: "Maths",
+    action,
+    classwork: "Fractions exercise 4.2",
+    homework: "Solve Q1 to Q8 in notebook",
+    note: "Bring geometry box tomorrow",
+    previousClasswork: "",
+    previousHomework: "",
+    previousNote: "",
+    actorUid,
+    actorName,
+    timestampMs: 1755480000000,
+    createdAt: ts,
+    ...overrides,
+  });
+
+  // 1. Subject Teacher (without 'classDiary' permission key) CAN write diary for their own assigned class-section & subject (5th-A Maths)
+  const entryIdMaths = `diary_${SCHOOL_1}_2026_08_18_5th_A_Maths`;
+  await assertSucceeds(
+    subjTeacherOrg.collection("classDiaryEntries").doc(entryIdMaths).set(
+      makeDiaryPayload(SUBJ_TEACHER_UID, "Mr. Maths Teacher")
+    )
+  );
+  await assertSucceeds(
+    subjTeacherOrg.collection("classDiaryHistory").doc(`dhist_${entryIdMaths}_1`).set(
+      makeHistoryPayload(entryIdMaths, SUBJ_TEACHER_UID, "Mr. Maths Teacher", "CREATED")
+    )
+  );
+
+  // 2. Subject Teacher is DENIED writing for an unassigned subject (5th-A Science) or unassigned class/section (6th-A Maths)
+  await assertFails(
+    subjTeacherOrg.collection("classDiaryEntries").doc(`diary_${SCHOOL_1}_2026_08_18_5th_A_Science`).set(
+      makeDiaryPayload(SUBJ_TEACHER_UID, "Mr. Maths Teacher", { subjectName: "Science" })
+    )
+  );
+  await assertFails(
+    subjTeacherOrg.collection("classDiaryEntries").doc(`diary_${SCHOOL_1}_2026_08_18_6th_A_Maths`).set(
+      makeDiaryPayload(SUBJ_TEACHER_UID, "Mr. Maths Teacher", { className: "6th" })
+    )
+  );
+
+  // 3. Class Teacher of 5th-A (without 'classDiary' permission key) CAN write diary for ANY subject in 5th-A (e.g. Science)
+  const entryIdScience = `diary_${SCHOOL_1}_2026_08_18_5th_A_Science`;
+  await assertSucceeds(
+    classTeacherOrg.collection("classDiaryEntries").doc(entryIdScience).set(
+      makeDiaryPayload(CLASS_TEACHER_UID, "Mrs. Class Teacher", { subjectName: "Science" })
+    )
+  );
+
+  // 4. Author-only edit & delete: Class Teacher CANNOT edit or delete Subject Teacher's 5th-A Maths entry (authorUid != request.auth.uid)
+  await assertFails(
+    classTeacherOrg.collection("classDiaryEntries").doc(entryIdMaths).update({
+      homework: "Tampered by another teacher",
+      updatedByUid: CLASS_TEACHER_UID,
+      updatedByName: "Mrs. Class Teacher",
+      updatedAtMs: 1755480100000,
+      editHistory: [{
+        editedByUid: CLASS_TEACHER_UID,
+        editedByName: "Mrs. Class Teacher",
+        editedAtMs: 1755480100000,
+        previousClasswork: "Fractions exercise 4.2",
+        previousHomework: "Solve Q1 to Q8 in notebook",
+        previousNote: "Bring geometry box tomorrow",
+      }],
+      updatedAt: ts,
+    })
+  );
+  await assertFails(
+    classTeacherOrg.collection("classDiaryEntries").doc(entryIdMaths).delete()
+  );
+
+  // 5. Author CAN edit their own entry (with editHistory preserved)
+  const revision1 = {
+    editedByUid: SUBJ_TEACHER_UID,
+    editedByName: "Mr. Maths Teacher",
+    editedAtMs: 1755480200000,
+    previousClasswork: "Fractions exercise 4.2",
+    previousHomework: "Solve Q1 to Q8 in notebook",
+    previousNote: "Bring geometry box tomorrow",
+  };
+  await assertSucceeds(
+    subjTeacherOrg.collection("classDiaryEntries").doc(entryIdMaths).update({
+      homework: "Solve Q1 to Q10 in notebook",
+      updatedByUid: SUBJ_TEACHER_UID,
+      updatedByName: "Mr. Maths Teacher",
+      updatedAtMs: 1755480200000,
+      editHistory: [revision1],
+      updatedAt: ts,
+    })
+  );
+
+  // 6. Admin Override: Admin CAN edit and delete another teacher's entry, but CANNOT shrink editHistory
+  await assertFails(
+    adminOrg.collection("classDiaryEntries").doc(entryIdMaths).update({
+      homework: "Shrunk history attempt",
+      updatedByUid: ADMIN_UID,
+      updatedByName: "Admin User",
+      updatedAtMs: 1755480300000,
+      editHistory: [],
+      updatedAt: ts,
+    })
+  );
+  await assertSucceeds(
+    adminOrg.collection("classDiaryEntries").doc(entryIdMaths).update({
+      homework: "Solve Q1 to Q12 (Admin updated)",
+      updatedByUid: ADMIN_UID,
+      updatedByName: "Admin User",
+      updatedAtMs: 1755480300000,
+      editHistory: [
+        revision1,
+        {
+          editedByUid: ADMIN_UID,
+          editedByName: "Admin User",
+          editedAtMs: 1755480300000,
+          previousClasswork: "Fractions exercise 4.2",
+          previousHomework: "Solve Q1 to Q10 in notebook",
+          previousNote: "Bring geometry box tomorrow",
+        },
+      ],
+      updatedAt: ts,
+    })
+  );
+
+  // 7. classDiaryHistory is append-only (update denied even for Owner/Admin)
+  await assertFails(
+    adminOrg.collection("classDiaryHistory").doc(`dhist_${entryIdMaths}_1`).update({
+      action: "TAMPERED",
+    })
+  );
+
+  // 8. Missing key member and view-only member restrictions
+  await assertFails(noKeyOrg.collection("classDiaryEntries").doc(entryIdMaths).get());
+  await assertFails(
+    noKeyOrg.collection("classDiaryEntries").doc("diary_nokey").set(
+      makeDiaryPayload(NO_KEY_UID, "No Key User")
+    )
+  );
+  await assertSucceeds(viewerOrg.collection("classDiaryEntries").doc(entryIdMaths).get());
+  await assertFails(
+    viewerOrg.collection("classDiaryEntries").doc("diary_viewer_write").set(
+      makeDiaryPayload(DIARY_VIEWER_UID, "Viewer User")
+    )
+  );
+
+  // 9. Author can delete their own entry (Science entry by Class Teacher), and Admin can delete Subject Teacher's Maths entry
+  await assertSucceeds(classTeacherOrg.collection("classDiaryEntries").doc(entryIdScience).delete());
+  await assertSucceeds(adminOrg.collection("classDiaryEntries").doc(entryIdMaths).delete());
+
+  // 10. Birthdays ('schoolBirthdayConfigs' & 'birthdayWishes'): visible to members with students/studentRegister/teachers access
+  await assertSucceeds(
+    ownerOrg.collection("schoolBirthdayConfigs").doc(SCHOOL_1).set({
+      schoolId: SCHOOL_1,
+      birthdayWishesEnabled: true,
+      wishTemplateEn: "Happy Birthday {name}! Best wishes from {school}.",
+      wishTemplateHi: "जन्मदिन की हार्दिक शुभकामनाएँ {name}! {school} परिवार की ओर से।",
+      excludedStudentKeys: [],
+      excludedTeacherIds: [],
+      staffDobByTeacherId: { t_p18_subj: "1992-08-20" },
+      updatedByUid: OWNER_UID,
+      updatedByName: "Principal Owner",
+      updatedAtMs: 1755480000000,
+      updatedAt: ts,
+    })
+  );
+  await assertSucceeds(regViewerOrg.collection("schoolBirthdayConfigs").doc(SCHOOL_1).get());
+  await assertFails(noKeyOrg.collection("schoolBirthdayConfigs").doc(SCHOOL_1).get());
+  // View-only register viewer CANNOT modify schoolBirthdayConfigs, but CAN record a 'Wished' mark in birthdayWishes
+  await assertFails(
+    regViewerOrg.collection("schoolBirthdayConfigs").doc(SCHOOL_1).update({
+      birthdayWishesEnabled: false,
+      updatedByUid: REG_VIEWER_UID,
+      updatedAt: ts,
+    })
+  );
+  const wishId = `bwish_${SCHOOL_1}_2026_STUDENT_ADM101`;
+  await assertSucceeds(
+    regViewerOrg.collection("birthdayWishes").doc(wishId).set({
+      schoolId: SCHOOL_1,
+      personType: "STUDENT",
+      personId: "ADM101",
+      personName: "Aarav Verma",
+      celebrationDateIso: "2026-08-18",
+      celebrationYear: 2026,
+      wishedByUid: REG_VIEWER_UID,
+      wishedByName: "Register Viewer",
+      wishedAtMs: 1755480500000,
+      channel: "WHATSAPP",
+      updatedAt: ts,
+    })
+  );
+  await assertFails(noKeyOrg.collection("birthdayWishes").doc(wishId).get());
+});

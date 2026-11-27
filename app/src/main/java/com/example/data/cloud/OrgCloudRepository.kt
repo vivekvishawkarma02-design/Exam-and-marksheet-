@@ -1181,6 +1181,8 @@ class OrgCloudRepository(
                 "examInvigilatorDuties",
                 "stockTransactions",
                 "transportRoutes",
+                "transportVehicleDocuments",
+                "transportSettings",
                 "salaryRuleConfigs",
                 "staffSalaryProfiles",
                 "salaryMonthlyRecords",
@@ -1195,7 +1197,13 @@ class OrgCloudRepository(
                 "classDiaryEntries",
                 "classDiaryHistory",
                 "schoolBirthdayConfigs",
-                "birthdayWishes"
+                "birthdayWishes",
+                "studentRemarks",
+                "studentRemarkCategories",
+                "parentMeetings",
+                "studentAuthorizedPickups",
+                "gatePasses",
+                "visitorEntries"
             )
             for (sub in orgSubcollections) {
                 deleteCollectionInChunks(orgRef.collection(sub))

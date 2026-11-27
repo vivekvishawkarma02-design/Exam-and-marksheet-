@@ -212,6 +212,8 @@ class OrgAcademicRepository(
             OrgAccessEvaluator.canViewModule(member, AppModule.SESSION_PROMOTION) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.RESULT_ANALYSIS) ||
             OrgAccessEvaluator.canViewModule(member, AppModule.CLASS_DIARY) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.STUDENT_REMARKS) ||
+            OrgAccessEvaluator.canViewModule(member, AppModule.GATE) ||
             isClassTeacher
 
         val canReadMarks = OrgAccessEvaluator.canViewModule(member, AppModule.MARKS) ||
@@ -670,10 +672,18 @@ class OrgAcademicRepository(
                 "previousSchool" to student.previousSchool.trim().take(160),
                 "siblingGroupId" to student.siblingGroupId.trim().take(80),
                 "usesTransport" to student.usesTransport,
-                "transportRouteId" to student.transportRouteId.trim().take(128),
-                "transportRouteName" to student.transportRouteName.trim().take(120),
-                "transportStopName" to student.transportStopName.trim().take(80),
-                "transportMonthlyAmount" to student.transportMonthlyAmount.coerceIn(0, 500_000).toLong(),
+                "transportRouteId" to (if (student.usesTransport) student.transportRouteId.trim().take(128) else ""),
+                "transportRouteName" to (if (student.usesTransport) student.transportRouteName.trim().take(120) else ""),
+                "transportStopId" to (if (student.usesTransport) student.transportStopId.trim().take(60) else ""),
+                "transportStopName" to (if (student.usesTransport) student.transportStopName.trim().take(80) else ""),
+                "transportTripType" to (if (student.usesTransport) student.transportTripType.trim().uppercase().ifBlank { "BOTH_WAYS" }.take(20) else "BOTH_WAYS"),
+                "transportMonthlyAmount" to (if (student.usesTransport) student.transportMonthlyAmount.coerceIn(0, 500_000).toLong() else 0L),
+                "transportStartMonth" to (if (student.usesTransport) student.transportStartMonth.trim().uppercase().take(10) else ""),
+                "transportEndMonth" to (if (student.usesTransport) student.transportEndMonth.trim().uppercase().take(10) else ""),
+                "transportFeeOverridden" to (student.usesTransport && student.transportFeeOverridden),
+                "transportOverrideRemark" to (if (student.usesTransport && student.transportFeeOverridden) student.transportOverrideRemark.trim().take(240) else ""),
+                "transportPriorMonthlyAmount" to (if (student.usesTransport) student.transportPriorMonthlyAmount.coerceIn(0, 500_000).toLong() else 0L),
+                "transportFeeEffectiveFromMonth" to (if (student.usesTransport) student.transportFeeEffectiveFromMonth.trim().uppercase().take(10) else ""),
                 "status" to normalizedStatus,
                 "leftDate" to (if (normalizedStatus == "LEFT") student.leftDate.trim().take(40) else ""),
                 "leftReason" to (if (normalizedStatus == "LEFT") student.leftReason.trim().take(300) else "")
@@ -783,10 +793,52 @@ class OrgAcademicRepository(
     }
 
     /**
-     * Phase 11: Least-privilege student update when assigning/removing a transport route & stop.
-     * Updates ONLY `usesTransport`, `transportRouteId`, `transportRouteName`, `transportStopName`,
-     * `transportMonthlyAmount`, and `updatedAt`, matching the Firestore rule for `transport: edit`.
+     * Phase 11 / Transport Rebuild: Least-privilege student transport patch matching Firestore
+     * rules permitting `transport: edit` or `students: edit` to update transport fields only.
      */
+    data class StudentTransportPatch(
+        val studentDocId: String,
+        val studentName: String,
+        val usesTransport: Boolean,
+        val transportRouteId: String,
+        val transportRouteName: String,
+        val transportStopId: String = "",
+        val transportStopName: String = "",
+        val transportTripType: String = "BOTH_WAYS",
+        val transportMonthlyAmount: Int = 0,
+        val transportStartMonth: String = "",
+        val transportEndMonth: String = "",
+        val transportFeeOverridden: Boolean = false,
+        val transportOverrideRemark: String = "",
+        val transportPriorMonthlyAmount: Int = 0,
+        val transportFeeEffectiveFromMonth: String = ""
+    )
+
+    private fun buildStudentTransportUpdateMap(patch: StudentTransportPatch): Map<String, Any> {
+        val active = patch.usesTransport
+        val overridden = active && patch.transportFeeOverridden
+        val cleanTrip = when (patch.transportTripType.trim().uppercase()) {
+            "PICKUP_ONLY", "DROP_ONLY", "BOTH_WAYS" -> patch.transportTripType.trim().uppercase()
+            else -> "BOTH_WAYS"
+        }
+        return mapOf(
+            "usesTransport" to active,
+            "transportRouteId" to (if (active) patch.transportRouteId.trim().take(128) else ""),
+            "transportRouteName" to (if (active) patch.transportRouteName.trim().take(120) else ""),
+            "transportStopId" to (if (active) patch.transportStopId.trim().take(60) else ""),
+            "transportStopName" to (if (active) patch.transportStopName.trim().take(80) else ""),
+            "transportTripType" to (if (active) cleanTrip else "BOTH_WAYS"),
+            "transportMonthlyAmount" to (if (active) patch.transportMonthlyAmount.coerceIn(0, 500_000).toLong() else 0L),
+            "transportStartMonth" to (if (active) patch.transportStartMonth.trim().uppercase().take(10) else ""),
+            "transportEndMonth" to (if (active) patch.transportEndMonth.trim().uppercase().take(10) else ""),
+            "transportFeeOverridden" to overridden,
+            "transportOverrideRemark" to (if (overridden) patch.transportOverrideRemark.trim().take(240) else ""),
+            "transportPriorMonthlyAmount" to (if (active) patch.transportPriorMonthlyAmount.coerceIn(0, 500_000).toLong() else 0L),
+            "transportFeeEffectiveFromMonth" to (if (active) patch.transportFeeEffectiveFromMonth.trim().uppercase().take(10) else ""),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+    }
+
     fun updateStudentTransportAssignment(
         orgId: String,
         schoolDocId: String,
@@ -796,7 +848,17 @@ class OrgAcademicRepository(
         transportRouteId: String,
         transportRouteName: String,
         transportStopName: String,
-        transportMonthlyAmount: Int
+        transportMonthlyAmount: Int,
+        transportStopId: String = "",
+        transportTripType: String = "BOTH_WAYS",
+        transportStartMonth: String = "",
+        transportEndMonth: String = "",
+        transportFeeOverridden: Boolean = false,
+        transportOverrideRemark: String = "",
+        transportPriorMonthlyAmount: Int = 0,
+        transportFeeEffectiveFromMonth: String = "",
+        customAuditAction: String? = null,
+        customAuditSummary: String? = null
     ): Result<Unit> {
         val path = "organisations/$orgId/schools/$schoolDocId/students/$studentDocId"
         return try {
@@ -804,29 +866,80 @@ class OrgAcademicRepository(
             val ref = db.collection("organisations").document(orgId)
                 .collection("schools").document(schoolDocId)
                 .collection("students").document(studentDocId)
-            val updates = mapOf<String, Any>(
-                "usesTransport" to usesTransport,
-                "transportRouteId" to (if (usesTransport) transportRouteId.trim().take(128) else ""),
-                "transportRouteName" to (if (usesTransport) transportRouteName.trim().take(120) else ""),
-                "transportStopName" to (if (usesTransport) transportStopName.trim().take(80) else ""),
-                "transportMonthlyAmount" to (if (usesTransport) transportMonthlyAmount.coerceIn(0, 500_000).toLong() else 0L),
-                "updatedAt" to FieldValue.serverTimestamp()
+            val updates = buildStudentTransportUpdateMap(
+                StudentTransportPatch(
+                    studentDocId = studentDocId,
+                    studentName = studentName,
+                    usesTransport = usesTransport,
+                    transportRouteId = transportRouteId,
+                    transportRouteName = transportRouteName,
+                    transportStopId = transportStopId,
+                    transportStopName = transportStopName,
+                    transportTripType = transportTripType,
+                    transportMonthlyAmount = transportMonthlyAmount,
+                    transportStartMonth = transportStartMonth,
+                    transportEndMonth = transportEndMonth,
+                    transportFeeOverridden = transportFeeOverridden,
+                    transportOverrideRemark = transportOverrideRemark,
+                    transportPriorMonthlyAmount = transportPriorMonthlyAmount,
+                    transportFeeEffectiveFromMonth = transportFeeEffectiveFromMonth
+                )
             )
             val task = ref.update(updates)
             attachSyncListeners(task, OperationType.UPDATE, path) { ref.update(updates) }
             orgRepo.logAuditNonBlocking(
                 orgId = orgId,
-                action = if (usesTransport) "STUDENT_TRANSPORT_ASSIGNED" else "STUDENT_TRANSPORT_REMOVED",
+                action = customAuditAction ?: if (usesTransport) "STUDENT_TRANSPORT_ASSIGNED" else "STUDENT_TRANSPORT_REMOVED",
                 targetType = "student",
                 targetId = studentDocId,
-                summary = if (usesTransport) {
-                    "Assigned '$studentName' to transport '$transportRouteName' (₹$transportMonthlyAmount/mo)"
+                summary = customAuditSummary ?: if (usesTransport) {
+                    "Assigned '$studentName' to transport '$transportRouteName' (₹$transportMonthlyAmount/mo, $transportTripType)"
                 } else {
                     "Removed '$studentName' from school transport"
                 },
                 schoolId = schoolDocId
             )
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    fun batchUpdateStudentTransportFields(
+        orgId: String,
+        schoolDocId: String,
+        patches: List<StudentTransportPatch>,
+        auditAction: String,
+        auditSummary: String
+    ): Result<Int> {
+        if (patches.isEmpty()) return Result.success(0)
+        val path = "organisations/$orgId/schools/$schoolDocId/students"
+        return try {
+            requireUid()
+            val studentsCol = db.collection("organisations").document(orgId)
+                .collection("schools").document(schoolDocId)
+                .collection("students")
+            val chunks = patches.chunked(400)
+            for (chunk in chunks) {
+                val batch = db.batch()
+                for (patch in chunk) {
+                    batch.update(studentsCol.document(patch.studentDocId), buildStudentTransportUpdateMap(patch))
+                }
+                val task = batch.commit()
+                attachSyncListeners(task, OperationType.UPDATE, path)
+            }
+            orgRepo.logAuditNonBlocking(
+                orgId = orgId,
+                action = auditAction,
+                targetType = "transportBatch",
+                targetId = schoolDocId,
+                summary = auditSummary,
+                schoolId = schoolDocId
+            )
+            Result.success(patches.size)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1699,8 +1812,16 @@ class OrgAcademicRepository(
                 usesTransport = doc.getBoolean("usesTransport") ?: false,
                 transportRouteId = doc.getString("transportRouteId").orEmpty(),
                 transportRouteName = doc.getString("transportRouteName").orEmpty(),
+                transportStopId = doc.getString("transportStopId").orEmpty(),
                 transportStopName = doc.getString("transportStopName").orEmpty(),
+                transportTripType = doc.getString("transportTripType").orEmpty().ifBlank { "BOTH_WAYS" },
                 transportMonthlyAmount = (doc.getLong("transportMonthlyAmount") ?: 0L).toInt().coerceAtLeast(0),
+                transportStartMonth = doc.getString("transportStartMonth").orEmpty(),
+                transportEndMonth = doc.getString("transportEndMonth").orEmpty(),
+                transportFeeOverridden = doc.getBoolean("transportFeeOverridden") ?: false,
+                transportOverrideRemark = doc.getString("transportOverrideRemark").orEmpty(),
+                transportPriorMonthlyAmount = (doc.getLong("transportPriorMonthlyAmount") ?: 0L).toInt().coerceAtLeast(0),
+                transportFeeEffectiveFromMonth = doc.getString("transportFeeEffectiveFromMonth").orEmpty(),
                 status = parsedStatus,
                 leftDate = doc.getString("leftDate").orEmpty(),
                 leftReason = doc.getString("leftReason").orEmpty()

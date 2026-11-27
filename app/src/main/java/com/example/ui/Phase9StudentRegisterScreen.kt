@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DirectionsBus
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
@@ -96,6 +97,9 @@ import com.example.domain.StudentRegisterEngine
 import com.example.domain.StudentRegisterStatus
 import com.example.domain.StudentRegisterStatusFilter
 import com.example.domain.StudentTransportFilter
+import com.example.domain.TransportEngine
+import com.example.domain.TransportRouteRecord
+import com.example.domain.TransportTripType
 import com.example.util.ImageUtils
 import kotlinx.coroutines.launch
 
@@ -207,7 +211,8 @@ fun Phase9StudentRegisterScreen(
     viewModel: SchoolViewModel,
     onBack: () -> Unit,
     onOpenFeeCollectionForStudent: (StudentEntity) -> Unit = {},
-    onOpenCertificatesForStudent: (StudentEntity) -> Unit = {}
+    onOpenCertificatesForStudent: (StudentEntity) -> Unit = {},
+    onNavigateToTransport: () -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
 
@@ -234,6 +239,8 @@ fun Phase9StudentRegisterScreen(
     var statusChangeTarget by remember { mutableStateOf<StudentEntity?>(null) }
     var siblingLinkTarget by remember { mutableStateOf<StudentEntity?>(null) }
     var historyTarget by remember { mutableStateOf<StudentEntity?>(null) }
+    var pickupTarget by remember { mutableStateOf<StudentEntity?>(null) }
+    var remarksTarget by remember { mutableStateOf<StudentEntity?>(null) }
 
     val selectedIdsForIdCards = remember { mutableStateListOf<Long>() }
     var idCardSelectionMode by remember { mutableStateOf(false) }
@@ -491,8 +498,44 @@ fun Phase9StudentRegisterScreen(
                     val siblings = remember(student.id, student.siblingGroupId, schoolStudents) {
                         StudentRegisterEngine.findSiblingsForStudent(student, schoolStudents)
                     }
+                    val targetDocKey = uiState.resolveStudentDocKey(student)
+                    val targetLegacyKey = student.id.toString()
+                    val pickupList = remember(uiState.authorizedPickups, activeSchoolDocId, targetDocKey, targetLegacyKey) {
+                        uiState.authorizedPickups.filter {
+                            it.schoolId == activeSchoolDocId &&
+                                (it.studentId == targetDocKey || it.studentId == targetLegacyKey)
+                        }
+                    }
+                    val canViewStudentRemarks = remember(
+                        activeSchoolDocId,
+                        student.className,
+                        student.section,
+                        uiState.accessProfile,
+                        uiState.effectiveOwnTeacherScope
+                    ) {
+                        viewModel.canViewStudentRemarksForClassSection(
+                            schoolDocId = activeSchoolDocId,
+                            className = student.className,
+                            section = student.section
+                        )
+                    }
+                    val studentRemarksCount = remember(
+                        uiState.studentRemarks,
+                        activeSchoolDocId,
+                        targetDocKey,
+                        targetLegacyKey,
+                        canViewStudentRemarks
+                    ) {
+                        if (!canViewStudentRemarks) 0
+                        else uiState.studentRemarks.count {
+                            it.schoolId == activeSchoolDocId &&
+                                (it.studentId == targetDocKey || it.studentId == targetLegacyKey) &&
+                                it.isActive
+                        }
+                    }
                     StudentRegisterCard(
                         student = student,
+                        transportRoutes = uiState.transportRoutes.filter { it.schoolId == activeSchoolDocId },
                         siblings = siblings,
                         canEditRegister = canEditRegister,
                         canViewFees = uiState.canViewFees,
@@ -518,7 +561,12 @@ fun Phase9StudentRegisterScreen(
                         onOpenFees = { onOpenFeeCollectionForStudent(student) },
                         canViewCertificates = uiState.canViewCertificates,
                         onOpenCertificates = { onOpenCertificatesForStudent(student) },
-                        onOpenSessionHistory = { historyTarget = student }
+                        onOpenSessionHistory = { historyTarget = student },
+                        authorizedPickupsCount = pickupList.size,
+                        onOpenAuthorizedPickups = { pickupTarget = student },
+                        canViewRemarksForStudent = canViewStudentRemarks,
+                        remarksCount = studentRemarksCount,
+                        onOpenRemarks = { remarksTarget = student }
                     )
                 }
             }
@@ -530,6 +578,10 @@ fun Phase9StudentRegisterScreen(
             viewModel = viewModel,
             existingStudent = editingStudent,
             allSchoolStudents = schoolStudents,
+            onNavigateToTransport = {
+                showAddEditDialog = false
+                onNavigateToTransport()
+            },
             onDismiss = { showAddEditDialog = false }
         )
     }
@@ -597,12 +649,256 @@ fun Phase9StudentRegisterScreen(
             }
         )
     }
+
+    pickupTarget?.let { targetStudent ->
+        val targetDocKey = uiState.resolveStudentDocKey(targetStudent)
+        val targetLegacyKey = targetStudent.id.toString()
+        val pickups = uiState.authorizedPickups.filter {
+            it.schoolId == activeSchoolDocId &&
+                (it.studentId == targetDocKey || it.studentId == targetLegacyKey)
+        }
+        var showAddSubDialog by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { pickupTarget = null },
+            title = {
+                Text("Authorised Pickup Persons — ${targetStudent.name}")
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Class ${targetStudent.className}-${targetStudent.section} • Adm No: ${targetStudent.admNo}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    if (pickups.isEmpty()) {
+                        Text(
+                            text = "No authorised pickup persons stored for this student yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        pickups.forEach { person ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (person.photoBase64.isNotBlank()) {
+                                        val bmp = remember(person.photoBase64) {
+                                            decodeBase64Thumbnail(person.photoBase64)
+                                        }
+                                        if (bmp != null) {
+                                            Image(
+                                                bitmap = bmp.asImageBitmap(),
+                                                contentDescription = person.personName,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier
+                                                    .size(40.dp)
+                                                    .clip(RoundedCornerShape(6.dp))
+                                            )
+                                        }
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "${person.personName} (${person.relation})",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = person.mobile.ifBlank { "No mobile" },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (canEditRegister) {
+                                        IconButton(
+                                            onClick = {
+                                                viewModel.deleteAuthorizedPickupPerson(person)
+                                            },
+                                            modifier = Modifier.size(48.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = "Remove pickup person",
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (canEditRegister) {
+                        OutlinedButton(
+                            onClick = { showAddSubDialog = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("register_add_pickup_person_btn")
+                        ) {
+                            Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Add Authorised Pickup Person")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { pickupTarget = null },
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Close")
+                }
+            }
+        )
+
+        if (showAddSubDialog && canEditRegister) {
+            AddAuthorizedPickupPersonDialog(
+                studentName = targetStudent.name,
+                hi = uiState.phase10HindiLabels,
+                onDismiss = { showAddSubDialog = false },
+                onSave = { pName, pRel, pMob, pPhoto ->
+                    viewModel.saveAuthorizedPickupPerson(
+                        schoolDocId = activeSchoolDocId,
+                        student = targetStudent,
+                        personName = pName,
+                        relation = pRel,
+                        mobile = pMob,
+                        photoBase64 = pPhoto
+                    ) { ok, _ ->
+                        if (ok) showAddSubDialog = false
+                    }
+                }
+            )
+        }
+    }
+
+    remarksTarget?.let { targetStudent ->
+        val canViewStudentRemarks = viewModel.canViewStudentRemarksForClassSection(
+            schoolDocId = activeSchoolDocId,
+            className = targetStudent.className,
+            section = targetStudent.section
+        )
+        if (canViewStudentRemarks) {
+            val targetDocKey = uiState.resolveStudentDocKey(targetStudent)
+            val targetLegacyKey = targetStudent.id.toString()
+            val studentRemarks = viewModel.visibleStudentRemarksForActiveSchool(activeSchoolDocId)
+                .filter { it.studentId == targetDocKey || it.studentId == targetLegacyKey }
+                .sortedWith(compareByDescending<com.example.domain.StudentRemarkRecord> { it.dateIso }.thenByDescending { it.createdAtMs })
+
+            AlertDialog(
+                onDismissRequest = { remarksTarget = null },
+                title = {
+                    Text("Remark History — ${targetStudent.name}")
+                },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 420.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Class ${targetStudent.className}-${targetStudent.section} • Adm No: ${targetStudent.admNo}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        if (studentRemarks.isEmpty()) {
+                            Text(
+                                text = "No remarks recorded for this student yet.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            studentRemarks.forEach { r ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = "${r.dateIso} • ${r.category}" +
+                                                if (!r.isActive) " [CANCELLED]" else "",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = r.note,
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                        if (!r.isActive) {
+                                            Text(
+                                                text = "Cancelled Reason: ${r.cancelledReason} (by ${r.cancelledByName})",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                        Text(
+                                            text = "By: ${r.authorName}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (uiState.canPrintStudentRemarkSummaryPdf && studentRemarks.isNotEmpty()) {
+                            TextButton(
+                                onClick = {
+                                    viewModel.previewStudentRemarkSummaryPdf(
+                                        schoolDocId = activeSchoolDocId,
+                                        session = uiState.filter.session,
+                                        student = targetStudent,
+                                        classFilterLabel = "${targetStudent.className}-${targetStudent.section}",
+                                        remarks = studentRemarks.filter { it.isActive }
+                                    )
+                                    remarksTarget = null
+                                },
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            ) {
+                                Text("Print A4 Summary PDF")
+                            }
+                        }
+                        TextButton(
+                            onClick = { remarksTarget = null },
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        ) {
+                            Text("Close")
+                        }
+                    }
+                }
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StudentRegisterCard(
     student: StudentEntity,
+    transportRoutes: List<TransportRouteRecord> = emptyList(),
     siblings: List<StudentEntity>,
     canEditRegister: Boolean,
     canViewFees: Boolean,
@@ -619,7 +915,12 @@ private fun StudentRegisterCard(
     onOpenFees: () -> Unit,
     canViewCertificates: Boolean = false,
     onOpenCertificates: () -> Unit = {},
-    onOpenSessionHistory: () -> Unit = {}
+    onOpenSessionHistory: () -> Unit = {},
+    authorizedPickupsCount: Int = 0,
+    onOpenAuthorizedPickups: () -> Unit = {},
+    canViewRemarksForStudent: Boolean = false,
+    remarksCount: Int = 0,
+    onOpenRemarks: () -> Unit = {}
 ) {
     val isActive = student.isActiveStatus
     val photoBitmap = remember(student.photoBase64) {
@@ -747,12 +1048,29 @@ private fun StudentRegisterCard(
                     )
                 }
                 if (student.usesTransport) {
+                    val trDisplay = remember(student, transportRoutes) {
+                        TransportEngine.resolveDisplay(student, transportRoutes)
+                    }
+                    val stopPart = if (trDisplay.stopName.isNotBlank()) " - ${trDisplay.stopName}" else ""
+                    val monthPart = if (trDisplay.effectiveStartMonth.isNotBlank()) {
+                        " • Start: ${trDisplay.effectiveStartMonth}" +
+                            if (trDisplay.effectiveEndMonth.isNotBlank()) "–${trDisplay.effectiveEndMonth}" else ""
+                    } else ""
+                    val overridePart = if (student.transportFeeOverridden) " [Overridden]" else ""
                     Text(
-                        text = "Transport: Yes • Route: ${student.transportRouteName.ifBlank { "Standard" }} • Rs. ${student.transportMonthlyAmount}/month",
+                        text = "Transport: ${trDisplay.routeName}$stopPart • ${trDisplay.tripType.labelEn}$monthPart • Rs. ${student.transportMonthlyAmount}/mo$overridePart",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(0xFF0D47A1)
                     )
+                    if (trDisplay.attentionFlags.isNotEmpty()) {
+                        Text(
+                            text = "⚠ ${trDisplay.attentionFlags.joinToString(" • ") { it.labelEn }}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFB71C1C)
+                        )
+                    }
                 }
                 if (!isActive) {
                     Text(
@@ -885,6 +1203,24 @@ private fun StudentRegisterCard(
                         .heightIn(min = 48.dp)
                         .testTag("register_history_${student.admNo}")
                 )
+                AssistChip(
+                    onClick = onOpenAuthorizedPickups,
+                    label = { Text("Authorised Pickups ($authorizedPickupsCount)") },
+                    leadingIcon = { Icon(Icons.Default.Badge, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("register_pickups_${student.admNo}")
+                )
+                if (canViewRemarksForStudent) {
+                    AssistChip(
+                        onClick = onOpenRemarks,
+                        label = { Text("Remarks ($remarksCount)") },
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("register_remarks_${student.admNo}")
+                    )
+                }
             }
         }
     }
@@ -895,11 +1231,25 @@ internal fun StudentRegisterAddEditDialog(
     viewModel: SchoolViewModel,
     existingStudent: StudentEntity?,
     allSchoolStudents: List<StudentEntity>,
+    onNavigateToTransport: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val isHindi = uiState.phase10HindiLabels
+    val structure = remember(uiState.feeStructures, uiState.activeSchoolDocId, uiState.filter.session, uiState.activeSchoolClassNames) {
+        uiState.feeStructureForSchool(uiState.activeSchoolDocId, uiState.filter.session)
+    }
+    val chargedMonths = remember(structure) {
+        structure.chargedTransportMonths.ifEmpty { structure.monthOrder }.ifEmpty {
+            listOf("APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR")
+        }
+    }
+    val defaultStartMonth = remember(chargedMonths) {
+        val cur = currentSessionMonthCode()
+        if (chargedMonths.any { it.equals(cur, ignoreCase = true) }) cur else chargedMonths.first()
+    }
 
     var name by remember { mutableStateOf(existingStudent?.name.orEmpty()) }
     var admNo by remember { mutableStateOf(existingStudent?.admNo.orEmpty()) }
@@ -923,8 +1273,18 @@ internal fun StudentRegisterAddEditDialog(
     var siblingGroupId by remember { mutableStateOf(existingStudent?.siblingGroupId.orEmpty()) }
     var usesTransport by remember { mutableStateOf(existingStudent?.usesTransport ?: false) }
     var transportRouteId by remember { mutableStateOf(existingStudent?.transportRouteId.orEmpty()) }
+    var transportStopId by remember { mutableStateOf(existingStudent?.transportStopId.orEmpty()) }
     var transportStopName by remember { mutableStateOf(existingStudent?.transportStopName.orEmpty()) }
     var transportRouteName by remember { mutableStateOf(existingStudent?.transportRouteName.orEmpty()) }
+    var transportTripType by remember {
+        mutableStateOf(TransportTripType.fromRaw(existingStudent?.transportTripType))
+    }
+    var transportStartMonth by remember {
+        mutableStateOf(existingStudent?.transportStartMonth?.ifBlank { defaultStartMonth } ?: defaultStartMonth)
+    }
+    var transportEndMonth by remember { mutableStateOf(existingStudent?.transportEndMonth.orEmpty()) }
+    var transportFeeOverridden by remember { mutableStateOf(existingStudent?.transportFeeOverridden ?: false) }
+    var transportOverrideRemark by remember { mutableStateOf(existingStudent?.transportOverrideRemark.orEmpty()) }
     var transportAmountText by remember {
         mutableStateOf(
             if ((existingStudent?.transportMonthlyAmount ?: 0) > 0) {
@@ -934,6 +1294,7 @@ internal fun StudentRegisterAddEditDialog(
             }
         )
     }
+    var overCapacityAcknowledged by remember { mutableStateOf(false) }
     var photoBase64 by remember { mutableStateOf(existingStudent?.photoBase64.orEmpty()) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
@@ -1173,119 +1534,120 @@ internal fun StudentRegisterAddEditDialog(
 
                 HorizontalDivider()
 
-                // Transport toggle & details
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Uses School Transport", fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "Adds monthly Transport fee column for this student",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = usesTransport,
-                        onCheckedChange = { usesTransport = it },
-                        modifier = Modifier.testTag("register_dialog_transport_switch")
+                val schoolRoutes = remember(uiState.transportRoutes, uiState.activeSchoolDocId) {
+                    uiState.transportRoutes.filter { it.schoolId == uiState.activeSchoolDocId && it.active }
+                }
+                val pickedRoute = remember(schoolRoutes, transportRouteId) {
+                    schoolRoutes.firstOrNull { it.id == transportRouteId }
+                }
+                val isOverCapacity = remember(pickedRoute, allSchoolStudents, existingStudent?.id) {
+                    val targetId = existingStudent?.id ?: -1L
+                    pickedRoute != null && TransportEngine.willExceedCapacity(
+                        route = pickedRoute,
+                        currentStudents = allSchoolStudents,
+                        additionalStudentIds = if (targetId > 0L) setOf(targetId) else setOf(-999999L)
                     )
                 }
 
-                if (usesTransport) {
-                    val schoolRoutes = remember(uiState.transportRoutes, uiState.activeSchoolDocId) {
-                        uiState.transportRoutes.filter { it.schoolId == uiState.activeSchoolDocId && it.active }
-                    }
-                    if (schoolRoutes.isNotEmpty()) {
-                        val pickedRoute = schoolRoutes.firstOrNull { it.id == transportRouteId }
-                        Text(
-                            text = "Quick Select Transport Route",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            schoolRoutes.forEach { rt ->
-                                FilterChip(
-                                    selected = transportRouteId == rt.id,
-                                    onClick = {
-                                        transportRouteId = rt.id
-                                        val firstStop = rt.stops.firstOrNull()?.stopName.orEmpty()
-                                        transportStopName = firstStop
-                                        transportRouteName = if (firstStop.isNotBlank()) "${rt.routeName} - $firstStop" else rt.routeName
-                                        // Preserve existing positive transport amount; only auto-fill if blank/0
-                                        val curAmt = transportAmountText.toIntOrNull() ?: 0
-                                        if (curAmt <= 0) {
-                                            val suggested = rt.effectiveFeeForStop(firstStop)
-                                            if (suggested > 0) transportAmountText = suggested.toString()
-                                        }
-                                    },
-                                    label = { Text("${rt.routeName} (₹${rt.monthlyFeeRs})") }
-                                )
-                            }
+                StudentRegisterTransportSection(
+                    isHindi = isHindi,
+                    usesTransport = usesTransport,
+                    onUsesTransportChange = { checked ->
+                        usesTransport = checked
+                        if (checked && transportStartMonth.isBlank()) {
+                            transportStartMonth = defaultStartMonth
                         }
-                        if (pickedRoute != null && pickedRoute.stops.isNotEmpty()) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                pickedRoute.stops.forEach { st ->
-                                    val stopFee = pickedRoute.effectiveFeeForStop(st.stopName)
-                                    FilterChip(
-                                        selected = transportStopName.equals(st.stopName, ignoreCase = true),
-                                        onClick = {
-                                            transportStopName = st.stopName
-                                            transportRouteName = "${pickedRoute.routeName} - ${st.stopName}"
-                                            val curAmt = transportAmountText.toIntOrNull() ?: 0
-                                            if (curAmt <= 0 && stopFee > 0) {
-                                                transportAmountText = stopFee.toString()
-                                            }
-                                        },
-                                        label = { Text("${st.stopName} (₹$stopFee)") }
-                                    )
-                                }
-                            }
-                            val effectiveFee = pickedRoute.effectiveFeeForStop(transportStopName)
-                            val curAmt = transportAmountText.toIntOrNull() ?: 0
-                            if (effectiveFee > 0 && curAmt > 0 && curAmt != effectiveFee) {
-                                TextButton(
-                                    onClick = { transportAmountText = effectiveFee.toString() }
-                                ) {
-                                    Text("Use route/stop fee ₹$effectiveFee/mo (currently ₹$curAmt)")
-                                }
-                            }
+                    },
+                    routes = schoolRoutes,
+                    allSchoolStudents = allSchoolStudents,
+                    existingStudentId = existingStudent?.id,
+                    selectedRouteId = transportRouteId,
+                    selectedStopId = transportStopId,
+                    selectedStopName = transportStopName,
+                    routeDisplayFallback = transportRouteName,
+                    onRouteDisplayFallbackChange = { transportRouteName = it },
+                    selectedTripType = transportTripType,
+                    selectedStartMonth = transportStartMonth,
+                    selectedEndMonth = transportEndMonth,
+                    chargedMonths = chargedMonths,
+                    amountText = transportAmountText,
+                    onAmountTextChange = { transportAmountText = it },
+                    feeOverridden = transportFeeOverridden,
+                    overrideRemark = transportOverrideRemark,
+                    onOverrideRemarkChange = { transportOverrideRemark = it },
+                    overCapacityAcknowledged = overCapacityAcknowledged,
+                    onOverCapacityAcknowledgedChange = { overCapacityAcknowledged = it },
+                    onSelectRoute = { rt ->
+                        transportRouteId = rt.id
+                        overCapacityAcknowledged = false
+                        val firstStop = rt.stops.firstOrNull()
+                        transportStopId = firstStop?.stopId.orEmpty()
+                        transportStopName = firstStop?.stopName.orEmpty()
+                        transportRouteName = if (!firstStop?.stopName.isNullOrBlank()) {
+                            "${rt.routeName} - ${firstStop!!.stopName}"
+                        } else rt.routeName
+                        if (!transportFeeOverridden) {
+                            val computed = rt.effectiveFeeFor(
+                                stopId = transportStopId,
+                                stopName = transportStopName,
+                                tripType = transportTripType
+                            )
+                            transportAmountText = computed.toString()
                         }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = transportRouteName,
-                            onValueChange = { transportRouteName = it },
-                            label = { Text("Route / Bus Stop Name") },
-                            singleLine = true,
-                            modifier = Modifier
-                                .weight(1.2f)
-                                .testTag("register_dialog_route_input")
-                        )
-                        OutlinedTextField(
-                            value = transportAmountText,
-                            onValueChange = { transportAmountText = it.filter { ch -> ch.isDigit() } },
-                            label = { Text("Monthly Rs. *") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("register_dialog_transport_amount_input")
-                        )
-                    }
-                }
+                    },
+                    onSelectStop = { rt, st ->
+                        transportStopId = st.stopId
+                        transportStopName = st.stopName
+                        transportRouteName = "${rt.routeName} - ${st.stopName}"
+                        if (!transportFeeOverridden) {
+                            val computed = rt.effectiveFeeFor(
+                                stopId = st.stopId,
+                                stopName = st.stopName,
+                                tripType = transportTripType
+                            )
+                            transportAmountText = computed.toString()
+                        }
+                    },
+                    onSelectTripType = { trip ->
+                        transportTripType = trip
+                        if (!transportFeeOverridden && pickedRoute != null) {
+                            val computed = pickedRoute.effectiveFeeFor(
+                                stopId = transportStopId,
+                                stopName = transportStopName,
+                                tripType = trip
+                            )
+                            transportAmountText = computed.toString()
+                        }
+                    },
+                    onSelectStartMonth = { transportStartMonth = it },
+                    onSelectEndMonth = { transportEndMonth = it },
+                    onToggleOverride = { ov ->
+                        transportFeeOverridden = ov
+                        if (!ov && pickedRoute != null) {
+                            val computed = pickedRoute.effectiveFeeFor(
+                                stopId = transportStopId,
+                                stopName = transportStopName,
+                                tripType = transportTripType
+                            )
+                            transportAmountText = computed.toString()
+                            transportOverrideRemark = ""
+                        }
+                    },
+                    onResetToRouteFee = {
+                        if (pickedRoute != null) {
+                            val computed = pickedRoute.effectiveFeeFor(
+                                stopId = transportStopId,
+                                stopName = transportStopName,
+                                tripType = transportTripType
+                            )
+                            transportAmountText = computed.toString()
+                        }
+                        transportFeeOverridden = false
+                        transportOverrideRemark = ""
+                    },
+                    canNavigateToTransport = uiState.canViewTransport,
+                    onCreateRouteShortcut = onNavigateToTransport
+                )
             }
         },
         confirmButton = {
@@ -1305,6 +1667,20 @@ internal fun StudentRegisterAddEditDialog(
                     if (usesTransport && transportAmt < 0) {
                         errorMsg = "Transport monthly amount cannot be negative."
                         return@Button
+                    }
+                    if (usesTransport && transportFeeOverridden && transportOverrideRemark.trim().isEmpty()) {
+                        errorMsg = "Please enter an override remark (or reset to route fee)."
+                        return@Button
+                    }
+                    val schoolRoutes = uiState.transportRoutes.filter { it.schoolId == uiState.activeSchoolDocId && it.active }
+                    val pickedRoute = schoolRoutes.firstOrNull { it.id == transportRouteId }
+                    if (usesTransport && pickedRoute != null) {
+                        val targetId = existingStudent?.id ?: -999999L
+                        val wouldExceed = TransportEngine.willExceedCapacity(pickedRoute, allSchoolStudents, setOf(targetId))
+                        if (wouldExceed && !overCapacityAcknowledged) {
+                            errorMsg = "Route '${pickedRoute.routeName}' seats are full. Tick 'Confirm over-capacity assignment' to proceed."
+                            return@Button
+                        }
                     }
                     val clsEntity = uiState.classEntityForName(className, uiState.activeSchool.id)
                     val studentToSave = (existingStudent ?: StudentEntity(
@@ -1341,9 +1717,15 @@ internal fun StudentRegisterAddEditDialog(
                         siblingGroupId = siblingGroupId.trim(),
                         usesTransport = usesTransport,
                         transportRouteId = if (usesTransport) transportRouteId.trim() else "",
+                        transportStopId = if (usesTransport) transportStopId.trim() else "",
                         transportStopName = if (usesTransport) transportStopName.trim() else "",
                         transportRouteName = if (usesTransport) transportRouteName.trim() else "",
+                        transportTripType = if (usesTransport) transportTripType.wireValue else TransportTripType.BOTH_WAYS.wireValue,
                         transportMonthlyAmount = if (usesTransport) transportAmt else 0,
+                        transportStartMonth = if (usesTransport) transportStartMonth.trim().ifBlank { defaultStartMonth } else "",
+                        transportEndMonth = if (usesTransport) transportEndMonth.trim() else "",
+                        transportFeeOverridden = if (usesTransport) transportFeeOverridden else false,
+                        transportOverrideRemark = if (usesTransport && transportFeeOverridden) transportOverrideRemark.trim() else "",
                         photoBase64 = photoBase64,
                         isSample = false
                     )
@@ -1366,6 +1748,366 @@ internal fun StudentRegisterAddEditDialog(
             }
         }
     )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun StudentRegisterTransportSection(
+    isHindi: Boolean,
+    usesTransport: Boolean,
+    onUsesTransportChange: (Boolean) -> Unit,
+    routes: List<TransportRouteRecord>,
+    allSchoolStudents: List<StudentEntity>,
+    existingStudentId: Long?,
+    selectedRouteId: String,
+    selectedStopId: String,
+    selectedStopName: String,
+    routeDisplayFallback: String,
+    onRouteDisplayFallbackChange: (String) -> Unit,
+    selectedTripType: TransportTripType,
+    selectedStartMonth: String,
+    selectedEndMonth: String,
+    chargedMonths: List<String>,
+    amountText: String,
+    onAmountTextChange: (String) -> Unit,
+    feeOverridden: Boolean,
+    overrideRemark: String,
+    onOverrideRemarkChange: (String) -> Unit,
+    overCapacityAcknowledged: Boolean,
+    onOverCapacityAcknowledgedChange: (Boolean) -> Unit,
+    onSelectRoute: (TransportRouteRecord) -> Unit,
+    onSelectStop: (TransportRouteRecord, com.example.domain.TransportStop) -> Unit,
+    onSelectTripType: (TransportTripType) -> Unit,
+    onSelectStartMonth: (String) -> Unit,
+    onSelectEndMonth: (String) -> Unit,
+    onToggleOverride: (Boolean) -> Unit,
+    onResetToRouteFee: () -> Unit,
+    canNavigateToTransport: Boolean,
+    onCreateRouteShortcut: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("register_transport_section"),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = p10Label(isHindi, "स्कूल वाहन (Transport)", "Uses School Transport"),
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = p10Label(
+                        isHindi,
+                        "शुल्क चार्ट में मासिक वाहन शुल्क जोड़ेगा",
+                        "Adds monthly Transport fee column for this student"
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = usesTransport,
+                onCheckedChange = onUsesTransportChange,
+                modifier = Modifier.testTag("register_dialog_transport_switch")
+            )
+        }
+
+        if (usesTransport) {
+            if (routes.isEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFFFFF8E1),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("register_no_routes_banner")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = p10Label(
+                                isHindi,
+                                "अभी कोई सक्रिय रूट नहीं बना है। पहले वाहन रूट बनाएं या मैन्युअल लिखें।",
+                                "No transport routes exist yet. Create a route first or enter details below."
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFE65100)
+                        )
+                        if (canNavigateToTransport) {
+                            OutlinedButton(
+                                onClick = onCreateRouteShortcut,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp)
+                                    .testTag("register_create_route_shortcut")
+                            ) {
+                                Text(p10Label(isHindi, "रूट बनाएं (Transport खोलें)", "Create Transport Route"))
+                            }
+                        }
+                    }
+                }
+            } else {
+                val pickedRoute = routes.firstOrNull { it.id == selectedRouteId }
+                Text(
+                    text = p10Label(isHindi, "रूट चुनें *", "Select Transport Route *"),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    routes.forEach { rt ->
+                        val seatsUsed = allSchoolStudents.count { TransportEngine.studentMatchesRoute(it, rt) }
+                        FilterChip(
+                            selected = selectedRouteId == rt.id,
+                            onClick = { onSelectRoute(rt) },
+                            label = { Text("${rt.routeName} (₹${rt.monthlyFeeRs} • $seatsUsed/${rt.seatCapacity})") },
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        )
+                    }
+                }
+
+                if (pickedRoute != null) {
+                    val targetIds = if (existingStudentId != null && existingStudentId > 0L) {
+                        setOf(existingStudentId)
+                    } else {
+                        setOf(-999999L)
+                    }
+                    val wouldExceed = TransportEngine.willExceedCapacity(pickedRoute, allSchoolStudents, targetIds)
+                    if (wouldExceed) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFFFFEBEE),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp)) {
+                                Text(
+                                    text = p10Label(
+                                        isHindi,
+                                        "⚠ रूट '${pickedRoute.routeName}' की सीटें (${pickedRoute.seatCapacity}) भर चुकी हैं।",
+                                        "⚠ Seats on '${pickedRoute.routeName}' (${pickedRoute.seatCapacity}) are full."
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFB71C1C),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = overCapacityAcknowledged,
+                                        onCheckedChange = onOverCapacityAcknowledgedChange
+                                    )
+                                    Text(
+                                        text = p10Label(isHindi, "क्षमता से अधिक जोड़ने की पुष्टि करें", "Confirm over-capacity assignment"),
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (pickedRoute.stops.isNotEmpty()) {
+                        Text(
+                            text = p10Label(isHindi, "स्टॉप चुनें", "Select Stop"),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            pickedRoute.stops.forEach { st ->
+                                val stopFee = pickedRoute.effectiveFeeFor(
+                                    stopId = st.stopId,
+                                    stopName = st.stopName,
+                                    tripType = selectedTripType
+                                )
+                                val isSel = (selectedStopId.isNotBlank() && st.stopId == selectedStopId) ||
+                                    selectedStopName.equals(st.stopName, ignoreCase = true)
+                                FilterChip(
+                                    selected = isSel,
+                                    onClick = { onSelectStop(pickedRoute, st) },
+                                    label = { Text("${st.stopName} (₹$stopFee)") },
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Trip type selector
+                Text(
+                    text = p10Label(isHindi, "यात्रा प्रकार", "Trip Type"),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    TransportTripType.entries.forEach { trip ->
+                        FilterChip(
+                            selected = selectedTripType == trip,
+                            onClick = { onSelectTripType(trip) },
+                            label = { Text(if (isHindi) trip.labelHi else trip.labelEn) },
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("register_trip_${trip.wireValue}")
+                        )
+                    }
+                }
+
+                // Start & End Months
+                Text(
+                    text = p10Label(isHindi, "शुरुआती महीना (Start Month)", "Start Month *"),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    chargedMonths.forEach { m ->
+                        FilterChip(
+                            selected = selectedStartMonth.equals(m, ignoreCase = true),
+                            onClick = { onSelectStartMonth(m) },
+                            label = { Text(m) },
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        )
+                    }
+                }
+
+                Text(
+                    text = p10Label(isHindi, "समाप्ति महीना (वैकल्पिक)", "End Month (Optional)"),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = selectedEndMonth.isBlank(),
+                        onClick = { onSelectEndMonth("") },
+                        label = { Text(p10Label(isHindi, "पूरा सत्र", "Full Session")) },
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    )
+                    chargedMonths.forEach { m ->
+                        FilterChip(
+                            selected = selectedEndMonth.equals(m, ignoreCase = true),
+                            onClick = { onSelectEndMonth(m) },
+                            label = { Text(m) },
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        )
+                    }
+                }
+
+                if (pickedRoute != null) {
+                    val computedFee = pickedRoute.effectiveFeeFor(
+                        stopId = selectedStopId,
+                        stopName = selectedStopName,
+                        tripType = selectedTripType
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = p10Label(
+                                    isHindi,
+                                    "स्वचालित फीस: ₹$computedFee/माह",
+                                    "Route/Stop Rate: ₹$computedFee/mo"
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = p10Label(isHindi, "व्यक्तिगत शुल्क बदलें (Override)", "Override Amount Manually"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = feeOverridden,
+                            onCheckedChange = onToggleOverride,
+                            modifier = Modifier.testTag("register_transport_override_switch")
+                        )
+                    }
+                    if (feeOverridden) {
+                        OutlinedButton(
+                            onClick = onResetToRouteFee,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("register_transport_reset_fee_btn")
+                        ) {
+                            Text(p10Label(isHindi, "रूट फीस (₹$computedFee) पर रीसेट करें", "Reset to Route Fee (₹$computedFee)"))
+                        }
+                    }
+                }
+            }
+
+            OutlinedTextField(
+                value = routeDisplayFallback,
+                onValueChange = onRouteDisplayFallbackChange,
+                label = { Text("Route / Stop Label") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("register_dialog_route_input")
+            )
+            OutlinedTextField(
+                value = amountText,
+                onValueChange = {
+                    val digits = it.filter { ch -> ch.isDigit() }
+                    onAmountTextChange(digits)
+                    if (!feeOverridden && routes.isNotEmpty()) {
+                        onToggleOverride(true)
+                    }
+                },
+                label = { Text("Monthly Rs. *") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("register_dialog_transport_amount_input")
+            )
+            if (feeOverridden || routes.isEmpty()) {
+                if (feeOverridden) {
+                    OutlinedTextField(
+                        value = overrideRemark,
+                        onValueChange = onOverrideRemarkChange,
+                        label = { Text("Override Remark *") },
+                        placeholder = { Text("e.g., Sibling discount / half-route concession") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("register_transport_override_remark_input")
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

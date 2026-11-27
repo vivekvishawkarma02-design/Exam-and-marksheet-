@@ -50,6 +50,8 @@ enum class AppModule(val key: String, val label: String, val description: String
     SESSION_PROMOTION("sessionPromotion", "Session and Promotion", "Start new session, student promotion, class order, alumni history, and promotion register"),
     RESULT_ANALYSIS("resultAnalysis", "Result Analysis", "View-only class analytics, toppers, subject stats, weak students & student progress"),
     CLASS_DIARY("classDiary", "Class Diary", "Daily classwork, homework, notes, blackboard photos, weekly PDF, and WhatsApp class summary"),
+    STUDENT_REMARKS("studentRemarks", "Student Remarks", "Sensitive student remarks, follow-ups, PTM parent meetings, and A4 remark summary"),
+    GATE("gate", "Gate", "Early leave gate passes, A5 pass slips, daily gate register, and visitor register"),
     SETTINGS("settings", "Settings", "Organisation settings, sessions, schools, and backups"),
     MEMBERS("members", "Members", "Member directory, join requests, roles, and access control");
 
@@ -96,6 +98,8 @@ data class MemberPermissions(
     val sessionPromotion: AccessLevel = AccessLevel.NONE,
     val resultAnalysis: AccessLevel = AccessLevel.NONE,
     val classDiary: AccessLevel = AccessLevel.NONE,
+    val studentRemarks: AccessLevel = AccessLevel.NONE,
+    val gate: AccessLevel = AccessLevel.NONE,
     val settings: AccessLevel = AccessLevel.NONE,
     val members: AccessLevel = AccessLevel.NONE
 ) {
@@ -119,6 +123,8 @@ data class MemberPermissions(
         AppModule.SESSION_PROMOTION -> sessionPromotion
         AppModule.RESULT_ANALYSIS -> resultAnalysis
         AppModule.CLASS_DIARY -> classDiary
+        AppModule.STUDENT_REMARKS -> studentRemarks
+        AppModule.GATE -> gate
         AppModule.SETTINGS -> settings
         AppModule.MEMBERS -> members
     }
@@ -143,6 +149,8 @@ data class MemberPermissions(
         AppModule.SESSION_PROMOTION -> copy(sessionPromotion = level)
         AppModule.RESULT_ANALYSIS -> copy(resultAnalysis = level)
         AppModule.CLASS_DIARY -> copy(classDiary = level)
+        AppModule.STUDENT_REMARKS -> copy(studentRemarks = level)
+        AppModule.GATE -> copy(gate = level)
         AppModule.SETTINGS -> copy(settings = level)
         AppModule.MEMBERS -> copy(members = level)
     }
@@ -167,6 +175,8 @@ data class MemberPermissions(
         AppModule.SESSION_PROMOTION.key to sessionPromotion.wireValue,
         AppModule.RESULT_ANALYSIS.key to resultAnalysis.wireValue,
         AppModule.CLASS_DIARY.key to classDiary.wireValue,
+        AppModule.STUDENT_REMARKS.key to studentRemarks.wireValue,
+        AppModule.GATE.key to gate.wireValue,
         AppModule.SETTINGS.key to settings.wireValue,
         AppModule.MEMBERS.key to members.wireValue
     )
@@ -193,6 +203,8 @@ data class MemberPermissions(
                 sessionPromotion = AccessLevel.EDIT,
                 resultAnalysis = AccessLevel.VIEW,
                 classDiary = AccessLevel.EDIT,
+                studentRemarks = AccessLevel.EDIT,
+                gate = AccessLevel.EDIT,
                 settings = AccessLevel.EDIT,
                 members = AccessLevel.EDIT
             )
@@ -216,6 +228,8 @@ data class MemberPermissions(
                 sessionPromotion = AccessLevel.EDIT,
                 resultAnalysis = AccessLevel.VIEW,
                 classDiary = AccessLevel.EDIT,
+                studentRemarks = AccessLevel.EDIT,
+                gate = AccessLevel.EDIT,
                 settings = AccessLevel.EDIT,
                 members = AccessLevel.EDIT
             )
@@ -239,6 +253,8 @@ data class MemberPermissions(
                 sessionPromotion = AccessLevel.NONE,
                 resultAnalysis = AccessLevel.NONE,
                 classDiary = AccessLevel.NONE,
+                studentRemarks = AccessLevel.NONE,
+                gate = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -262,6 +278,8 @@ data class MemberPermissions(
                 sessionPromotion = AccessLevel.NONE,
                 resultAnalysis = AccessLevel.NONE,
                 classDiary = AccessLevel.NONE,
+                studentRemarks = AccessLevel.NONE,
+                gate = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -285,6 +303,8 @@ data class MemberPermissions(
                 sessionPromotion = AccessLevel.NONE,
                 resultAnalysis = AccessLevel.NONE,
                 classDiary = AccessLevel.NONE,
+                studentRemarks = AccessLevel.NONE,
+                gate = AccessLevel.NONE,
                 settings = AccessLevel.NONE,
                 members = AccessLevel.NONE
             )
@@ -312,6 +332,8 @@ data class MemberPermissions(
                 sessionPromotion = AccessLevel.fromRaw(raw[AppModule.SESSION_PROMOTION.key] as? String),
                 resultAnalysis = AccessLevel.fromRaw(raw[AppModule.RESULT_ANALYSIS.key] as? String),
                 classDiary = AccessLevel.fromRaw(raw[AppModule.CLASS_DIARY.key] as? String),
+                studentRemarks = AccessLevel.fromRaw(raw[AppModule.STUDENT_REMARKS.key] as? String),
+                gate = AccessLevel.fromRaw(raw[AppModule.GATE.key] as? String),
                 settings = AccessLevel.fromRaw(raw[AppModule.SETTINGS.key] as? String),
                 members = AccessLevel.fromRaw(raw[AppModule.MEMBERS.key] as? String)
             )

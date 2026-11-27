@@ -164,6 +164,15 @@ data class StudentEntity(
     // Phase 11: Optional route & stop linkage (defaults keep 100% Phase 9 compatibility)
     val transportRouteId: String = "",
     val transportStopName: String = "",
+    // Transport Rebuild: Stop ID linkage, trip type, start/end month, override & effective-month rate tracking
+    val transportStopId: String = "",
+    val transportTripType: String = "BOTH_WAYS", // BOTH_WAYS, PICKUP_ONLY, DROP_ONLY
+    val transportStartMonth: String = "", // e.g. "APR", "AUG"; blank treated safely as first charged month
+    val transportEndMonth: String = "", // optional inclusive end month e.g. "DEC"; blank = session end
+    val transportFeeOverridden: Boolean = false,
+    val transportOverrideRemark: String = "",
+    val transportPriorMonthlyAmount: Int = 0, // previous rate for months before transportFeeEffectiveFromMonth
+    val transportFeeEffectiveFromMonth: String = "", // month from which transportMonthlyAmount applies
     val status: String = "ACTIVE", // "ACTIVE" or "LEFT"
     val leftDate: String = "",
     val leftReason: String = ""

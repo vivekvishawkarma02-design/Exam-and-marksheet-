@@ -14,9 +14,14 @@ import com.example.domain.ExamScheduleRecord
 import com.example.domain.ExamSeatAllocation
 import com.example.domain.OptionalFeeCatalogueItem
 import com.example.domain.StockItemSummary
+import com.example.domain.TransportDuesSummary
+import com.example.domain.TransportMonthDueStudentRow
+import com.example.domain.TransportMonthlyProfitLossReport
 import com.example.domain.TransportRouteRecord
 import com.example.domain.TransportRouteSummary
 import com.example.domain.TransportStop
+import com.example.domain.TransportTripType
+import com.example.domain.TransportVehicleCostSummary
 import com.example.util.AdmitCardStudentItem
 import com.example.util.AdmitCardsPdfBundle
 import com.example.util.DutyListPdfBundle
@@ -24,6 +29,8 @@ import com.example.util.ExamTimetablePdfBundle
 import com.example.util.Phase11PdfGenerator
 import com.example.util.RoomSeatingPdfBundle
 import com.example.util.StockReportPdfBundle
+import com.example.util.TransportDuesPdfBundle
+import com.example.util.TransportMonthlySummaryPdfBundle
 import com.example.util.TransportRoutePdfBundle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -281,5 +288,79 @@ class Phase11PdfRobolectricTest {
 
         val driverListBmp = Phase11PdfGenerator.renderTransportDriverListPreviewBitmap(transportBundle, scale = 1)
         verifyA4Bitmap(driverListBmp, "Transport Driver Contact Sheet")
+
+        val duesSummary = TransportDuesSummary(
+            monthCode = "AUG",
+            rows = (1..3).map { idx ->
+                val st = makeStudent(idx)
+                TransportMonthDueStudentRow(
+                    student = st,
+                    studentDocId = "stu_$idx",
+                    routeId = route.id,
+                    routeName = route.routeName,
+                    stopName = st.transportStopName,
+                    tripType = TransportTripType.PICKUP_ONLY,
+                    monthCode = "AUG",
+                    scheduledRs = st.transportMonthlyAmount,
+                    paidRs = 0,
+                    dueRs = st.transportMonthlyAmount
+                )
+            },
+            totalStudentsDue = 3,
+            totalExpectedRs = 1750,
+            totalCollectedRs = 0,
+            totalDueRs = 1750,
+            dueByRouteName = listOf("North Bus" to 1750)
+        )
+        val duesPages = Phase11PdfGenerator.renderTransportDuesPreviewBitmaps(
+            TransportDuesPdfBundle(
+                school = school,
+                session = "2026-2027",
+                generatedDateIso = "2026-08-10",
+                duesSummary = duesSummary,
+                unassignedStudents = listOf(makeStudent(99).copy(transportRouteId = "", transportRouteName = "")),
+                routes = listOf(route)
+            ),
+            scale = 1
+        )
+        assertEquals("Dues table page + schedule/unassigned page = 2 pages", 2, duesPages.size)
+        duesPages.forEachIndexed { i, bmp ->
+            verifyA4Bitmap(bmp, "Transport Dues PDF page ${i + 1}")
+        }
+
+        val plBmp = Phase11PdfGenerator.renderTransportMonthlySummaryPreviewBitmap(
+            TransportMonthlySummaryPdfBundle(
+                school = school,
+                generatedDateIso = "2026-08-31",
+                report = TransportMonthlyProfitLossReport(
+                    schoolName = school.name,
+                    session = "2026-2027",
+                    monthCode = "AUG",
+                    yearMonthIso = "2026-08",
+                    vehicleRows = listOf(
+                        TransportVehicleCostSummary(
+                            routeId = route.id,
+                            routeName = route.routeName,
+                            vehicleNumber = route.vehicleNumber,
+                            vehicleType = route.vehicleType,
+                            expectedIncomeRs = 5000,
+                            collectedIncomeRs = 4200,
+                            duesRs = 800,
+                            expenseRs = 1800,
+                            profitOrLossRs = 2400,
+                            expenseCount = 2
+                        )
+                    ),
+                    unallocatedExpensesRs = 200,
+                    totalExpectedIncomeRs = 5000,
+                    totalCollectedIncomeRs = 4200,
+                    totalDuesRs = 800,
+                    totalExpenseRs = 2000,
+                    netProfitOrLossRs = 2200
+                )
+            ),
+            scale = 1
+        )
+        verifyA4Bitmap(plBmp, "Transport Monthly Income vs Expense Summary")
     }
 }

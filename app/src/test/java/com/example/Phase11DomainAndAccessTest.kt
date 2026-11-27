@@ -3,19 +3,28 @@ package com.example
 import com.example.data.StudentEntity
 import com.example.domain.AccessLevel
 import com.example.domain.AppModule
+import com.example.domain.CashBookEntryRecord
+import com.example.domain.CashBookEntryStatus
+import com.example.domain.CashBookEntryType
+import com.example.domain.CashBookSettingsConfig
 import com.example.domain.ConcessionMode
 import com.example.domain.ConcessionScope
 import com.example.domain.DayOfWeekCode
+import com.example.domain.EnquirySettingsConfig
 import com.example.domain.ExamCategoryType
 import com.example.domain.ExamInvigilatorDutyRecord
 import com.example.domain.ExamRoomRecord
 import com.example.domain.ExamScheduleEngine
 import com.example.domain.ExamScheduleEntry
 import com.example.domain.ExamScheduleRecord
+import com.example.domain.FeeCellState
+import com.example.domain.FeeCollectionEngine
+import com.example.domain.FeeHeadType
 import com.example.domain.FeeLineItemType
 import com.example.domain.FeeReceiptLineItem
 import com.example.domain.FeeReceiptRecord
 import com.example.domain.FeeReceiptStatus
+import com.example.domain.FeeStructureConfig
 import com.example.domain.LeaveStatus
 import com.example.domain.MemberAccessProfile
 import com.example.domain.MemberPermissions
@@ -24,6 +33,7 @@ import com.example.domain.OptionalFeeCatalogueItem
 import com.example.domain.OrgRole
 import com.example.domain.PaymentMode
 import com.example.domain.Phase11AccessEvaluator
+import com.example.domain.Phase13TodayHomeEngine
 import com.example.domain.SeatingAllocationMode
 import com.example.domain.StockEngine
 import com.example.domain.StockLedgerKind
@@ -32,9 +42,15 @@ import com.example.domain.StockTransactionType
 import com.example.domain.StudentRegisterStatus
 import com.example.domain.TeacherLeaveRecord
 import com.example.domain.TeacherProfile
+import com.example.domain.TodayHomePermissions
 import com.example.domain.TransportEngine
 import com.example.domain.TransportRouteRecord
 import com.example.domain.TransportStop
+import com.example.domain.TransportStudentAttentionFlag
+import com.example.domain.TransportTripType
+import com.example.domain.TransportVehicleDocumentRecord
+import com.example.domain.VehicleDocExpiryStatus
+import com.example.domain.VehicleDocumentType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -84,7 +100,8 @@ class Phase11DomainAndAccessTest {
         transportRouteId: String = "",
         transportStopName: String = "",
         transportRouteName: String = "",
-        transportMonthlyAmount: Int = 0
+        transportMonthlyAmount: Int = 0,
+        transportStartMonth: String = ""
     ): StudentEntity = StudentEntity(
         id = id,
         schoolId = 1L,
@@ -105,7 +122,8 @@ class Phase11DomainAndAccessTest {
         transportRouteId = transportRouteId,
         transportStopName = transportStopName,
         transportRouteName = transportRouteName,
-        transportMonthlyAmount = transportMonthlyAmount
+        transportMonthlyAmount = transportMonthlyAmount,
+        transportStartMonth = transportStartMonth
     )
 
     private fun makeOptionalSaleReceipt(
@@ -191,8 +209,8 @@ class Phase11DomainAndAccessTest {
             "enquiry" to "edit"
         )
         val parsed = MemberPermissions.fromMap(legacyPhase10Map)
-        assertEquals(21, AppModule.entries.size)
-        assertEquals(21, parsed.toFirestoreMap().size)
+        assertEquals(23, AppModule.entries.size)
+        assertEquals(23, parsed.toFirestoreMap().size)
         assertEquals(AccessLevel.NONE, parsed.exams)
         assertEquals(AccessLevel.NONE, parsed.stock)
         assertEquals(AccessLevel.NONE, parsed.transport)
@@ -740,5 +758,563 @@ class Phase11DomainAndAccessTest {
         assertFalse(removed.usesTransport)
         assertEquals("", removed.transportRouteId)
         assertEquals(0, removed.transportMonthlyAmount)
+    }
+
+    // =========================================================================
+    // 8. TRANSPORT REBUILD: TRIP TYPES, OVERRIDES, START/END MONTH, MIGRATION,
+    //    APPLY PREVIEW, SAFE DELETE/RENAME, WARNINGS, DOCS, CASH BOOK P&L
+    // =========================================================================
+
+    private fun sampleStructure(schoolDocId: String = "sch_1", session: String = "2026-2027"): FeeStructureConfig =
+        FeeStructureConfig(
+            id = "fs_1",
+            schoolId = schoolDocId,
+            session = session,
+            tuitionByClassAndMonth = mapOf("5th" to mapOf("DEFAULT" to 1000))
+        )
+
+    private fun makeTransportReceipt(
+        id: String,
+        studentDocId: String,
+        studentName: String,
+        admNo: String,
+        monthCode: String,
+        amountRs: Int,
+        dateIso: String = "2026-04-12"
+    ): FeeReceiptRecord = FeeReceiptRecord(
+        id = id,
+        schoolId = "sch_1",
+        session = "2026-2027",
+        receiptNumber = "RCP-$id",
+        deviceNodeCode = "A1B",
+        sequenceNo = 1,
+        receiptDateIso = dateIso,
+        studentId = studentDocId,
+        studentName = studentName,
+        studentAdmNo = admNo,
+        fatherName = "Father $studentName",
+        className = "5th",
+        section = "A",
+        rollNo = 1,
+        lineItems = listOf(
+            FeeReceiptLineItem(
+                lineId = "$monthCode|${FeeHeadType.TRANSPORT.key}",
+                lineType = FeeLineItemType.GRID_CELL,
+                monthCode = monthCode,
+                headKey = FeeHeadType.TRANSPORT.key,
+                title = "Transport ($monthCode)",
+                quantity = 1,
+                unitPrice = amountRs,
+                lineGrossAmount = amountRs,
+                netPayableOnLine = amountRs,
+                paidAllocated = amountRs,
+                balanceDueAfterLine = 0
+            )
+        ),
+        totalBeforeConcession = amountRs,
+        concessionMode = ConcessionMode.RUPEES,
+        concessionScope = ConcessionScope.WHOLE_RECEIPT,
+        concessionAmount = 0,
+        netPayableAmount = amountRs,
+        amountPaid = amountRs,
+        balanceDueOnReceipt = 0,
+        paymentMode = PaymentMode.CASH,
+        status = FeeReceiptStatus.ISSUED,
+        receivedByUid = "u_clerk",
+        receivedByName = "Fee Clerk",
+        issuedAtMs = 1713420000000L
+    )
+
+    private fun makeTodayPermissions(canViewTransport: Boolean): TodayHomePermissions = TodayHomePermissions(
+        isOwnerOrAdmin = false,
+        isTeacher = false,
+        canAccessStudentAttendance = false,
+        canViewAttendanceOverview = false,
+        canViewFees = false,
+        canEditFees = false,
+        canViewCashBook = false,
+        canViewTimetable = false,
+        canViewTeachers = false,
+        canViewEnquiry = false,
+        canViewStock = false,
+        canViewExams = false,
+        canViewMarks = false,
+        canEditMarks = false,
+        canViewStudents = false,
+        canEditStudents = false,
+        canViewStudentRegister = false,
+        canViewCertificates = false,
+        canEditSettings = false,
+        canViewTransport = canViewTransport
+    )
+
+    @Test
+    fun tripTypeFeesOverrideAndResetAndStartEndMonthCharging() {
+        val route = TransportRouteRecord(
+            id = "rt_1",
+            schoolId = "sch_1",
+            routeName = "West Bus",
+            seatCapacity = 20,
+            monthlyFeeRs = 1000,
+            pickupOnlyFeeRs = 650,
+            dropOnlyFeeRs = 600,
+            stops = listOf(
+                TransportStop("st_a", "Station Road", "07:30 AM", monthlyFeeRs = 1200, pickupOnlyFeeRs = 750, dropOnlyFeeRs = 700),
+                TransportStop("st_b", "Market", "07:45 AM", monthlyFeeRs = 0) // defaults to route
+            )
+        )
+
+        // Pickup-only at Station Road charges pickupOnlyFeeRs (750); Market falls back to route pickupOnlyFeeRs (650)
+        assertEquals(1200, route.effectiveFeeFor("st_a", "Station Road", TransportTripType.BOTH_WAYS))
+        assertEquals(750, route.effectiveFeeFor("st_a", "Station Road", TransportTripType.PICKUP_ONLY))
+        assertEquals(700, route.effectiveFeeFor("st_a", "Station Road", TransportTripType.DROP_ONLY))
+        assertEquals(650, route.effectiveFeeFor("st_b", "Market", TransportTripType.PICKUP_ONLY))
+
+        // Pickup-only student assigned starting AUG through DEC
+        val assigned = TransportEngine.assignStudentToRoute(
+            student = makeStudent(10, "Rohan"),
+            route = route,
+            stopId = "st_a",
+            stopName = "Station Road",
+            preserveExistingAmountIfPositive = false,
+            tripType = TransportTripType.PICKUP_ONLY,
+            startMonth = "AUG",
+            endMonth = "DEC"
+        )
+        assertEquals(750, assigned.transportMonthlyAmount)
+        assertEquals("AUG", assigned.transportStartMonth)
+        assertEquals("DEC", assigned.transportEndMonth)
+
+        val struct = sampleStructure()
+        val acct = FeeCollectionEngine.computeStudentFeeAccount(
+            structure = struct,
+            student = assigned,
+            studentDocId = "stu_10",
+            override = null,
+            receiptsForStudent = emptyList(),
+            routes = listOf(route)
+        )
+        val tCells = acct.monthRows.associate { it.monthCode to it.transportCell }
+        assertEquals(FeeCellState.NOT_APPLICABLE, tCells["APR"]?.state)
+        assertEquals(FeeCellState.NOT_APPLICABLE, tCells["JUL"]?.state)
+        assertEquals(750, tCells["AUG"]?.scheduledAmount)
+        assertEquals(750, tCells["DEC"]?.scheduledAmount)
+        assertEquals(FeeCellState.NOT_APPLICABLE, tCells["JAN"]?.state)
+        // Expected total = 5 months (AUG..DEC) * 750 = 3750
+        assertEquals(3750, acct.allCells.filter { it.headType == FeeHeadType.TRANSPORT }.sumOf { it.scheduledAmount })
+
+        // Individual override requires non-blank remark & resets cleanly to route/stop rate
+        var threw = false
+        try {
+            TransportEngine.overrideStudentFee(assigned, 500, "   ")
+        } catch (_: IllegalArgumentException) {
+            threw = true
+        }
+        assertTrue("Override without remark must be rejected", threw)
+
+        val overridden = TransportEngine.overrideStudentFee(assigned, 500, "Staff child discount")
+        assertTrue(overridden.transportFeeOverridden)
+        assertEquals(500, overridden.transportMonthlyAmount)
+        assertEquals("Staff child discount", overridden.transportOverrideRemark)
+
+        val reset = TransportEngine.resetStudentFeeToRoute(overridden, listOf(route))
+        assertFalse(reset.transportFeeOverridden)
+        assertEquals("", reset.transportOverrideRemark)
+        assertEquals(750, reset.transportMonthlyAmount)
+    }
+
+    @Test
+    fun legacyMigrationAndFeeChangePreviewPreserveExistingPaidReceiptsAndCells() {
+        val struct = sampleStructure()
+        val route = TransportRouteRecord(
+            id = "rt_east",
+            schoolId = "sch_1",
+            routeName = "East Van",
+            seatCapacity = 25,
+            monthlyFeeRs = 600
+        )
+
+        // Legacy student with blank transportStartMonth and APR+MAY already paid
+        val legacyStudent = makeStudent(
+            id = 21,
+            name = "Neha",
+            usesTransport = true,
+            transportRouteId = route.id,
+            transportRouteName = "East Van",
+            transportMonthlyAmount = 600,
+            transportStartMonth = ""
+        )
+        val paidAprReceipt = makeTransportReceipt(
+            id = "rcp_legacy_1",
+            studentDocId = "stu_21",
+            studentName = "Neha",
+            admNo = "ADM-021",
+            monthCode = "APR",
+            amountRs = 600,
+            dateIso = "2026-04-12"
+        )
+
+        val beforeMig = FeeCollectionEngine.computeStudentFeeAccount(
+            structure = struct,
+            student = legacyStudent,
+            studentDocId = "stu_21",
+            override = null,
+            receiptsForStudent = listOf(paidAprReceipt),
+            routes = listOf(route)
+        )
+        val migrations = TransportEngine.findAndPrepareLegacyMigration(listOf(legacyStudent), listOf(route), struct)
+        assertEquals(1, migrations.size)
+        val migratedStudent = migrations.first().student
+        assertEquals("APR", migratedStudent.transportStartMonth)
+
+        val afterMig = FeeCollectionEngine.computeStudentFeeAccount(
+            structure = struct,
+            student = migratedStudent,
+            studentDocId = "stu_21",
+            override = null,
+            receiptsForStudent = listOf(paidAprReceipt),
+            routes = listOf(route)
+        )
+        assertEquals(beforeMig.totalScheduledFee, afterMig.totalScheduledFee)
+        assertEquals(beforeMig.totalPaidOnGrid, afterMig.totalPaidOnGrid)
+        assertEquals(beforeMig.totalRemainingDue, afterMig.totalRemainingDue)
+
+        // Overridden peer student is excluded from fee-change preview
+        val overriddenPeer = TransportEngine.overrideStudentFee(
+            migratedStudent.copy(id = 22L, admNo = "ADM-22", name = "Karan"),
+            400,
+            "Sibling half rate"
+        )
+        val updatedRoute = route.copy(monthlyFeeRs = 800)
+        val (previewRows, excludedOverridden) = TransportEngine.buildApplyRouteFeePreview(
+            students = listOf(migratedStudent, overriddenPeer),
+            updatedRoute = updatedRoute
+        )
+        assertEquals(1, excludedOverridden)
+        assertEquals(1, previewRows.size)
+        assertEquals(600, previewRows[0].oldMonthlyAmountRs)
+        assertEquals(800, previewRows[0].newMonthlyAmountRs)
+
+        // Apply effective from SEP -> APR..AUG keep 600 (APR remains PAID), SEP..MAR become 800
+        val updatedStudents = TransportEngine.buildUpdatedStudentsForFeeChange(
+            previewRows = previewRows,
+            updatedRoute = updatedRoute,
+            effectiveFromMonth = "SEP",
+            orderedSessionMonths = struct.monthOrder
+        )
+        assertEquals(1, updatedStudents.size)
+        val nehaAfterFeeChange = updatedStudents[0]
+        val acctAfterFeeChange = FeeCollectionEngine.computeStudentFeeAccount(
+            structure = struct,
+            student = nehaAfterFeeChange,
+            studentDocId = "stu_21",
+            override = null,
+            receiptsForStudent = listOf(paidAprReceipt),
+            routes = listOf(updatedRoute)
+        )
+        val cellsByMonth = acctAfterFeeChange.monthRows.associate { it.monthCode to it.transportCell }
+        assertEquals(600, cellsByMonth["APR"]?.scheduledAmount)
+        assertEquals(FeeCellState.PAID, cellsByMonth["APR"]?.state)
+        assertEquals(600, cellsByMonth["AUG"]?.scheduledAmount)
+        assertEquals(800, cellsByMonth["SEP"]?.scheduledAmount)
+    }
+
+    @Test
+    fun safeOperationsBlockedDeleteLiveRenameWarningsAndBulk30Students() {
+        val routeA = TransportRouteRecord(
+            id = "rt_a",
+            schoolId = "sch_1",
+            routeName = "Old South Bus",
+            seatCapacity = 25,
+            monthlyFeeRs = 700,
+            stops = listOf(
+                TransportStop("s1", "Gate 1", "07:20 AM", 700),
+                TransportStop("s2", "Temple", "07:30 AM", 750)
+            )
+        )
+        val emptyRoute = TransportRouteRecord(id = "rt_empty", schoolId = "sch_1", routeName = "Spare Van", seatCapacity = 10, monthlyFeeRs = 500)
+
+        // Bulk assign 30 students in one batch exceeds capacity 25 -> willExceedCapacity is true, zero artificial 40-cap
+        val bulkPool = (1..30).map { i -> makeStudent(100L + i, "Student $i") }
+        assertTrue(TransportEngine.willExceedCapacity(routeA, bulkPool, bulkPool.map { it.id }.toSet()))
+        val assigned30 = bulkPool.map {
+            TransportEngine.assignStudentToRoute(
+                student = it,
+                route = routeA,
+                stopId = "s2",
+                stopName = "Temple",
+                preserveExistingAmountIfPositive = false,
+                startMonth = "JUL"
+            )
+        }
+        assertEquals(30, assigned30.size)
+
+        // Blocked delete on populated route vs allowed on empty route
+        val checkA = TransportEngine.checkRouteDeletion(routeA, assigned30)
+        assertFalse(checkA.canDeleteDirectly)
+        assertEquals(30, checkA.assignedCount)
+        assertTrue(TransportEngine.checkRouteDeletion(emptyRoute, assigned30).canDeleteDirectly)
+
+        // Live rename & removed stop check: display updates without rewriting student rows
+        val renamedRoute = routeA.copy(
+            routeName = "South Express",
+            stops = listOf(TransportStop("s1", "Gate 1", "07:20 AM", 700)) // removed s2 (Temple)
+        )
+        val resolved = TransportEngine.resolveDisplay(assigned30.first(), listOf(renamedRoute))
+        assertEquals("South Express", resolved.routeName)
+        assertTrue(resolved.stopNeedsUpdate)
+        assertTrue(TransportStudentAttentionFlag.STOP_NEEDS_UPDATE in resolved.attentionFlags)
+
+        // Warning conditions for Fee screen vs Non-Transport student (still hidden)
+        val noRouteNoMonthZeroAmt = makeStudent(
+            id = 500,
+            name = "Broken Transport",
+            usesTransport = true,
+            transportRouteId = "",
+            transportRouteName = "",
+            transportStartMonth = "",
+            transportMonthlyAmount = 0
+        )
+        val struct = sampleStructure()
+        val brokenAcct = FeeCollectionEngine.computeStudentFeeAccount(
+            structure = struct,
+            student = noRouteNoMonthZeroAmt,
+            studentDocId = "stu_500",
+            override = null,
+            receiptsForStudent = emptyList(),
+            routes = listOf(renamedRoute)
+        )
+        assertTrue(TransportStudentAttentionFlag.NO_ROUTE in brokenAcct.transportWarnings)
+        assertTrue(TransportStudentAttentionFlag.NO_START_MONTH in brokenAcct.transportWarnings)
+        assertTrue(TransportStudentAttentionFlag.ZERO_AMOUNT in brokenAcct.transportWarnings)
+
+        val nonTransportAcct = FeeCollectionEngine.computeStudentFeeAccount(
+            structure = struct,
+            student = makeStudent(501, "Walker", usesTransport = false),
+            studentDocId = "stu_501",
+            override = null,
+            receiptsForStudent = emptyList(),
+            routes = listOf(renamedRoute)
+        )
+        assertFalse(nonTransportAcct.usesTransport)
+        assertTrue(nonTransportAcct.transportWarnings.isEmpty())
+        assertTrue(nonTransportAcct.monthRows.all { it.transportCell == null })
+    }
+
+    @Test
+    fun vehicleDocumentExpiryTodayTileAndCashBookMonthlyProfitLossWorkWithoutDuplicates() {
+        val docs = listOf(
+            TransportVehicleDocumentRecord(
+                id = "d_exp_20",
+                schoolId = "sch_1",
+                routeId = "rt_1",
+                vehicleNumber = "UP-61-B-1111",
+                docType = VehicleDocumentType.INSURANCE,
+                documentNumber = "INS-20",
+                expiryDateIso = "2026-05-20" // 20 days after 2026-04-30 -> EXPIRING_SOON
+            ),
+            TransportVehicleDocumentRecord(
+                id = "d_expired",
+                schoolId = "sch_1",
+                routeId = "rt_1",
+                vehicleNumber = "UP-61-B-1111",
+                docType = VehicleDocumentType.PUC,
+                expiryDateIso = "2026-04-15" // expired
+            ),
+            TransportVehicleDocumentRecord(
+                id = "d_valid",
+                schoolId = "sch_1",
+                routeId = "rt_1",
+                vehicleNumber = "UP-61-B-1111",
+                docType = VehicleDocumentType.FITNESS,
+                expiryDateIso = "2026-10-01" // valid
+            )
+        )
+
+        assertEquals(
+            VehicleDocExpiryStatus.EXPIRING_SOON,
+            TransportEngine.evaluateVehicleDocumentStatus("2026-05-20", "2026-04-30")
+        )
+        assertEquals(
+            VehicleDocExpiryStatus.EXPIRED,
+            TransportEngine.evaluateVehicleDocumentStatus("2026-04-15", "2026-04-30")
+        )
+        assertEquals(
+            VehicleDocExpiryStatus.VALID,
+            TransportEngine.evaluateVehicleDocumentStatus("2026-10-01", "2026-04-30")
+        )
+
+        // Today Home tile visible ONLY when member has Transport access
+        val transportMember = makeMember(
+            uid = "u_tr",
+            role = OrgRole.OFFICE_OPERATOR,
+            schoolIds = listOf("sch_1"),
+            permissions = MemberPermissions().copy(transport = AccessLevel.EDIT)
+        )
+        val noTransportMember = makeMember(
+            uid = "u_tc",
+            role = OrgRole.TEACHER,
+            schoolIds = listOf("sch_1"),
+            permissions = MemberPermissions().copy(attendance = AccessLevel.EDIT)
+        )
+
+        val snapWithAccess = Phase13TodayHomeEngine.buildSnapshot(
+            todayIso = "2026-04-30",
+            member = transportMember,
+            permissions = makeTodayPermissions(canViewTransport = true),
+            schools = emptyList(),
+            activeSchool = null,
+            activeSchoolDocId = "sch_1",
+            schoolNamesByDocId = mapOf("sch_1" to "Demo School"),
+            session = "2026-2027",
+            schoolClassesForActiveSchool = emptyList(),
+            sessionStudentsForActiveSchool = emptyList(),
+            studentsWithDocIdsForActiveSchool = emptyList(),
+            todayAttendanceSummaries = emptyList(),
+            feeStructures = emptyList(),
+            activeFeeStructure = sampleStructure(),
+            studentFeeOverrides = emptyList(),
+            feeReceipts = emptyList(),
+            feeMessageSentLogs = emptyList(),
+            cashBookEntries = emptyList(),
+            cashBookDayClosings = emptyList(),
+            cashBookSettings = CashBookSettingsConfig(schoolId = "sch_1"),
+            salaryMonthlyRecords = emptyList(),
+            admissionEnquiries = emptyList(),
+            enquirySettings = EnquirySettingsConfig(schoolId = "sch_1"),
+            teachers = emptyList(),
+            teacherLeaves = emptyList(),
+            teacherAttendanceRecords = emptyList(),
+            timetableCells = emptyList(),
+            substitutions = emptyList(),
+            periodStructuresBySchool = emptyMap(),
+            classAssignments = emptyList(),
+            ownLinkedTeacher = null,
+            ownTeacherScope = null,
+            ownPendingMarksCount = 0,
+            ownExamDuties = emptyList(),
+            ownSalarySlipsCount = 0,
+            examSchedules = emptyList(),
+            examDuties = emptyList(),
+            stockTransactions = emptyList(),
+            isFirstTimeGuideSkipped = true,
+            transportVehicleDocs = docs
+        )
+        assertNotNull(snapWithAccess.transportDocsTile)
+        assertEquals(1, snapWithAccess.transportDocsTile?.expiringSoonCount)
+        assertEquals(1, snapWithAccess.transportDocsTile?.expiredCount)
+        assertEquals(2, snapWithAccess.transportDocsTile?.totalAlertCount)
+
+        val snapWithoutAccess = Phase13TodayHomeEngine.buildSnapshot(
+            todayIso = "2026-04-30",
+            member = noTransportMember,
+            permissions = makeTodayPermissions(canViewTransport = false),
+            schools = emptyList(),
+            activeSchool = null,
+            activeSchoolDocId = "sch_1",
+            schoolNamesByDocId = mapOf("sch_1" to "Demo School"),
+            session = "2026-2027",
+            schoolClassesForActiveSchool = emptyList(),
+            sessionStudentsForActiveSchool = emptyList(),
+            studentsWithDocIdsForActiveSchool = emptyList(),
+            todayAttendanceSummaries = emptyList(),
+            feeStructures = emptyList(),
+            activeFeeStructure = sampleStructure(),
+            studentFeeOverrides = emptyList(),
+            feeReceipts = emptyList(),
+            feeMessageSentLogs = emptyList(),
+            cashBookEntries = emptyList(),
+            cashBookDayClosings = emptyList(),
+            cashBookSettings = CashBookSettingsConfig(schoolId = "sch_1"),
+            salaryMonthlyRecords = emptyList(),
+            admissionEnquiries = emptyList(),
+            enquirySettings = EnquirySettingsConfig(schoolId = "sch_1"),
+            teachers = emptyList(),
+            teacherLeaves = emptyList(),
+            teacherAttendanceRecords = emptyList(),
+            timetableCells = emptyList(),
+            substitutions = emptyList(),
+            periodStructuresBySchool = emptyMap(),
+            classAssignments = emptyList(),
+            ownLinkedTeacher = null,
+            ownTeacherScope = null,
+            ownPendingMarksCount = 0,
+            ownExamDuties = emptyList(),
+            ownSalarySlipsCount = 0,
+            examSchedules = emptyList(),
+            examDuties = emptyList(),
+            stockTransactions = emptyList(),
+            isFirstTimeGuideSkipped = true,
+            transportVehicleDocs = docs
+        )
+        assertNull(snapWithoutAccess.transportDocsTile)
+
+        // Single-record Cash Book diesel expense + Monthly P&L & CSV
+        val route = TransportRouteRecord(
+            id = "rt_1",
+            schoolId = "sch_1",
+            routeName = "North Bus",
+            vehicleNumber = "UP-61-B-1111",
+            vehicleType = "Bus",
+            seatCapacity = 20,
+            monthlyFeeRs = 1000
+        )
+        val st1 = makeStudent(1, "Aarav", usesTransport = true, transportRouteId = "rt_1", transportStartMonth = "APR", transportMonthlyAmount = 1000)
+        val st2 = makeStudent(2, "Diya", usesTransport = true, transportRouteId = "rt_1", transportStartMonth = "APR", transportMonthlyAmount = 1000)
+        val rcp1 = makeTransportReceipt(
+            id = "rcp_apr_1",
+            studentDocId = "stu_1",
+            studentName = "Aarav",
+            admNo = "ADM-001",
+            monthCode = "APR",
+            amountRs = 1000,
+            dateIso = "2026-04-10"
+        )
+        val dieselExpense = CashBookEntryRecord(
+            id = "cb_tr_1",
+            schoolId = "sch_1",
+            dateIso = "2026-04-14",
+            entryType = CashBookEntryType.EXPENSE,
+            category = "Diesel",
+            amount = 450,
+            paymentMode = PaymentMode.CASH,
+            note = "4.5L diesel",
+            sourceModule = "TRANSPORT",
+            transportRouteId = "rt_1",
+            vehicleNumber = "UP-61-B-1111",
+            transportCategory = "Diesel"
+        )
+        val cancelledExpense = dieselExpense.copy(
+            id = "cb_tr_cancelled",
+            amount = 999,
+            status = CashBookEntryStatus.CANCELLED,
+            cancelReason = "Duplicate"
+        )
+        assertTrue(dieselExpense.isTransportExpense)
+
+        val plReport = TransportEngine.computeMonthlyProfitLossReport(
+            schoolId = "sch_1",
+            schoolName = "Demo School",
+            session = "2026-2027",
+            monthCode = "APR",
+            yearMonthIso = "2026-04",
+            routes = listOf(route),
+            studentsWithDocIds = listOf("stu_1" to st1, "stu_2" to st2),
+            structure = sampleStructure(),
+            overridesByStudentDocId = emptyMap(),
+            receipts = listOf(rcp1),
+            cashBookEntries = listOf(dieselExpense, cancelledExpense)
+        )
+        assertEquals(2000, plReport.totalExpectedIncomeRs)
+        assertEquals(1000, plReport.totalCollectedIncomeRs)
+        assertEquals(1000, plReport.totalDuesRs)
+        assertEquals(450, plReport.totalExpenseRs) // cancelled excluded, not doubled
+        assertEquals(550, plReport.netProfitOrLossRs) // 1000 - 450
+
+        val csv = TransportEngine.buildMonthlySummaryCsv(plReport)
+        assertTrue(csv.contains("North Bus"))
+        assertTrue(csv.contains("UP-61-B-1111"))
+        assertTrue(csv.contains("450"))
+        assertTrue(csv.contains("550"))
     }
 }

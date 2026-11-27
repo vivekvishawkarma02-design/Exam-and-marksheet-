@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.StudentEntity
+import com.example.domain.FeeMessageType
 import com.example.domain.Phase9AccessEvaluator
 
 @Composable
@@ -52,7 +53,12 @@ fun Phase9FeeManagementScreen(
     viewModel: SchoolViewModel,
     initialTab: Int = 0,
     preselectedStudent: StudentEntity? = null,
+    initialQueueMessageType: FeeMessageType? = null,
+    initialQueueMonthFilter: String? = null,
+    initialQueueRouteIdFilter: String? = null,
+    onQueueJumpConsumed: () -> Unit = {},
     onOpenStudentRegister: () -> Unit = {},
+    onOpenTransport: () -> Unit = {},
     onBack: () -> Unit
 ) {
     BackHandler(onBack = onBack)
@@ -228,7 +234,9 @@ fun Phase9FeeManagementScreen(
         when (selectedTab) {
             0 -> Phase9FeeCollectAndAccountTab(
                 viewModel = viewModel,
-                preselectedStudent = preselectedStudent
+                preselectedStudent = preselectedStudent,
+                onOpenStudentRegister = onOpenStudentRegister,
+                onOpenTransport = onOpenTransport
             )
             1 -> Phase9FeeStructureTab(
                 viewModel = viewModel
@@ -237,7 +245,11 @@ fun Phase9FeeManagementScreen(
                 viewModel = viewModel
             )
             3 -> Phase9SendQueueAndNoticesTab(
-                viewModel = viewModel
+                viewModel = viewModel,
+                initialMessageType = initialQueueMessageType,
+                initialMonthFilter = initialQueueMonthFilter,
+                initialRouteIdFilter = initialQueueRouteIdFilter,
+                onJumpConsumed = onQueueJumpConsumed
             )
         }
     }

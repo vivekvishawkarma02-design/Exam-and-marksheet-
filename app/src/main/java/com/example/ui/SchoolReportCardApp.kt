@@ -119,6 +119,8 @@ object AppRoutes {
     const val ROUTE_RESULT_ANALYSIS = "result_analysis"
     const val ROUTE_CLASS_DIARY = "phase18_class_diary"
     const val ROUTE_BIRTHDAYS = "phase18_birthdays"
+    const val ROUTE_STUDENT_REMARKS = "phase19_student_remarks"
+    const val ROUTE_GATE_PASS = "phase19_gate_pass"
 }
 
 private enum class OnboardingSubScreen {
@@ -511,6 +513,10 @@ private fun OrganisationWorkspace(
     var attendanceJumpTab by remember { mutableStateOf<Int?>(null) }
     var feeJumpInitialTab by remember { mutableStateOf(0) }
     var feeJumpPreselectedStudent by remember { mutableStateOf<com.example.data.StudentEntity?>(null) }
+    var feeJumpQueueMessageType by remember { mutableStateOf<com.example.domain.FeeMessageType?>(null) }
+    var feeJumpQueueMonthFilter by remember { mutableStateOf<String?>(null) }
+    var feeJumpQueueRouteId by remember { mutableStateOf<String?>(null) }
+    var transportJumpTab by remember { mutableStateOf<Int?>(null) }
     var certificateJumpStudentId by remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(Unit) {
@@ -852,6 +858,13 @@ private fun OrganisationWorkspace(
                                     },
                                     onNavigateToTransport = {
                                         if (uiState.canViewTransport) {
+                                            transportJumpTab = 0
+                                            navController.navigate(AppRoutes.ROUTE_TRANSPORT) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToTransportVehiclesDocs = {
+                                        if (uiState.canViewTransport) {
+                                            transportJumpTab = 3
                                             navController.navigate(AppRoutes.ROUTE_TRANSPORT) { launchSingleTop = true }
                                         }
                                     },
@@ -888,6 +901,16 @@ private fun OrganisationWorkspace(
                                     onNavigateToBirthdays = {
                                         if (uiState.canViewBirthdays) {
                                             navController.navigate(AppRoutes.ROUTE_BIRTHDAYS) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToStudentRemarks = {
+                                        if (uiState.canOpenStudentRemarksModule) {
+                                            navController.navigate(AppRoutes.ROUTE_STUDENT_REMARKS) { launchSingleTop = true }
+                                        }
+                                    },
+                                    onNavigateToGatePass = {
+                                        if (uiState.canViewGateModule) {
+                                            navController.navigate(AppRoutes.ROUTE_GATE_PASS) { launchSingleTop = true }
                                         }
                                     },
                                     onPrintOwnSalarySlip = { slip, pageSize ->
@@ -1211,6 +1234,12 @@ private fun OrganisationWorkspace(
                                                 certificateJumpStudentId = student.id
                                                 navController.navigate(AppRoutes.ROUTE_CERTIFICATES) { launchSingleTop = true }
                                             }
+                                        },
+                                        onNavigateToTransport = {
+                                            if (uiState.canViewTransport) {
+                                                transportJumpTab = 0
+                                                navController.navigate(AppRoutes.ROUTE_TRANSPORT) { launchSingleTop = true }
+                                            }
                                         }
                                     )
                                 } else {
@@ -1226,9 +1255,23 @@ private fun OrganisationWorkspace(
                                         viewModel = viewModel,
                                         initialTab = feeJumpInitialTab,
                                         preselectedStudent = feeJumpPreselectedStudent,
+                                        initialQueueMessageType = feeJumpQueueMessageType,
+                                        initialQueueMonthFilter = feeJumpQueueMonthFilter,
+                                        initialQueueRouteIdFilter = feeJumpQueueRouteId,
+                                        onQueueJumpConsumed = {
+                                            feeJumpQueueMessageType = null
+                                            feeJumpQueueMonthFilter = null
+                                            feeJumpQueueRouteId = null
+                                        },
                                         onOpenStudentRegister = {
                                             if (uiState.canViewStudentRegister) {
                                                 navController.navigate(AppRoutes.ROUTE_STUDENT_REGISTER) { launchSingleTop = true }
+                                            }
+                                        },
+                                        onOpenTransport = {
+                                            if (uiState.canViewTransport) {
+                                                transportJumpTab = 0
+                                                navController.navigate(AppRoutes.ROUTE_TRANSPORT) { launchSingleTop = true }
                                             }
                                         },
                                         onBack = { navController.popBackStack() }
@@ -1317,6 +1360,17 @@ private fun OrganisationWorkspace(
                                     Phase11TransportScreen(
                                         uiState = uiState,
                                         viewModel = viewModel,
+                                        initialTab = transportJumpTab,
+                                        onJumpConsumed = { transportJumpTab = null },
+                                        onOpenSendQueueForTransportDues = { monthCode, routeId ->
+                                            if (uiState.canViewFees) {
+                                                feeJumpInitialTab = 3
+                                                feeJumpQueueMessageType = com.example.domain.FeeMessageType.TRANSPORT_DUE_REMINDER
+                                                feeJumpQueueMonthFilter = monthCode
+                                                feeJumpQueueRouteId = routeId
+                                                navController.navigate(AppRoutes.ROUTE_FEE_MANAGEMENT) { launchSingleTop = true }
+                                            }
+                                        },
                                         onBack = { navController.popBackStack() }
                                     )
                                 } else {
@@ -1412,6 +1466,32 @@ private fun OrganisationWorkspace(
                             composable(AppRoutes.ROUTE_BIRTHDAYS) {
                                 if (uiState.canViewBirthdays) {
                                     Phase18BirthdaysScreen(
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_STUDENT_REMARKS) {
+                                if (uiState.canOpenStudentRemarksModule) {
+                                    Phase19RemarksAndPtmScreen(
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_GATE_PASS) {
+                                if (uiState.canViewGateModule) {
+                                    Phase19GateAndVisitorScreen(
                                         viewModel = viewModel,
                                         onBack = { navController.popBackStack() }
                                     )

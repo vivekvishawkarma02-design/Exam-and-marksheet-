@@ -193,12 +193,14 @@ data class OptionalFeeCatalogueItem(
 data class FeeMessageTemplates(
     val feeDueTemplate: String = DEFAULT_FEE_DUE_TEMPLATE,
     val feeReceiptTemplate: String = DEFAULT_FEE_RECEIPT_TEMPLATE,
-    val generalTemplate: String = DEFAULT_GENERAL_TEMPLATE
+    val generalTemplate: String = DEFAULT_GENERAL_TEMPLATE,
+    val transportDueTemplate: String = DEFAULT_TRANSPORT_DUE_TEMPLATE
 ) {
     fun toMap(): Map<String, Any> = mapOf(
         "feeDueTemplate" to feeDueTemplate.trim().ifBlank { DEFAULT_FEE_DUE_TEMPLATE }.take(500),
         "feeReceiptTemplate" to feeReceiptTemplate.trim().ifBlank { DEFAULT_FEE_RECEIPT_TEMPLATE }.take(500),
-        "generalTemplate" to generalTemplate.trim().ifBlank { DEFAULT_GENERAL_TEMPLATE }.take(500)
+        "generalTemplate" to generalTemplate.trim().ifBlank { DEFAULT_GENERAL_TEMPLATE }.take(500),
+        "transportDueTemplate" to transportDueTemplate.trim().ifBlank { DEFAULT_TRANSPORT_DUE_TEMPLATE }.take(500)
     )
 
     companion object {
@@ -208,13 +210,16 @@ data class FeeMessageTemplates(
             "Dear {guardian}, received Rs. {amount} for {student} (Class {class}) towards {months} at {school}. Thank you."
         const val DEFAULT_GENERAL_TEMPLATE =
             "Dear {guardian}, important update for {student} (Class {class}) from {school}."
+        const val DEFAULT_TRANSPORT_DUE_TEMPLATE =
+            "Dear {guardian}, school transport fee of Rs. {amount} for {student} (Class {class}) for {months} is due at {school}. Kindly clear at the earliest."
 
         fun fromMap(raw: Map<*, *>?): FeeMessageTemplates {
             if (raw == null) return FeeMessageTemplates()
             return FeeMessageTemplates(
                 feeDueTemplate = (raw["feeDueTemplate"] as? String)?.trim().orEmpty().ifBlank { DEFAULT_FEE_DUE_TEMPLATE },
                 feeReceiptTemplate = (raw["feeReceiptTemplate"] as? String)?.trim().orEmpty().ifBlank { DEFAULT_FEE_RECEIPT_TEMPLATE },
-                generalTemplate = (raw["generalTemplate"] as? String)?.trim().orEmpty().ifBlank { DEFAULT_GENERAL_TEMPLATE }
+                generalTemplate = (raw["generalTemplate"] as? String)?.trim().orEmpty().ifBlank { DEFAULT_GENERAL_TEMPLATE },
+                transportDueTemplate = (raw["transportDueTemplate"] as? String)?.trim().orEmpty().ifBlank { DEFAULT_TRANSPORT_DUE_TEMPLATE }
             )
         }
     }
@@ -830,7 +835,8 @@ data class StudentFeeAccountSummary(
     val dueMonthsList: List<String>,
     val receipts: List<FeeReceiptRecord>,
     val activeOverride: StudentFeeOverride?,
-    val previousSessionDueCell: StudentFeeGridCell? = null
+    val previousSessionDueCell: StudentFeeGridCell? = null,
+    val transportWarnings: List<TransportStudentAttentionFlag> = emptyList()
 )
 
 data class SelectedOptionalSaleDraft(
@@ -935,7 +941,8 @@ sealed interface PhoneValidationResult {
 enum class FeeMessageType(val wireValue: String, val label: String) {
     FEE_DUE_REMINDER("FEE_DUE_REMINDER", "Fee Due Reminder"),
     FEE_RECEIPT("FEE_RECEIPT", "Fee Receipt Text"),
-    GENERAL("GENERAL", "General Message");
+    GENERAL("GENERAL", "General Message"),
+    TRANSPORT_DUE_REMINDER("TRANSPORT_DUE_REMINDER", "Transport Due Reminder");
 
     companion object {
         fun fromRaw(raw: String?): FeeMessageType =
@@ -1275,7 +1282,8 @@ object FeeCollectionEngine {
         student: StudentEntity,
         studentDocId: String,
         override: StudentFeeOverride?,
-        receiptsForStudent: List<FeeReceiptRecord>
+        receiptsForStudent: List<FeeReceiptRecord>,
+        routes: List<TransportRouteRecord> = emptyList()
     ): StudentFeeAccountSummary {
         val activeReceipts = receiptsForStudent.filter {
             it.schoolId == structure.schoolId &&
@@ -1296,12 +1304,66 @@ object FeeCollectionEngine {
         }
 
         val orderedMonths = structure.monthOrder.ifEmpty { SessionMonthCode.defaultAprilToMarchOrder }
-        val usesTransport = student.usesTransport && (
-            student.transportMonthlyAmount > 0 ||
-                override?.cellOverrides?.keys?.any { it.endsWith("|${FeeHeadType.TRANSPORT.key}") } == true
-            )
+        val hasExistingTransportSettlements = paidByCellKey.entries.any {
+            it.key.endsWith("|${FeeHeadType.TRANSPORT.key}") && it.value > 0
+        } || concByCellKey.entries.any {
+            it.key.endsWith("|${FeeHeadType.TRANSPORT.key}") && it.value > 0
+        }
+        val hasTransportOverrides = override?.cellOverrides?.keys?.any {
+            it.endsWith("|${FeeHeadType.TRANSPORT.key}")
+        } == true
 
-        val monthRows = orderedMonths.map { mCode ->
+        // Never silently hide Transport column when student.usesTransport is true (even if route is missing or fee == 0).
+        // For non-transport students (usesTransport == false), show Transport column ONLY if historical settled cells exist.
+        val showTransportColumn = student.usesTransport || hasExistingTransportSettlements || hasTransportOverrides
+
+        val firstChargedTransport = TransportEngine.firstChargedTransportMonth(structure)
+        val startIdx = if (student.transportStartMonth.isNotBlank()) {
+            orderedMonths.indexOfFirst { it.equals(student.transportStartMonth.trim(), ignoreCase = true) }
+                .takeIf { it >= 0 }
+                ?: orderedMonths.indexOfFirst { it.equals(firstChargedTransport, ignoreCase = true) }.coerceAtLeast(0)
+        } else {
+            orderedMonths.indexOfFirst { it.equals(firstChargedTransport, ignoreCase = true) }.coerceAtLeast(0)
+        }
+        val endIdx = if (student.transportEndMonth.isNotBlank()) {
+            orderedMonths.indexOfFirst { it.equals(student.transportEndMonth.trim(), ignoreCase = true) }
+                .takeIf { it >= startIdx }
+                ?: (orderedMonths.size - 1)
+        } else {
+            orderedMonths.size - 1
+        }
+        val effectiveFromIdx = if (student.transportFeeEffectiveFromMonth.isNotBlank()) {
+            orderedMonths.indexOfFirst { it.equals(student.transportFeeEffectiveFromMonth.trim(), ignoreCase = true) }
+        } else -1
+
+        val resolvedRoute = if (student.usesTransport) TransportEngine.resolveRoute(student, routes) else null
+        val stopMissing = if (student.usesTransport && resolvedRoute != null) {
+            TransportEngine.isStopMissing(student, resolvedRoute)
+        } else false
+        val transportWarnings = if (student.usesTransport) {
+            buildList {
+                val hasNoRoute = if (routes.isNotEmpty()) {
+                    resolvedRoute == null && student.transportRouteName.isBlank()
+                } else {
+                    student.transportRouteId.isBlank() && student.transportRouteName.isBlank()
+                }
+                val hasUnlinkedMissingRoute = routes.isNotEmpty() && resolvedRoute == null && student.transportRouteId.isNotBlank()
+                if (hasNoRoute || hasUnlinkedMissingRoute || (routes.isNotEmpty() && resolvedRoute == null)) {
+                    add(TransportStudentAttentionFlag.NO_ROUTE)
+                }
+                if (student.transportStartMonth.isBlank()) {
+                    add(TransportStudentAttentionFlag.NO_START_MONTH)
+                }
+                if (student.transportMonthlyAmount <= 0 && !hasTransportOverrides) {
+                    add(TransportStudentAttentionFlag.ZERO_AMOUNT)
+                }
+                if (stopMissing) {
+                    add(TransportStudentAttentionFlag.STOP_NEEDS_UPDATE)
+                }
+            }.distinct()
+        } else emptyList()
+
+        val monthRows = orderedMonths.mapIndexed { mIdx, mCode ->
             val monthUpper = mCode.uppercase(Locale.US)
             val tuitionCell = buildGridCell(
                 structure = structure,
@@ -1312,7 +1374,13 @@ object FeeCollectionEngine {
                 paidByCellKey = paidByCellKey,
                 concByCellKey = concByCellKey
             )
-            val transportCell = if (usesTransport) {
+            val inTransportWindow = student.usesTransport && (mIdx in startIdx..endIdx)
+            val scheduledTransportAmountForMonth = when {
+                !inTransportWindow -> 0
+                effectiveFromIdx >= 0 && mIdx < effectiveFromIdx -> student.transportPriorMonthlyAmount.coerceAtLeast(0)
+                else -> student.transportMonthlyAmount.coerceAtLeast(0)
+            }
+            val transportCell = if (showTransportColumn) {
                 buildGridCell(
                     structure = structure,
                     student = student,
@@ -1320,7 +1388,9 @@ object FeeCollectionEngine {
                     monthCode = monthUpper,
                     headType = FeeHeadType.TRANSPORT,
                     paidByCellKey = paidByCellKey,
-                    concByCellKey = concByCellKey
+                    concByCellKey = concByCellKey,
+                    inTransportChargeWindow = inTransportWindow,
+                    resolvedTransportRateForMonth = scheduledTransportAmountForMonth
                 )
             } else null
 
@@ -1403,7 +1473,7 @@ object FeeCollectionEngine {
         return StudentFeeAccountSummary(
             studentDocId = studentDocId,
             student = student,
-            usesTransport = usesTransport,
+            usesTransport = showTransportColumn,
             monthRows = monthRows,
             allCells = allApplicableCells,
             totalScheduledFee = totalScheduled,
@@ -1413,7 +1483,8 @@ object FeeCollectionEngine {
             dueMonthsList = dueMonths,
             receipts = sortedReceipts,
             activeOverride = override,
-            previousSessionDueCell = previousDueCell
+            previousSessionDueCell = previousDueCell,
+            transportWarnings = transportWarnings
         )
     }
 
@@ -1424,7 +1495,9 @@ object FeeCollectionEngine {
         monthCode: String,
         headType: FeeHeadType,
         paidByCellKey: Map<String, Int>,
-        concByCellKey: Map<String, Int>
+        concByCellKey: Map<String, Int>,
+        inTransportChargeWindow: Boolean = student.usesTransport,
+        resolvedTransportRateForMonth: Int = student.transportMonthlyAmount.coerceAtLeast(0)
     ): StudentFeeGridCell {
         val cellKey = "$monthCode|${headType.key}"
         val paid = (paidByCellKey[cellKey] ?: 0).coerceAtLeast(0)
@@ -1433,7 +1506,7 @@ object FeeCollectionEngine {
 
         val isChargedMonth = when (headType) {
             FeeHeadType.TUITION -> structure.chargedTuitionMonths.any { it.equals(monthCode, ignoreCase = true) }
-            FeeHeadType.TRANSPORT -> student.usesTransport &&
+            FeeHeadType.TRANSPORT -> inTransportChargeWindow &&
                 structure.chargedTransportMonths.any { it.equals(monthCode, ignoreCase = true) }
             FeeHeadType.EXAM_UT1, FeeHeadType.EXAM_UT2, FeeHeadType.EXAM_HY, FeeHeadType.EXAM_YEARLY -> {
                 val cfg = structure.examFees.firstOrNull { it.examHeadKey.equals(headType.key, ignoreCase = true) }
@@ -1443,17 +1516,22 @@ object FeeCollectionEngine {
         }
 
         val overriddenAmount = override?.overrideFor(monthCode, headType)
-        val isOverridden = overriddenAmount != null && isChargedMonth
+        val isOverridden = (overriddenAmount != null && isChargedMonth) ||
+            (headType == FeeHeadType.TRANSPORT && isChargedMonth && student.transportFeeOverridden)
 
         val baseScheduled = when {
             !isChargedMonth -> 0
             overriddenAmount != null -> overriddenAmount.coerceAtLeast(0)
-            headType == FeeHeadType.TRANSPORT -> student.transportMonthlyAmount.coerceAtLeast(0)
+            headType == FeeHeadType.TRANSPORT -> resolvedTransportRateForMonth.coerceAtLeast(0)
             else -> structure.scheduledClassAmountForCell(student.className, monthCode, headType)
         }
 
-        // If a cell already had payment/concession recorded before a structure edit, scheduled is at least what was settled
-        val effectiveScheduled = if (settledSoFar > 0 && baseScheduled == 0) settledSoFar else baseScheduled
+        // Months already paid or partly paid are NEVER removed from the grid
+        val effectiveScheduled = if (settledSoFar > 0 && baseScheduled < settledSoFar) {
+            settledSoFar
+        } else {
+            baseScheduled
+        }
 
         if (effectiveScheduled <= 0 && settledSoFar <= 0) {
             return StudentFeeGridCell(
@@ -1485,7 +1563,11 @@ object FeeCollectionEngine {
             remainingDue = remaining,
             state = state,
             isOverriddenForStudent = isOverridden,
-            overrideRemark = if (isOverridden) override?.remark.orEmpty() else ""
+            overrideRemark = when {
+                overriddenAmount != null -> override?.remark.orEmpty()
+                headType == FeeHeadType.TRANSPORT && student.transportFeeOverridden -> student.transportOverrideRemark
+                else -> ""
+            }
         )
     }
 
@@ -2107,6 +2189,7 @@ object FeeReportsAndQueueEngine {
                 FeeMessageType.FEE_DUE_REMINDER -> templates.feeDueTemplate
                 FeeMessageType.FEE_RECEIPT -> templates.feeReceiptTemplate
                 FeeMessageType.GENERAL -> customGeneralText.ifBlank { templates.generalTemplate }
+                FeeMessageType.TRANSPORT_DUE_REMINDER -> templates.transportDueTemplate
             }
 
             val msgText = fillMessageTemplate(

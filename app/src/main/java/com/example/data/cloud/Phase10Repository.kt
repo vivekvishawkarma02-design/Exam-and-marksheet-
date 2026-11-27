@@ -453,7 +453,8 @@ class Phase10Repository(
             amount = finalEntry.amount,
             reason = finalEntry.note.ifBlank { finalEntry.category },
             summary = "${finalEntry.entryType.englishLabel} ₹${finalEntry.amount} • ${finalEntry.category} (${finalEntry.paymentMode.label})$approvalInfo",
-            actorName = finalEntry.createdByName
+            actorName = finalEntry.createdByName,
+            sourceModule = finalEntry.sourceModule
         )
         Result.success(finalEntry)
     } catch (e: Exception) {
@@ -474,7 +475,10 @@ class Phase10Repository(
         editorName: String,
         approvedByAdminUid: String = original.approvedByAdminUid,
         approvedByAdminName: String = original.approvedByAdminName,
-        approvalNote: String = original.approvalNote
+        approvalNote: String = original.approvalNote,
+        newTransportRouteId: String = original.transportRouteId,
+        newVehicleNumber: String = original.vehicleNumber,
+        newTransportCategory: String = original.transportCategory
     ): Result<Unit> = try {
         val uid = requireUid()
         val cleanReason = editReason.trim()
@@ -483,7 +487,7 @@ class Phase10Repository(
         val path = "organisations/$orgId/cashBookEntries/${original.id}"
         val docRef = db.collection("organisations").document(orgId)
             .collection("cashBookEntries").document(original.id)
-        val updates = mapOf<String, Any>(
+        val baseUpdates = mutableMapOf<String, Any>(
             "category" to newCategory.trim().take(80),
             "amount" to newAmount.coerceAtLeast(1).toLong(),
             "paymentMode" to newPaymentMode.wireValue,
@@ -498,6 +502,12 @@ class Phase10Repository(
             "clientEditedAtMs" to nowMs,
             "updatedAt" to FieldValue.serverTimestamp()
         )
+        if (original.isTransportExpense || newTransportRouteId.isNotBlank() || newVehicleNumber.isNotBlank() || newTransportCategory.isNotBlank()) {
+            baseUpdates["transportRouteId"] = newTransportRouteId.trim().take(128)
+            baseUpdates["vehicleNumber"] = newVehicleNumber.trim().take(40)
+            baseUpdates["transportCategory"] = newTransportCategory.trim().take(80)
+        }
+        val updates: Map<String, Any> = baseUpdates
         val exec = { attachSyncListeners(docRef.update(updates), OperationType.UPDATE, path) }
         attachSyncListeners(docRef.update(updates), OperationType.UPDATE, path, exec)
 
@@ -510,7 +520,8 @@ class Phase10Repository(
             amount = newAmount,
             reason = cleanReason,
             summary = "Edited ${original.category} ₹${original.amount} → $newCategory ₹$newAmount (${newPaymentMode.label})",
-            actorName = editorName
+            actorName = editorName,
+            sourceModule = original.sourceModule
         )
         Result.success(Unit)
     } catch (e: Exception) {
@@ -555,7 +566,8 @@ class Phase10Repository(
             amount = original.amount,
             reason = cleanReason,
             summary = "Cancelled ${original.entryType.englishLabel} ₹${original.amount} (${original.category})",
-            actorName = actorName
+            actorName = actorName,
+            sourceModule = original.sourceModule
         )
         Result.success(Unit)
     } catch (e: Exception) {
@@ -611,7 +623,8 @@ class Phase10Repository(
         amount: Int,
         reason: String,
         summary: String,
-        actorName: String
+        actorName: String,
+        sourceModule: String = ""
     ) {
         val uid = auth.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return
         val nowMs = System.currentTimeMillis()
@@ -627,7 +640,8 @@ class Phase10Repository(
             summary = summary,
             actorUid = uid,
             actorName = actorName.ifBlank { "Staff" },
-            clientCreatedAtMs = nowMs
+            clientCreatedAtMs = nowMs,
+            sourceModule = sourceModule
         )
         val path = "organisations/$orgId/cashBookAuditLogs/$logId"
         val payload = logRec.toFirestoreMap().toMutableMap().apply {

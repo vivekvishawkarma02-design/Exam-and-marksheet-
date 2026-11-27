@@ -633,7 +633,7 @@
         "section": { "type": "string" },
         "guardianName": { "type": "string" },
         "normalizedMobile": { "type": "string" },
-        "messageType": { "type": "string", "enum": ["FEE_DUE_REMINDER", "FEE_RECEIPT", "GENERAL"] },
+        "messageType": { "type": "string", "enum": ["FEE_DUE_REMINDER", "FEE_RECEIPT", "GENERAL", "TRANSPORT_DUE_REMINDER"] },
         "contextKey": { "type": "string" },
         "messageText": { "type": "string" },
         "channel": { "type": "string" },
@@ -969,7 +969,13 @@
       "description": "Append-only stock purchases (STOCK_IN) and reasoned manual adjustments (ADJUSTMENT) controlled by the 16th Stock module."
     },
     "/organisations/{orgId}/transportRoutes/{routeId}": {
-      "description": "School transport routes, vehicles, drivers, stops, and monthly fees controlled by the 17th Transport module."
+      "description": "School transport routes, vehicles (own/rented), drivers, conductors, trip-type fees, stops, and monthly fees controlled by the 17th Transport module."
+    },
+    "/organisations/{orgId}/transportVehicleDocuments/{docId}": {
+      "description": "Vehicle document expiry records (insurance, fitness, permit, PUC, road tax) with optional photo controlled by the 17th Transport module."
+    },
+    "/organisations/{orgId}/transportSettings/{settingId}": {
+      "description": "Per-school editable transport expense categories (Diesel, Repair, Tyre, Insurance, Driver Pay, Rent, Other) controlled by the 17th Transport module."
     },
     "/organisations/{orgId}/salaryRuleConfigs/{configId}": {
       "description": "Per-school attendance deduction rules, free leaves per month, half-day fraction, late penalty, and Owner-controlled allowTeachersToViewOwnSlips toggle controlled by the sensitive 18th Salary module."

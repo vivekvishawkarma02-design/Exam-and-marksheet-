@@ -2,6 +2,10 @@ package com.example.ui
 
 import androidx.lifecycle.viewModelScope
 import com.example.data.StudentEntity
+import com.example.data.cloud.OrgAcademicRepository
+import com.example.domain.CashBookEngine
+import com.example.domain.CashBookEntryRecord
+import com.example.domain.CashBookEntryType
 import com.example.domain.ExamCategoryType
 import com.example.domain.ExamInvigilatorDutyRecord
 import com.example.domain.ExamRoomRecord
@@ -11,6 +15,8 @@ import com.example.domain.ExamScheduleRecord
 import com.example.domain.ExamSeatingRecord
 import com.example.domain.FeeCollectionEngine
 import com.example.domain.OptionalFeeCatalogueItem
+import com.example.domain.PaymentMode
+import com.example.domain.Phase10AccessEvaluator
 import com.example.domain.Phase11AccessEvaluator
 import com.example.domain.Phase6DateUtils
 import com.example.domain.SeatingAllocationMode
@@ -18,10 +24,19 @@ import com.example.domain.StockEngine
 import com.example.domain.StockTransactionRecord
 import com.example.domain.StockTransactionType
 import com.example.domain.TeacherProfile
+import com.example.domain.TransportDuesSummary
 import com.example.domain.TransportEngine
+import com.example.domain.TransportFeeApplyPreviewRow
+import com.example.domain.TransportMigrationItem
+import com.example.domain.TransportMonthlyProfitLossReport
 import com.example.domain.TransportRouteRecord
 import com.example.domain.TransportRouteSummary
+import com.example.domain.TransportSettingsConfig
 import com.example.domain.TransportStop
+import com.example.domain.TransportTripType
+import com.example.domain.TransportVehicleDocumentRecord
+import com.example.domain.VehicleDocumentType
+import com.example.domain.VehicleOwnershipType
 import com.example.util.AdmitCardStudentItem
 import com.example.util.AdmitCardsPdfBundle
 import com.example.util.DutyListPdfBundle
@@ -29,6 +44,8 @@ import com.example.util.ExamTimetablePdfBundle
 import com.example.util.Phase11PdfGenerator
 import com.example.util.RoomSeatingPdfBundle
 import com.example.util.StockReportPdfBundle
+import com.example.util.TransportDuesPdfBundle
+import com.example.util.TransportMonthlySummaryPdfBundle
 import com.example.util.TransportRoutePdfBundle
 import com.example.util.friendlyFirestoreErrorMessage
 import kotlinx.coroutines.launch
@@ -452,7 +469,8 @@ fun SchoolViewModel.computeStudentFeeDuesMapForSchool(
                 student = st,
                 studentDocId = docId,
                 override = overridesByStudent[docId],
-                receiptsForStudent = receipts
+                receiptsForStudent = receipts,
+                routes = state.transportRoutes
             )
             result[docId] = ledger.totalRemainingDue.coerceAtLeast(0)
         }
@@ -655,8 +673,27 @@ fun SchoolViewModel.generateStockSummaryReportPdf() {
 }
 
 // =============================================================================
-// 3. TRANSPORT ROUTES ACTIONS
+// 3. TRANSPORT ROUTES, STUDENTS, DUES, DOCUMENTS, LINKED EXPENSES & REPORTS
 // =============================================================================
+
+private fun StudentEntity.toTransportPatch(studentDocId: String): OrgAcademicRepository.StudentTransportPatch =
+    OrgAcademicRepository.StudentTransportPatch(
+        studentDocId = studentDocId,
+        studentName = name,
+        usesTransport = usesTransport,
+        transportRouteId = transportRouteId,
+        transportRouteName = transportRouteName,
+        transportStopId = transportStopId,
+        transportStopName = transportStopName,
+        transportTripType = transportTripType,
+        transportMonthlyAmount = transportMonthlyAmount,
+        transportStartMonth = transportStartMonth,
+        transportEndMonth = transportEndMonth,
+        transportFeeOverridden = transportFeeOverridden,
+        transportOverrideRemark = transportOverrideRemark,
+        transportPriorMonthlyAmount = transportPriorMonthlyAmount,
+        transportFeeEffectiveFromMonth = transportFeeEffectiveFromMonth
+    )
 
 fun SchoolViewModel.saveTransportRouteRecord(
     existing: TransportRouteRecord?,
@@ -668,16 +705,27 @@ fun SchoolViewModel.saveTransportRouteRecord(
     driverPhone: String,
     monthlyFeeRs: Int,
     stops: List<TransportStop>,
+    pickupOnlyFeeRs: Int = existing?.pickupOnlyFeeRs ?: 0,
+    dropOnlyFeeRs: Int = existing?.dropOnlyFeeRs ?: 0,
+    vehicleOwnership: VehicleOwnershipType = existing?.vehicleOwnership ?: VehicleOwnershipType.OWN,
+    ownerContractorName: String = existing?.ownerContractorName.orEmpty(),
+    ownerContractorPhone: String = existing?.ownerContractorPhone.orEmpty(),
+    monthlyRentRs: Int = existing?.monthlyRentRs ?: 0,
+    driverLicenceNo: String = existing?.driverLicenceNo.orEmpty(),
+    driverLicenceExpiryIso: String = existing?.driverLicenceExpiryIso.orEmpty(),
+    conductorName: String = existing?.conductorName.orEmpty(),
+    conductorPhone: String = existing?.conductorPhone.orEmpty(),
+    active: Boolean = existing?.active ?: true,
     onResult: (Boolean, String?) -> Unit = { _, _ -> }
 ) {
     val state = uiState.value
     val schoolDocId = state.activeSchoolDocId
     if (schoolDocId.isBlank()) {
-        onResult(false, "Active school not found.")
+        onResult(false, "Active school not found. Please select a school first.")
         return
     }
     if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport) {
-        onResult(false, "View-only access: Transport Edit permission required.")
+        onResult(false, "View-only access: Ask Admin for Transport Edit permission to save routes.")
         return
     }
     if (routeName.trim().isEmpty()) {
@@ -685,6 +733,7 @@ fun SchoolViewModel.saveTransportRouteRecord(
         return
     }
     val actorName = state.currentMember?.name?.ifBlank { state.currentMember.email } ?: "Staff"
+    val cleanOwnership = vehicleOwnership
     val rec = TransportRouteRecord(
         id = existing?.id.orEmpty(),
         schoolId = schoolDocId,
@@ -695,8 +744,18 @@ fun SchoolViewModel.saveTransportRouteRecord(
         driverName = driverName.trim(),
         driverPhone = driverPhone.trim(),
         monthlyFeeRs = monthlyFeeRs.coerceAtLeast(0),
+        pickupOnlyFeeRs = pickupOnlyFeeRs.coerceAtLeast(0),
+        dropOnlyFeeRs = dropOnlyFeeRs.coerceAtLeast(0),
+        vehicleOwnership = cleanOwnership,
+        ownerContractorName = if (cleanOwnership == VehicleOwnershipType.RENTED) ownerContractorName.trim() else "",
+        ownerContractorPhone = if (cleanOwnership == VehicleOwnershipType.RENTED) ownerContractorPhone.trim() else "",
+        monthlyRentRs = if (cleanOwnership == VehicleOwnershipType.RENTED) monthlyRentRs.coerceAtLeast(0) else 0,
+        driverLicenceNo = driverLicenceNo.trim(),
+        driverLicenceExpiryIso = driverLicenceExpiryIso.trim(),
+        conductorName = conductorName.trim(),
+        conductorPhone = conductorPhone.trim(),
         stops = stops.filter { it.stopName.isNotBlank() },
-        active = true
+        active = active
     )
     viewModelScope.launch {
         phase11Repo.saveTransportRoute(orgId, rec, actorName)
@@ -705,21 +764,112 @@ fun SchoolViewModel.saveTransportRouteRecord(
                 onResult(true, null)
             }
             .onFailure { e ->
-                onResult(false, friendlyFirestoreErrorMessage(e, "Unable to save transport route."))
+                onResult(false, friendlyFirestoreErrorMessage(e, "Unable to save transport route. Check internet and try again."))
             }
     }
 }
 
-fun SchoolViewModel.deleteTransportRouteRecord(route: TransportRouteRecord) {
+fun SchoolViewModel.toggleTransportRouteActive(
+    route: TransportRouteRecord,
+    active: Boolean,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
     val state = uiState.value
     if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, route.schoolId) && !state.canEditTransport) {
-        emitMessage("Transport Edit permission required.")
+        onResult(false, "Transport Edit permission required to change route status.")
+        return
+    }
+    val actorName = state.currentMember?.name?.ifBlank { state.currentMember.email } ?: "Staff"
+    viewModelScope.launch {
+        phase11Repo.saveTransportRoute(orgId, route.copy(active = active), actorName)
+            .onSuccess {
+                emitMessage(if (active) "Activated '${route.routeName}'" else "Deactivated '${route.routeName}'")
+                onResult(true, null)
+            }
+            .onFailure { e ->
+                onResult(false, friendlyFirestoreErrorMessage(e, "Unable to update route status."))
+            }
+    }
+}
+
+fun SchoolViewModel.deleteTransportRouteRecord(
+    route: TransportRouteRecord,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, route.schoolId) && !state.canEditTransport) {
+        val msg = "Transport Edit permission required to delete a route."
+        emitMessage(msg)
+        onResult(false, msg)
+        return
+    }
+    val check = TransportEngine.checkRouteDeletion(route, state.sessionStudents)
+    if (!check.canDeleteDirectly) {
+        val msg = "Cannot delete '${route.routeName}': ${check.assignedCount} students are assigned. Move all students or deactivate instead."
+        emitMessage(msg)
+        onResult(false, msg)
         return
     }
     viewModelScope.launch {
         phase11Repo.deleteTransportRoute(orgId, route.schoolId, route.id, route.routeName)
-            .onSuccess { emitMessage("Deleted route '${route.routeName}'") }
-            .onFailure { e -> emitMessage(friendlyFirestoreErrorMessage(e, "Unable to delete route.")) }
+            .onSuccess {
+                emitMessage("Deleted route '${route.routeName}'")
+                onResult(true, null)
+            }
+            .onFailure { e ->
+                val msg = friendlyFirestoreErrorMessage(e, "Unable to delete route.")
+                emitMessage(msg)
+                onResult(false, msg)
+            }
+    }
+}
+
+fun SchoolViewModel.moveAllStudentsFromRoute(
+    sourceRoute: TransportRouteRecord,
+    targetRoute: TransportRouteRecord,
+    stopName: String = "",
+    preserveOverriddenFees: Boolean = true,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val schoolDocId = sourceRoute.schoolId.ifBlank { state.activeSchoolDocId }
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport) {
+        onResult(false, "Transport Edit permission required.")
+        return
+    }
+    if (sourceRoute.id == targetRoute.id) {
+        onResult(false, "Choose a different destination route.")
+        return
+    }
+    val assigned = TransportEngine.checkRouteDeletion(sourceRoute, state.sessionStudents).assignedStudents
+    if (assigned.isEmpty()) {
+        onResult(false, "No active students on '${sourceRoute.routeName}'.")
+        return
+    }
+    val patches = assigned.mapNotNull { st ->
+        val docId = state.studentDocIdFor(st.id)
+        if (docId.isBlank()) return@mapNotNull null
+        val updated = TransportEngine.assignStudentToRoute(
+            student = st,
+            route = targetRoute,
+            stopName = stopName.ifBlank { st.transportStopName },
+            preserveExistingAmountIfPositive = preserveOverriddenFees && st.transportFeeOverridden
+        )
+        updated.toTransportPatch(docId)
+    }
+    viewModelScope.launch {
+        academicRepo.batchUpdateStudentTransportFields(
+            orgId = orgId,
+            schoolDocId = schoolDocId,
+            patches = patches,
+            auditAction = "TRANSPORT_ROUTE_BULK_MOVE",
+            auditSummary = "Moved ${patches.size} students from '${sourceRoute.routeName}' to '${targetRoute.routeName}'"
+        ).onSuccess { count ->
+            emitMessage("Moved $count students to '${targetRoute.routeName}'")
+            onResult(true, null)
+        }.onFailure { e ->
+            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to move students."))
+        }
     }
 }
 
@@ -729,6 +879,270 @@ fun SchoolViewModel.assignStudentToTransportRoute(
     stopName: String,
     preserveExistingAmountIfPositive: Boolean = true,
     explicitMonthlyFeeOverride: Int? = null,
+    stopId: String? = null,
+    tripType: TransportTripType = TransportTripType.fromRaw(student.transportTripType),
+    startMonth: String? = null,
+    endMonth: String? = null,
+    overrideRemark: String = "",
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val schoolDocId = state.schoolDocIdByLongId[student.schoolId] ?: state.activeSchoolDocId
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport && !state.canEditStudentRegister) {
+        onResult(false, "Transport or Student Register Edit permission required.")
+        return
+    }
+    val studentDocId = state.studentDocIdFor(student.id)
+    if (studentDocId.isBlank()) {
+        onResult(false, "Student cloud record not synced yet. Try again in a moment.")
+        return
+    }
+    val updated = TransportEngine.assignStudentToRoute(
+        student = student,
+        route = route,
+        stopName = stopName,
+        preserveExistingAmountIfPositive = preserveExistingAmountIfPositive,
+        explicitMonthlyFeeOverride = explicitMonthlyFeeOverride,
+        stopId = stopId,
+        tripType = tripType,
+        startMonth = startMonth,
+        endMonth = endMonth,
+        overrideRemark = overrideRemark
+    )
+    viewModelScope.launch {
+        academicRepo.updateStudentTransportAssignment(
+            orgId = orgId,
+            schoolDocId = schoolDocId,
+            studentDocId = studentDocId,
+            studentName = student.name,
+            usesTransport = true,
+            transportRouteId = updated.transportRouteId,
+            transportRouteName = updated.transportRouteName,
+            transportStopName = updated.transportStopName,
+            transportMonthlyAmount = updated.transportMonthlyAmount,
+            transportStopId = updated.transportStopId,
+            transportTripType = updated.transportTripType,
+            transportStartMonth = updated.transportStartMonth,
+            transportEndMonth = updated.transportEndMonth,
+            transportFeeOverridden = updated.transportFeeOverridden,
+            transportOverrideRemark = updated.transportOverrideRemark,
+            transportPriorMonthlyAmount = updated.transportPriorMonthlyAmount,
+            transportFeeEffectiveFromMonth = updated.transportFeeEffectiveFromMonth
+        ).onSuccess {
+            emitMessage("Assigned ${student.name} to ${route.routeName} (₹${updated.transportMonthlyAmount}/mo)")
+            onResult(true, null)
+        }.onFailure { e ->
+            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to assign student to route."))
+        }
+    }
+}
+
+fun SchoolViewModel.bulkAssignOrMoveTransportStudents(
+    students: List<StudentEntity>,
+    route: TransportRouteRecord,
+    stop: TransportStop?,
+    tripType: TransportTripType,
+    startMonth: String,
+    endMonth: String = "",
+    keepCustomFeeOverrides: Boolean = true,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val schoolDocId = route.schoolId.ifBlank { state.activeSchoolDocId }
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport && !state.canEditStudentRegister) {
+        onResult(false, "Transport or Student Register Edit permission required.")
+        return
+    }
+    if (students.isEmpty()) {
+        onResult(false, "Select at least one student first.")
+        return
+    }
+    val patches = students.mapNotNull { st ->
+        val docId = state.studentDocIdFor(st.id)
+        if (docId.isBlank()) return@mapNotNull null
+        val updated = TransportEngine.assignStudentToRoute(
+            student = st,
+            route = route,
+            stopName = stop?.stopName.orEmpty(),
+            preserveExistingAmountIfPositive = keepCustomFeeOverrides && st.transportFeeOverridden,
+            stopId = stop?.stopId,
+            tripType = tripType,
+            startMonth = startMonth.ifBlank { st.transportStartMonth },
+            endMonth = endMonth
+        )
+        updated.toTransportPatch(docId)
+    }
+    viewModelScope.launch {
+        academicRepo.batchUpdateStudentTransportFields(
+            orgId = orgId,
+            schoolDocId = schoolDocId,
+            patches = patches,
+            auditAction = "TRANSPORT_STUDENTS_BULK_ASSIGNED",
+            auditSummary = "Assigned/moved ${patches.size} students to '${route.routeName}' (${stop?.stopName ?: "Route fee"}, ${tripType.labelEn})"
+        ).onSuccess { count ->
+            emitMessage("Updated $count students on '${route.routeName}'")
+            onResult(true, null)
+        }.onFailure { e ->
+            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to update selected students."))
+        }
+    }
+}
+
+fun SchoolViewModel.bulkChangeStudentTripType(
+    students: List<StudentEntity>,
+    tripType: TransportTripType,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val schoolDocId = state.activeSchoolDocId
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport && !state.canEditStudentRegister) {
+        onResult(false, "Transport Edit permission required.")
+        return
+    }
+    val patches = students.mapNotNull { st ->
+        val docId = state.studentDocIdFor(st.id)
+        if (docId.isBlank()) return@mapNotNull null
+        TransportEngine.changeStudentTripType(st, tripType, state.transportRoutes).toTransportPatch(docId)
+    }
+    viewModelScope.launch {
+        academicRepo.batchUpdateStudentTransportFields(
+            orgId = orgId,
+            schoolDocId = schoolDocId,
+            patches = patches,
+            auditAction = "TRANSPORT_BULK_TRIP_TYPE",
+            auditSummary = "Changed trip type to ${tripType.labelEn} for ${patches.size} students"
+        ).onSuccess { count ->
+            emitMessage("Updated trip type (${tripType.labelEn}) for $count students")
+            onResult(true, null)
+        }.onFailure { e ->
+            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to update trip types."))
+        }
+    }
+}
+
+fun SchoolViewModel.bulkSetStudentTransportMonths(
+    students: List<StudentEntity>,
+    startMonth: String,
+    endMonth: String,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val schoolDocId = state.activeSchoolDocId
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport && !state.canEditStudentRegister) {
+        onResult(false, "Transport Edit permission required.")
+        return
+    }
+    val cleanStart = startMonth.trim().uppercase()
+    if (cleanStart.isEmpty()) {
+        onResult(false, "Please choose a start month.")
+        return
+    }
+    val cleanEnd = endMonth.trim().uppercase()
+    val patches = students.mapNotNull { st ->
+        val docId = state.studentDocIdFor(st.id)
+        if (docId.isBlank()) return@mapNotNull null
+        st.copy(usesTransport = true, transportStartMonth = cleanStart, transportEndMonth = cleanEnd).toTransportPatch(docId)
+    }
+    viewModelScope.launch {
+        academicRepo.batchUpdateStudentTransportFields(
+            orgId = orgId,
+            schoolDocId = schoolDocId,
+            patches = patches,
+            auditAction = "TRANSPORT_BULK_MONTHS",
+            auditSummary = "Set start=$cleanStart${if (cleanEnd.isNotBlank()) ", end=$cleanEnd" else ""} for ${patches.size} students"
+        ).onSuccess { count ->
+            emitMessage("Updated transport months for $count students")
+            onResult(true, null)
+        }.onFailure { e ->
+            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to update transport months."))
+        }
+    }
+}
+
+fun SchoolViewModel.bulkRemoveStudentsFromTransport(
+    students: List<StudentEntity>,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val schoolDocId = state.activeSchoolDocId
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport && !state.canEditStudentRegister) {
+        onResult(false, "Transport Edit permission required.")
+        return
+    }
+    val patches = students.mapNotNull { st ->
+        val docId = state.studentDocIdFor(st.id)
+        if (docId.isBlank()) return@mapNotNull null
+        TransportEngine.removeStudentFromRoute(st).toTransportPatch(docId)
+    }
+    viewModelScope.launch {
+        academicRepo.batchUpdateStudentTransportFields(
+            orgId = orgId,
+            schoolDocId = schoolDocId,
+            patches = patches,
+            auditAction = "TRANSPORT_BULK_REMOVED",
+            auditSummary = "Removed ${patches.size} students from school transport"
+        ).onSuccess { count ->
+            emitMessage("Removed $count students from transport")
+            onResult(true, null)
+        }.onFailure { e ->
+            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to remove students from transport."))
+        }
+    }
+}
+
+fun SchoolViewModel.overrideStudentTransportFee(
+    student: StudentEntity,
+    newMonthlyAmountRs: Int,
+    remark: String,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val cleanRemark = remark.trim()
+    if (cleanRemark.isEmpty()) {
+        onResult(false, "Remark is mandatory when overriding a student's transport fee.")
+        return
+    }
+    val state = uiState.value
+    val schoolDocId = state.schoolDocIdByLongId[student.schoolId] ?: state.activeSchoolDocId
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport && !state.canEditStudentRegister) {
+        onResult(false, "Transport or Student Register Edit permission required.")
+        return
+    }
+    val studentDocId = state.studentDocIdFor(student.id)
+    if (studentDocId.isBlank()) {
+        onResult(false, "Student cloud record not found.")
+        return
+    }
+    val updated = TransportEngine.overrideStudentFee(student, newMonthlyAmountRs, cleanRemark)
+    viewModelScope.launch {
+        academicRepo.updateStudentTransportAssignment(
+            orgId = orgId,
+            schoolDocId = schoolDocId,
+            studentDocId = studentDocId,
+            studentName = student.name,
+            usesTransport = updated.usesTransport,
+            transportRouteId = updated.transportRouteId,
+            transportRouteName = updated.transportRouteName,
+            transportStopName = updated.transportStopName,
+            transportMonthlyAmount = updated.transportMonthlyAmount,
+            transportStopId = updated.transportStopId,
+            transportTripType = updated.transportTripType,
+            transportStartMonth = updated.transportStartMonth,
+            transportEndMonth = updated.transportEndMonth,
+            transportFeeOverridden = true,
+            transportOverrideRemark = cleanRemark,
+            customAuditAction = "TRANSPORT_FEE_OVERRIDDEN",
+            customAuditSummary = "Overrode transport fee for '${student.name}' to ₹${updated.transportMonthlyAmount}/mo ($cleanRemark)"
+        ).onSuccess {
+            emitMessage("Overrode transport fee for ${student.name} (₹${updated.transportMonthlyAmount}/mo)")
+            onResult(true, null)
+        }.onFailure { e ->
+            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to save transport fee override."))
+        }
+    }
+}
+
+fun SchoolViewModel.resetStudentTransportFeeToRoute(
+    student: StudentEntity,
     onResult: (Boolean, String?) -> Unit = { _, _ -> }
 ) {
     val state = uiState.value
@@ -742,29 +1156,110 @@ fun SchoolViewModel.assignStudentToTransportRoute(
         onResult(false, "Student cloud record not found.")
         return
     }
-    val updated = TransportEngine.assignStudentToRoute(
-        student = student,
-        route = route,
-        stopName = stopName,
-        preserveExistingAmountIfPositive = preserveExistingAmountIfPositive,
-        explicitMonthlyFeeOverride = explicitMonthlyFeeOverride
-    )
+    val updated = TransportEngine.resetStudentFeeToRoute(student, state.transportRoutes)
     viewModelScope.launch {
         academicRepo.updateStudentTransportAssignment(
             orgId = orgId,
             schoolDocId = schoolDocId,
             studentDocId = studentDocId,
             studentName = student.name,
-            usesTransport = true,
+            usesTransport = updated.usesTransport,
             transportRouteId = updated.transportRouteId,
             transportRouteName = updated.transportRouteName,
             transportStopName = updated.transportStopName,
-            transportMonthlyAmount = updated.transportMonthlyAmount
+            transportMonthlyAmount = updated.transportMonthlyAmount,
+            transportStopId = updated.transportStopId,
+            transportTripType = updated.transportTripType,
+            transportStartMonth = updated.transportStartMonth,
+            transportEndMonth = updated.transportEndMonth,
+            transportFeeOverridden = false,
+            transportOverrideRemark = "",
+            customAuditAction = "TRANSPORT_FEE_RESET_TO_ROUTE",
+            customAuditSummary = "Reset transport fee for '${student.name}' to route rate ₹${updated.transportMonthlyAmount}/mo"
         ).onSuccess {
-            emitMessage("Assigned ${student.name} to ${updated.transportRouteName} (₹${updated.transportMonthlyAmount}/mo)")
+            emitMessage("Reset ${student.name} to route fee ₹${updated.transportMonthlyAmount}/mo")
             onResult(true, null)
         }.onFailure { e ->
-            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to assign student to route."))
+            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to reset fee to route amount."))
+        }
+    }
+}
+
+fun SchoolViewModel.applyLegacyTransportMigration(
+    items: List<TransportMigrationItem>,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val schoolDocId = state.activeSchoolDocId
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport) {
+        onResult(false, "Transport Edit permission required.")
+        return
+    }
+    if (items.isEmpty()) {
+        onResult(true, null)
+        return
+    }
+    val patches = items.mapNotNull { item ->
+        val docId = state.studentDocIdFor(item.student.id)
+        if (docId.isBlank()) return@mapNotNull null
+        item.student.toTransportPatch(docId)
+    }
+    viewModelScope.launch {
+        academicRepo.batchUpdateStudentTransportFields(
+            orgId = orgId,
+            schoolDocId = schoolDocId,
+            patches = patches,
+            auditAction = "TRANSPORT_LEGACY_MIGRATED",
+            auditSummary = "Assigned session start month (${items.first().assignedStartMonth}) to ${patches.size} legacy transport students"
+        ).onSuccess { count ->
+            emitMessage("Migrated $count students (start month set to ${items.first().assignedStartMonth})")
+            onResult(true, null)
+        }.onFailure { e ->
+            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to migrate students."))
+        }
+    }
+}
+
+fun SchoolViewModel.applyRouteFeeUpdateToStudents(
+    updatedRoute: TransportRouteRecord,
+    previewRows: List<TransportFeeApplyPreviewRow>,
+    effectiveFromMonth: String,
+    orderedSessionMonths: List<String>,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val schoolDocId = updatedRoute.schoolId.ifBlank { state.activeSchoolDocId }
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport) {
+        onResult(false, "Transport Edit permission required.")
+        return
+    }
+    val updatedStudents = TransportEngine.buildUpdatedStudentsForFeeChange(
+        previewRows = previewRows,
+        updatedRoute = updatedRoute,
+        effectiveFromMonth = effectiveFromMonth,
+        orderedSessionMonths = orderedSessionMonths
+    )
+    if (updatedStudents.isEmpty()) {
+        onResult(true, null)
+        return
+    }
+    val patches = updatedStudents.mapNotNull { st ->
+        val docId = state.studentDocIdFor(st.id)
+        if (docId.isBlank()) return@mapNotNull null
+        st.toTransportPatch(docId)
+    }
+    viewModelScope.launch {
+        academicRepo.batchUpdateStudentTransportFields(
+            orgId = orgId,
+            schoolDocId = schoolDocId,
+            patches = patches,
+            auditAction = "TRANSPORT_ROUTE_FEE_APPLIED",
+            auditSummary = "Applied '${updatedRoute.routeName}' updated fee to ${patches.size} non-overridden students from $effectiveFromMonth"
+        ).onSuccess { count ->
+            emitMessage("Applied updated fee to $count students from $effectiveFromMonth")
+            onResult(true, null)
+        }.onFailure { e ->
+            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to apply route fee update."))
         }
     }
 }
@@ -804,6 +1299,293 @@ fun SchoolViewModel.removeStudentFromTransportRoute(
     }
 }
 
+fun SchoolViewModel.saveTransportVehicleDocument(
+    existing: TransportVehicleDocumentRecord?,
+    route: TransportRouteRecord?,
+    vehicleNumber: String,
+    docType: VehicleDocumentType,
+    documentNumber: String,
+    expiryDateIso: String,
+    photoBase64: String,
+    note: String,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val schoolDocId = route?.schoolId ?: state.activeSchoolDocId
+    if (schoolDocId.isBlank()) {
+        onResult(false, "Active school not found.")
+        return
+    }
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport) {
+        onResult(false, "Transport Edit permission required to manage vehicle documents.")
+        return
+    }
+    val cleanExp = expiryDateIso.trim()
+    if (!Phase6DateUtils.isValidIsoDate(cleanExp)) {
+        onResult(false, "Please enter a valid expiry date (YYYY-MM-DD).")
+        return
+    }
+    val actorName = state.currentMember?.name?.ifBlank { state.currentMember.email } ?: "Staff"
+    val rec = TransportVehicleDocumentRecord(
+        id = existing?.id.orEmpty(),
+        schoolId = schoolDocId,
+        routeId = route?.id ?: existing?.routeId.orEmpty(),
+        vehicleNumber = vehicleNumber.trim().ifBlank { route?.vehicleNumber.orEmpty() },
+        docType = docType,
+        documentNumber = documentNumber.trim(),
+        expiryDateIso = cleanExp,
+        photoBase64 = photoBase64,
+        note = note.trim()
+    )
+    viewModelScope.launch {
+        phase11Repo.saveTransportVehicleDocument(orgId, rec, actorName)
+            .onSuccess {
+                emitMessage("Saved ${docType.labelEn} (exp $cleanExp)")
+                onResult(true, null)
+            }
+            .onFailure { e ->
+                onResult(false, friendlyFirestoreErrorMessage(e, "Unable to save vehicle document."))
+            }
+    }
+}
+
+fun SchoolViewModel.deleteTransportVehicleDocument(
+    doc: TransportVehicleDocumentRecord,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, doc.schoolId) && !state.canEditTransport) {
+        onResult(false, "Transport Edit permission required.")
+        return
+    }
+    viewModelScope.launch {
+        phase11Repo.deleteTransportVehicleDocument(orgId, doc.schoolId, doc.id, "${doc.docType.labelEn} (${doc.vehicleNumber})")
+            .onSuccess {
+                emitMessage("Removed vehicle document")
+                onResult(true, null)
+            }
+            .onFailure { e ->
+                onResult(false, friendlyFirestoreErrorMessage(e, "Unable to delete document."))
+            }
+    }
+}
+
+fun SchoolViewModel.saveTransportExpenseCategories(
+    categories: List<String>,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val schoolDocId = state.activeSchoolDocId
+    if (schoolDocId.isBlank()) {
+        onResult(false, "Active school not found.")
+        return
+    }
+    if (!Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) && !state.canEditTransport) {
+        onResult(false, "Transport Edit permission required.")
+        return
+    }
+    val actorName = state.currentMember?.name?.ifBlank { state.currentMember.email } ?: "Staff"
+    val cleanCats = categories.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        .ifEmpty { TransportSettingsConfig.DEFAULT_TRANSPORT_EXPENSE_CATEGORIES }
+    val cfg = state.transportSettingsForSchool(schoolDocId).copy(expenseCategories = cleanCats)
+    viewModelScope.launch {
+        phase11Repo.saveTransportSettings(orgId, cfg, actorName)
+            .onSuccess {
+                emitMessage("Saved ${cleanCats.size} transport expense categories")
+                onResult(true, null)
+            }
+            .onFailure { e ->
+                onResult(false, friendlyFirestoreErrorMessage(e, "Unable to save transport categories."))
+            }
+    }
+}
+
+fun SchoolViewModel.addTransportExpenseToCashBook(
+    dateIso: String,
+    route: TransportRouteRecord?,
+    vehicleNumber: String,
+    transportCategory: String,
+    amount: Int,
+    paymentMode: PaymentMode,
+    note: String,
+    billPhotoBase64: String,
+    approvedByAdminUid: String = "",
+    approvedByAdminName: String = "",
+    approvalNote: String = "",
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val schoolDocId = route?.schoolId ?: state.activeSchoolDocId
+    if (schoolDocId.isBlank()) {
+        onResult(false, "Active school not found.")
+        return
+    }
+    val canTransportEdit = Phase11AccessEvaluator.canEditTransport(state.accessProfile, schoolDocId) || state.canEditTransport
+    val canCashEdit = Phase10AccessEvaluator.canEditCashBook(state.accessProfile, schoolDocId) || state.canEditCashBook
+    if (!canTransportEdit && !canCashEdit) {
+        onResult(false, "Transport Edit or Cash Book Edit permission required to log vehicle expenses.")
+        return
+    }
+    val cleanCategory = transportCategory.trim()
+    if (cleanCategory.isEmpty()) {
+        onResult(false, "Please choose an expense category (e.g. Diesel, Repair).")
+        return
+    }
+    val settings = state.cashBookSettingsForSchool(schoolDocId)
+    val err = CashBookEngine.validateNewOrEditedEntry(
+        entryType = CashBookEntryType.EXPENSE,
+        category = "Transport - $cleanCategory",
+        amount = amount,
+        member = state.accessProfile,
+        approvalLimitRs = settings.expenseApprovalLimitRs,
+        approvedByAdminUid = approvedByAdminUid
+    )
+    if (err != null) {
+        onResult(false, err)
+        return
+    }
+    val actorName = state.currentMember?.name?.ifBlank { state.currentMember.email } ?: "Staff"
+    val nowMs = System.currentTimeMillis()
+    val cleanVeh = vehicleNumber.trim().ifBlank { route?.vehicleNumber.orEmpty() }
+    val vehTag = cleanVeh.ifBlank { route?.routeName.orEmpty() }
+    val enrichedNote = buildString {
+        if (vehTag.isNotBlank()) append("[$vehTag] ")
+        append(note.trim())
+    }.trim().take(300)
+
+    val entry = CashBookEntryRecord(
+        id = "",
+        schoolId = schoolDocId,
+        dateIso = dateIso.trim().takeIf { Phase6DateUtils.isValidIsoDate(it) } ?: Phase6DateUtils.todayIso(),
+        entryType = CashBookEntryType.EXPENSE,
+        category = "Transport - $cleanCategory",
+        amount = amount,
+        paymentMode = paymentMode,
+        note = enrichedNote,
+        billPhotoBase64 = billPhotoBase64,
+        approvedByAdminUid = approvedByAdminUid.trim(),
+        approvedByAdminName = approvedByAdminName.trim(),
+        approvalNote = approvalNote.trim(),
+        createdByUid = currentUserId,
+        createdByName = actorName,
+        createdAtMs = nowMs,
+        updatedByUid = currentUserId,
+        updatedByName = actorName,
+        clientEditedAtMs = nowMs,
+        sourceModule = "TRANSPORT",
+        transportRouteId = route?.id.orEmpty(),
+        vehicleNumber = cleanVeh,
+        transportCategory = cleanCategory
+    )
+    viewModelScope.launch {
+        phase10Repo.addCashBookEntry(orgId, entry)
+            .onSuccess {
+                emitMessage("Logged ₹$amount ($cleanCategory) into Cash Book")
+                onResult(true, null)
+            }
+            .onFailure { e ->
+                onResult(false, friendlyFirestoreErrorMessage(e, "Unable to log transport expense."))
+            }
+    }
+}
+
+fun SchoolViewModel.editTransportExpenseInCashBook(
+    original: CashBookEntryRecord,
+    route: TransportRouteRecord?,
+    vehicleNumber: String,
+    transportCategory: String,
+    newAmount: Int,
+    newPaymentMode: PaymentMode,
+    newNote: String,
+    newBillPhotoBase64: String,
+    editReason: String,
+    approvedByAdminUid: String = original.approvedByAdminUid,
+    approvedByAdminName: String = original.approvedByAdminName,
+    approvalNote: String = original.approvalNote,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val canTransportEdit = Phase11AccessEvaluator.canEditTransport(state.accessProfile, original.schoolId) || state.canEditTransport
+    val canCashEdit = Phase10AccessEvaluator.canEditCashBook(state.accessProfile, original.schoolId) || state.canEditCashBook
+    if (!canTransportEdit && !canCashEdit) {
+        onResult(false, "Transport Edit or Cash Book Edit permission required.")
+        return
+    }
+    val cleanCat = transportCategory.trim()
+    val settings = state.cashBookSettingsForSchool(original.schoolId)
+    val err = CashBookEngine.validateNewOrEditedEntry(
+        entryType = original.entryType,
+        category = "Transport - $cleanCat",
+        amount = newAmount,
+        member = state.accessProfile,
+        approvalLimitRs = settings.expenseApprovalLimitRs,
+        approvedByAdminUid = approvedByAdminUid
+    )
+    if (err != null) {
+        onResult(false, err)
+        return
+    }
+    if (editReason.trim().isEmpty()) {
+        onResult(false, "Please enter an edit reason.")
+        return
+    }
+    val actorName = state.currentMember?.name?.ifBlank { state.currentMember.email } ?: "Staff"
+    val cleanVeh = vehicleNumber.trim().ifBlank { route?.vehicleNumber.orEmpty() }
+    viewModelScope.launch {
+        phase10Repo.editCashBookEntry(
+            orgId = orgId,
+            original = original,
+            newCategory = "Transport - $cleanCat",
+            newAmount = newAmount,
+            newPaymentMode = newPaymentMode,
+            newNote = newNote,
+            newBillPhotoBase64 = newBillPhotoBase64,
+            editReason = editReason,
+            editorName = actorName,
+            approvedByAdminUid = approvedByAdminUid,
+            approvedByAdminName = approvedByAdminName,
+            approvalNote = approvalNote,
+            newTransportRouteId = route?.id.orEmpty(),
+            newVehicleNumber = cleanVeh,
+            newTransportCategory = cleanCat
+        ).onSuccess {
+            emitMessage("Updated transport expense ₹$newAmount ($cleanCat)")
+            onResult(true, null)
+        }.onFailure { e ->
+            onResult(false, friendlyFirestoreErrorMessage(e, "Unable to update transport expense."))
+        }
+    }
+}
+
+fun SchoolViewModel.cancelTransportExpenseInCashBook(
+    original: CashBookEntryRecord,
+    cancelReason: String,
+    onResult: (Boolean, String?) -> Unit = { _, _ -> }
+) {
+    val state = uiState.value
+    val canTransportEdit = Phase11AccessEvaluator.canEditTransport(state.accessProfile, original.schoolId) || state.canEditTransport
+    val canCashEdit = Phase10AccessEvaluator.canEditCashBook(state.accessProfile, original.schoolId) || state.canEditCashBook
+    if (!canTransportEdit && !canCashEdit) {
+        onResult(false, "Transport Edit or Cash Book Edit permission required.")
+        return
+    }
+    if (cancelReason.trim().isEmpty()) {
+        onResult(false, "Please enter a cancellation reason.")
+        return
+    }
+    val actorName = state.currentMember?.name?.ifBlank { state.currentMember.email } ?: "Staff"
+    viewModelScope.launch {
+        phase10Repo.cancelCashBookEntry(orgId, original, cancelReason, actorName)
+            .onSuccess {
+                emitMessage("Cancelled transport expense ₹${original.amount}")
+                onResult(true, null)
+            }
+            .onFailure { e ->
+                onResult(false, friendlyFirestoreErrorMessage(e, "Unable to cancel transport expense."))
+            }
+    }
+}
+
 fun SchoolViewModel.generateTransportRouteListPdf(summary: TransportRouteSummary) {
     val state = uiState.value
     val bundle = TransportRoutePdfBundle(
@@ -829,3 +1611,35 @@ fun SchoolViewModel.generateTransportDriverListPdf(summary: TransportRouteSummar
         Phase11PdfGenerator.generateTransportDriverListPdf(appContext, bundle)
     }
 }
+
+fun SchoolViewModel.generateTransportDuesReportPdf(
+    duesSummary: TransportDuesSummary,
+    unassignedStudents: List<StudentEntity>,
+    routes: List<TransportRouteRecord>
+) {
+    val state = uiState.value
+    val bundle = TransportDuesPdfBundle(
+        school = state.activeSchool,
+        session = state.filter.session,
+        generatedDateIso = Phase6DateUtils.todayIso(),
+        duesSummary = duesSummary,
+        unassignedStudents = unassignedStudents,
+        routes = routes
+    )
+    launchPhase9PdfJob(title = "Transport Dues • ${duesSummary.monthCode}", sizeLabel = "A4 Portrait") {
+        Phase11PdfGenerator.generateTransportDuesAndFeeListPdf(appContext, bundle)
+    }
+}
+
+fun SchoolViewModel.generateTransportMonthlySummaryPdf(report: TransportMonthlyProfitLossReport) {
+    val state = uiState.value
+    val bundle = TransportMonthlySummaryPdfBundle(
+        school = state.activeSchool,
+        generatedDateIso = Phase6DateUtils.todayIso(),
+        report = report
+    )
+    launchPhase9PdfJob(title = "Transport Summary • ${report.monthCode}", sizeLabel = "A4 Portrait") {
+        Phase11PdfGenerator.generateTransportMonthlySummaryPdf(appContext, bundle)
+    }
+}
+

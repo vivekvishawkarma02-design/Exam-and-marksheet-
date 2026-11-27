@@ -95,13 +95,18 @@ import com.example.domain.SelectedOptionalSaleDraft
 import com.example.domain.SessionMonthCode
 import com.example.domain.StudentFeeGridCell
 import com.example.domain.StudentRegisterEngine
+import com.example.domain.TransportEngine
+import com.example.ui.theme.AbsentAmber
+import com.example.ui.theme.AbsentAmberContainer
 import java.util.UUID
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Phase9FeeCollectAndAccountTab(
     viewModel: SchoolViewModel,
-    preselectedStudent: StudentEntity? = null
+    preselectedStudent: StudentEntity? = null,
+    onOpenStudentRegister: () -> Unit = {},
+    onOpenTransport: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -159,7 +164,8 @@ fun Phase9FeeCollectAndAccountTab(
         currentStudent,
         structure,
         uiState.studentFeeOverrides,
-        uiState.feeReceipts
+        uiState.feeReceipts,
+        uiState.transportRoutes
     ) {
         currentStudent?.let { uiState.computeStudentFeeAccount(it) }
     }
@@ -357,15 +363,23 @@ fun Phase9FeeCollectAndAccountTab(
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
+                                val transportHeaderLine = remember(currentStudent, uiState.transportRoutes) {
+                                    if (!currentStudent.usesTransport) {
+                                        "No Transport"
+                                    } else {
+                                        val disp = TransportEngine.resolveDisplay(currentStudent, uiState.transportRoutes)
+                                        val stopTxt = if (disp.stopName.isNotBlank()) " / ${disp.stopName}" else ""
+                                        val startTxt = if (disp.effectiveStartMonth.isNotBlank()) " • From ${disp.effectiveStartMonth}" else ""
+                                        val endTxt = if (disp.effectiveEndMonth.isNotBlank()) "–${disp.effectiveEndMonth}" else ""
+                                        val ovTxt = if (currentStudent.transportFeeOverridden) " [Overridden]" else ""
+                                        "Transport: ${disp.routeName}$stopTxt • ${disp.tripType.labelEn}$startTxt$endTxt • Rs. ${currentStudent.transportMonthlyAmount}/mo$ovTxt"
+                                    }
+                                }
                                 Text(
-                                    text = "Father: ${currentStudent.fatherName.ifBlank { "—" }} • Guardian Mob: ${currentStudent.mobile.ifBlank { "—" }}" +
-                                        if (currentStudent.usesTransport) {
-                                            " • Transport (${currentStudent.transportRouteName.ifBlank { "Route" }}: Rs. ${currentStudent.transportMonthlyAmount}/mo)"
-                                        } else {
-                                            " • No Transport"
-                                        },
+                                    text = "Father: ${currentStudent.fatherName.ifBlank { "—" }} • Guardian Mob: ${currentStudent.mobile.ifBlank { "—" }} • $transportHeaderLine",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.testTag("fee_student_transport_header_line")
                                 )
                                 if (siblings.isNotEmpty()) {
                                     Text(
@@ -388,6 +402,65 @@ fun Phase9FeeCollectAndAccountTab(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                            }
+                        }
+
+                        if (currentStudent.usesTransport && account.transportWarnings.isNotEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = AbsentAmberContainer,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, AbsentAmber),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("fee_transport_warning_banner")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Warning,
+                                            contentDescription = "Transport warning",
+                                            tint = Color(0xFFB71C1C),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Text(
+                                            text = "Transport setup needs attention: ${account.transportWarnings.joinToString(" • ") { it.labelEn }}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF5D4037)
+                                        )
+                                    }
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        if (uiState.canViewStudentRegister) {
+                                            OutlinedButton(
+                                                onClick = onOpenStudentRegister,
+                                                modifier = Modifier
+                                                    .heightIn(min = 48.dp)
+                                                    .testTag("fee_fix_transport_register_btn")
+                                            ) {
+                                                Text("Fix in Student Register")
+                                            }
+                                        }
+                                        if (uiState.canViewTransport) {
+                                            OutlinedButton(
+                                                onClick = onOpenTransport,
+                                                modifier = Modifier
+                                                    .heightIn(min = 48.dp)
+                                                    .testTag("fee_fix_transport_module_btn")
+                                            ) {
+                                                Text("Open Transport")
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 

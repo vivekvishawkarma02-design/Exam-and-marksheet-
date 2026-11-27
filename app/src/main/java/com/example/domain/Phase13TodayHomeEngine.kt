@@ -118,7 +118,8 @@ data class TodayHomePermissions(
     val canEditStudents: Boolean,
     val canViewStudentRegister: Boolean,
     val canViewCertificates: Boolean,
-    val canEditSettings: Boolean
+    val canEditSettings: Boolean,
+    val canViewTransport: Boolean = false
 )
 
 data class OwnerAdminTodayTiles(
@@ -194,6 +195,13 @@ data class FeeClerkTodayData(
     val totalActiveStudentsInSchool: Int = 0
 )
 
+data class TransportDocsTodayTile(
+    val expiringSoonCount: Int = 0,
+    val expiredCount: Int = 0,
+    val totalAlertCount: Int = 0,
+    val topAlertLines: List<String> = emptyList()
+)
+
 data class TodayHomeSnapshot(
     val dateIso: String,
     val persona: TodayHomePersona,
@@ -201,7 +209,8 @@ data class TodayHomeSnapshot(
     val teacherData: TeacherTodayData? = null,
     val feeClerkData: FeeClerkTodayData? = null,
     val quickActions: List<TodayQuickAction> = emptyList(),
-    val firstTimeGuide: FirstTimeGuideState
+    val firstTimeGuide: FirstTimeGuideState,
+    val transportDocsTile: TransportDocsTodayTile? = null
 )
 
 object Phase13TodayHomeEngine {
@@ -613,12 +622,14 @@ object Phase13TodayHomeEngine {
         ownPendingMarksCount: Int,
         ownExamDuties: List<ExamInvigilatorDutyRecord>,
         ownSalarySlipsCount: Int,
-        // Phase 11 Exams & Stock
+        // Phase 11 Exams & Stock & Transport
         examSchedules: List<ExamScheduleRecord>,
         examDuties: List<ExamInvigilatorDutyRecord>,
         stockTransactions: List<StockTransactionRecord>,
         // Guide pref
-        isFirstTimeGuideSkipped: Boolean
+        isFirstTimeGuideSkipped: Boolean,
+        transportVehicleDocs: List<TransportVehicleDocumentRecord> = emptyList(),
+        transportRoutes: List<TransportRouteRecord> = emptyList()
     ): TodayHomeSnapshot {
         val persona = resolvePersona(
             member = member,
@@ -953,6 +964,25 @@ object Phase13TodayHomeEngine {
             isSkipped = isFirstTimeGuideSkipped
         )
 
+        val transportDocsTile = if (permissions.canViewTransport && activeSchoolDocId.isNotBlank()) {
+            val routesById = transportRoutes.associateBy { it.id }
+            val schoolDocs = transportVehicleDocs.filter { it.schoolId == activeSchoolDocId }
+            val expiredDocs = schoolDocs.filter { it.statusForDate(todayIso) == VehicleDocExpiryStatus.EXPIRED }
+            val expiringDocs = schoolDocs.filter { it.statusForDate(todayIso) == VehicleDocExpiryStatus.EXPIRING_SOON }
+            val alertDocs = (expiredDocs + expiringDocs).sortedBy { it.expiryDateIso }
+            val topLines = alertDocs.take(3).map { d ->
+                val veh = d.vehicleNumber.ifBlank { routesById[d.routeId]?.vehicleNumber.orEmpty() }.ifBlank { "Vehicle" }
+                val st = if (d.statusForDate(todayIso) == VehicleDocExpiryStatus.EXPIRED) "Expired" else "Expiring"
+                "$veh • ${d.docType.labelEn} ($st ${d.expiryDateIso})"
+            }
+            TransportDocsTodayTile(
+                expiringSoonCount = expiringDocs.size,
+                expiredCount = expiredDocs.size,
+                totalAlertCount = alertDocs.size,
+                topAlertLines = topLines
+            )
+        } else null
+
         return TodayHomeSnapshot(
             dateIso = todayIso,
             persona = persona,
@@ -960,7 +990,8 @@ object Phase13TodayHomeEngine {
             teacherData = teacherData,
             feeClerkData = feeClerkData,
             quickActions = quickActions,
-            firstTimeGuide = firstTimeGuide
+            firstTimeGuide = firstTimeGuide,
+            transportDocsTile = transportDocsTile
         )
     }
 }

@@ -1,5 +1,7 @@
 package com.example.data.cloud
 
+import com.example.domain.CashBookAuditLogRecord
+import com.example.domain.CashBookEntryRecord
 import com.example.domain.DayOfWeekCode
 import com.example.domain.ExamInvigilatorDutyRecord
 import com.example.domain.ExamRoomRecord
@@ -16,6 +18,8 @@ import com.example.domain.StudentFeeOverride
 import com.example.domain.TeacherLeaveRecord
 import com.example.domain.TeacherProfile
 import com.example.domain.TransportRouteRecord
+import com.example.domain.TransportSettingsConfig
+import com.example.domain.TransportVehicleDocumentRecord
 import com.example.util.OperationType
 import com.example.util.friendlyFirestoreErrorMessage
 import com.example.util.handleFirestoreError
@@ -47,7 +51,11 @@ data class CloudPhase11Snapshot(
     val examDuties: List<ExamInvigilatorDutyRecord> = emptyList(),
     val stockTransactions: List<StockTransactionRecord> = emptyList(),
     val transportRoutes: List<TransportRouteRecord> = emptyList(),
-    // Cross-module read-only slices so Exams/Stock screens work even if user lacks Fees/Teachers/Leave modules
+    val transportVehicleDocuments: List<TransportVehicleDocumentRecord> = emptyList(),
+    val transportSettings: List<TransportSettingsConfig> = emptyList(),
+    val transportCashBookEntries: List<CashBookEntryRecord> = emptyList(),
+    val transportCashBookAuditLogs: List<CashBookAuditLogRecord> = emptyList(),
+    // Cross-module read-only slices so Exams/Stock/Transport screens work even if user lacks Fees/Teachers/Leave/CashBook modules
     val sharedFeeStructures: List<FeeStructureConfig> = emptyList(),
     val sharedFeeReceipts: List<FeeReceiptRecord> = emptyList(),
     val sharedFeeOverrides: List<StudentFeeOverride> = emptyList(),
@@ -76,6 +84,14 @@ private data class Phase11FeeReadSlice(
     val structures: Phase11Slice<List<FeeStructureConfig>> = Phase11Slice(emptyList()),
     val receipts: Phase11Slice<List<FeeReceiptRecord>> = Phase11Slice(emptyList()),
     val overrides: Phase11Slice<List<StudentFeeOverride>> = Phase11Slice(emptyList())
+)
+
+private data class Phase11TransportBundleSlice(
+    val routes: Phase11Slice<List<TransportRouteRecord>> = Phase11Slice(emptyList()),
+    val vehicleDocs: Phase11Slice<List<TransportVehicleDocumentRecord>> = Phase11Slice(emptyList()),
+    val settings: Phase11Slice<List<TransportSettingsConfig>> = Phase11Slice(emptyList()),
+    val transportCashEntries: Phase11Slice<List<CashBookEntryRecord>> = Phase11Slice(emptyList()),
+    val transportCashAuditLogs: Phase11Slice<List<CashBookAuditLogRecord>> = Phase11Slice(emptyList())
 )
 
 /**
@@ -313,7 +329,7 @@ class Phase11Repository(
                 }
         } else flowOf(Phase11Slice(emptyList()))
 
-        val needFeeStructuresAndReceipts = canStock || canExams
+        val needFeeStructuresAndReceipts = canStock || canExams || canTransport
         val sharedFeeStructuresFlow: Flow<Phase11Slice<List<FeeStructureConfig>>> = if (needFeeStructuresAndReceipts) {
             orgRef.collection("feeStructures")
                 .snapshots(MetadataChanges.INCLUDE)
@@ -367,7 +383,7 @@ class Phase11Repository(
             Phase11FeeReadSlice(structures = fs, receipts = fr, overrides = fo)
         }
 
-        // --- C. Transport Routes ---
+        // --- C. Transport Routes, Vehicle Documents, Settings & Linked Cash Book Expenses ---
         val transportRoutesFlow: Flow<Phase11Slice<List<TransportRouteRecord>>> = if (canTransport) {
             orgRef.collection("transportRoutes")
                 .snapshots(MetadataChanges.INCLUDE)
@@ -385,31 +401,118 @@ class Phase11Repository(
                 }
         } else flowOf(Phase11Slice(emptyList()))
 
+        val transportVehicleDocsFlow: Flow<Phase11Slice<List<TransportVehicleDocumentRecord>>> = if (canTransport) {
+            orgRef.collection("transportVehicleDocuments")
+                .snapshots(MetadataChanges.INCLUDE)
+                .map { snap ->
+                    val pCount = snap.documents.count { it.metadata.hasPendingWrites() }
+                    val hasPending = snap.metadata.hasPendingWrites() || pCount > 0
+                    val items = snap.documents.mapNotNull { doc ->
+                        TransportVehicleDocumentRecord.fromMap(doc.id, doc.data, doc.metadata.hasPendingWrites())
+                    }.filter { OrgAccessEvaluator.canAccessSchool(member, it.schoolId) }
+                    Phase11Slice(items, if (hasPending) pCount.coerceAtLeast(1) else 0, snap.metadata.isFromCache())
+                }
+                .catch { e ->
+                    handleFlowError(e, "organisations/$orgId/transportVehicleDocuments")
+                    emit(Phase11Slice(emptyList()))
+                }
+        } else flowOf(Phase11Slice(emptyList()))
+
+        val transportSettingsFlow: Flow<Phase11Slice<List<TransportSettingsConfig>>> = if (canTransport) {
+            orgRef.collection("transportSettings")
+                .snapshots(MetadataChanges.INCLUDE)
+                .map { snap ->
+                    val pCount = snap.documents.count { it.metadata.hasPendingWrites() }
+                    val hasPending = snap.metadata.hasPendingWrites() || pCount > 0
+                    val items = snap.documents.mapNotNull { doc ->
+                        TransportSettingsConfig.fromMap(doc.id, doc.data, doc.metadata.hasPendingWrites())
+                    }.filter { OrgAccessEvaluator.canAccessSchool(member, it.schoolId) }
+                    Phase11Slice(items, if (hasPending) pCount.coerceAtLeast(1) else 0, snap.metadata.isFromCache())
+                }
+                .catch { e ->
+                    handleFlowError(e, "organisations/$orgId/transportSettings")
+                    emit(Phase11Slice(emptyList()))
+                }
+        } else flowOf(Phase11Slice(emptyList()))
+
+        val transportCashEntriesFlow: Flow<Phase11Slice<List<CashBookEntryRecord>>> = if (canTransport) {
+            orgRef.collection("cashBookEntries")
+                .whereEqualTo("sourceModule", "TRANSPORT")
+                .snapshots(MetadataChanges.INCLUDE)
+                .map { snap ->
+                    val pCount = snap.documents.count { it.metadata.hasPendingWrites() }
+                    val hasPending = snap.metadata.hasPendingWrites() || pCount > 0
+                    val items = snap.documents.mapNotNull { doc ->
+                        CashBookEntryRecord.fromMap(doc.id, doc.data, doc.metadata.hasPendingWrites())
+                    }.filter { OrgAccessEvaluator.canAccessSchool(member, it.schoolId) }
+                    Phase11Slice(items, if (hasPending) pCount.coerceAtLeast(1) else 0, snap.metadata.isFromCache())
+                }
+                .catch { e ->
+                    handleFlowError(e, "organisations/$orgId/cashBookEntries(TRANSPORT)")
+                    emit(Phase11Slice(emptyList()))
+                }
+        } else flowOf(Phase11Slice(emptyList()))
+
+        val transportCashAuditFlow: Flow<Phase11Slice<List<CashBookAuditLogRecord>>> = if (canTransport) {
+            orgRef.collection("cashBookAuditLogs")
+                .whereEqualTo("sourceModule", "TRANSPORT")
+                .snapshots(MetadataChanges.INCLUDE)
+                .map { snap ->
+                    val items = snap.documents.mapNotNull { doc ->
+                        CashBookAuditLogRecord.fromMap(doc.id, doc.data, doc.metadata.hasPendingWrites())
+                    }.filter { OrgAccessEvaluator.canAccessSchool(member, it.schoolId) }
+                    Phase11Slice(items, 0, snap.metadata.isFromCache())
+                }
+                .catch { e ->
+                    handleFlowError(e, "organisations/$orgId/cashBookAuditLogs(TRANSPORT)")
+                    emit(Phase11Slice(emptyList()))
+                }
+        } else flowOf(Phase11Slice(emptyList()))
+
+        val transportBundleFlow: Flow<Phase11TransportBundleSlice> = combine(
+            transportRoutesFlow,
+            transportVehicleDocsFlow,
+            transportSettingsFlow,
+            transportCashEntriesFlow,
+            transportCashAuditFlow
+        ) { r, vd, st, ce, ca ->
+            Phase11TransportBundleSlice(r, vd, st, ce, ca)
+        }
+
         return combine(
             examBundleFlow,
             stockTxFlow,
             feeReadFlow,
-            transportRoutesFlow
-        ) { exams, stockTx, fees, routes ->
+            transportBundleFlow
+        ) { exams, stockTx, fees, transport ->
             val pending = exams.schedules.pendingCount +
                 exams.rooms.pendingCount +
                 exams.seatings.pendingCount +
                 exams.duties.pendingCount +
                 stockTx.pendingCount +
-                routes.pendingCount
+                transport.routes.pendingCount +
+                transport.vehicleDocs.pendingCount +
+                transport.settings.pendingCount +
+                transport.transportCashEntries.pendingCount
             val fromCache = exams.schedules.isFromCache ||
                 exams.rooms.isFromCache ||
                 exams.seatings.isFromCache ||
                 exams.duties.isFromCache ||
                 stockTx.isFromCache ||
-                routes.isFromCache
+                transport.routes.isFromCache ||
+                transport.vehicleDocs.isFromCache ||
+                transport.transportCashEntries.isFromCache
             CloudPhase11Snapshot(
                 examSchedules = exams.schedules.value,
                 examRooms = exams.rooms.value,
                 examSeatings = exams.seatings.value,
                 examDuties = exams.duties.value,
                 stockTransactions = stockTx.value,
-                transportRoutes = routes.value,
+                transportRoutes = transport.routes.value,
+                transportVehicleDocuments = transport.vehicleDocs.value,
+                transportSettings = transport.settings.value,
+                transportCashBookEntries = transport.transportCashEntries.value.sortedByDescending { it.createdAtMs },
+                transportCashBookAuditLogs = transport.transportCashAuditLogs.value.sortedByDescending { it.clientCreatedAtMs },
                 sharedFeeStructures = fees.structures.value,
                 sharedFeeReceipts = fees.receipts.value,
                 sharedFeeOverrides = fees.overrides.value,
@@ -789,6 +892,107 @@ class Phase11Repository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
+    fun saveTransportVehicleDocument(
+        orgId: String,
+        docRecord: TransportVehicleDocumentRecord,
+        editorName: String
+    ): Result<String> {
+        val docId = docRecord.id.ifBlank {
+            TransportVehicleDocumentRecord.makeDocId(docRecord.schoolId, docRecord.routeId, docRecord.docType)
+        }
+        val path = "organisations/$orgId/transportVehicleDocuments/$docId"
+        return try {
+            val uid = requireUid()
+            val nowMs = System.currentTimeMillis()
+            val ref = db.collection("organisations").document(orgId)
+                .collection("transportVehicleDocuments").document(docId)
+            val payload = docRecord.copy(id = docId).toFirestoreMap(uid, editorName, nowMs) + mapOf(
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            val task = ref.set(payload)
+            attachSyncListeners(task, OperationType.WRITE, path) { ref.set(payload) }
+            orgRepo.logAuditNonBlocking(
+                orgId = orgId,
+                action = "TRANSPORT_DOC_SAVED",
+                targetType = "transportVehicleDocument",
+                targetId = docId,
+                summary = "Saved ${docRecord.docType.labelEn} for ${docRecord.vehicleNumber.ifBlank { docRecord.routeId }} (exp ${docRecord.expiryDateIso})",
+                schoolId = docRecord.schoolId
+            )
+            Result.success(docId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    fun deleteTransportVehicleDocument(
+        orgId: String,
+        schoolId: String,
+        docId: String,
+        label: String
+    ): Result<Unit> {
+        val path = "organisations/$orgId/transportVehicleDocuments/$docId"
+        return try {
+            requireUid()
+            val ref = db.collection("organisations").document(orgId)
+                .collection("transportVehicleDocuments").document(docId)
+            val task = ref.delete()
+            attachSyncListeners(task, OperationType.DELETE, path) { ref.delete() }
+            orgRepo.logAuditNonBlocking(
+                orgId = orgId,
+                action = "TRANSPORT_DOC_DELETED",
+                targetType = "transportVehicleDocument",
+                targetId = docId,
+                summary = "Removed vehicle document '$label'",
+                schoolId = schoolId
+            )
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
+    fun saveTransportSettings(
+        orgId: String,
+        config: TransportSettingsConfig,
+        editorName: String
+    ): Result<TransportSettingsConfig> {
+        val docId = config.id.ifBlank { TransportSettingsConfig.makeDocId(config.schoolId) }
+        val path = "organisations/$orgId/transportSettings/$docId"
+        return try {
+            val uid = requireUid()
+            val nowMs = System.currentTimeMillis()
+            val finalCfg = config.copy(id = docId, updatedByUid = uid, updatedByName = editorName, clientEditedAtMs = nowMs)
+            val ref = db.collection("organisations").document(orgId)
+                .collection("transportSettings").document(docId)
+            val payload = finalCfg.toFirestoreMap(uid, editorName, nowMs) + mapOf(
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            val task = ref.set(payload)
+            attachSyncListeners(task, OperationType.WRITE, path) { ref.set(payload) }
+            orgRepo.logAuditNonBlocking(
+                orgId = orgId,
+                action = "TRANSPORT_SETTINGS_SAVED",
+                targetType = "transportSettings",
+                targetId = docId,
+                summary = "Updated transport expense categories (${finalCfg.expenseCategories.size})",
+                schoolId = config.schoolId
+            )
+            Result.success(finalCfg)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
             Result.failure(e)
         }
     }

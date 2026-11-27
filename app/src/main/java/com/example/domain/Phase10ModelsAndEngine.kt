@@ -454,10 +454,19 @@ data class CashBookEntryRecord(
     val cancelledByUid: String = "",
     val cancelledByName: String = "",
     val cancelReason: String = "",
-    val hasPendingWrites: Boolean = false
+    val hasPendingWrites: Boolean = false,
+    val sourceModule: String = "", // "" for general Cash Book, "TRANSPORT" for Transport expenses
+    val transportRouteId: String = "",
+    val vehicleNumber: String = "",
+    val transportCategory: String = ""
 ) {
     val isCancelled: Boolean get() = status == CashBookEntryStatus.CANCELLED
     val isExpense: Boolean get() = entryType == CashBookEntryType.EXPENSE
+    val isTransportExpense: Boolean get() =
+        sourceModule.equals("TRANSPORT", ignoreCase = true) ||
+            transportRouteId.isNotBlank() ||
+            vehicleNumber.isNotBlank() ||
+            transportCategory.isNotBlank()
 
     fun toCreateFirestoreMap(): Map<String, Any> = mapOf(
         "schoolId" to schoolId,
@@ -482,7 +491,11 @@ data class CashBookEntryRecord(
         "cancelledAtMs" to 0L,
         "cancelledByUid" to "",
         "cancelledByName" to "",
-        "cancelReason" to ""
+        "cancelReason" to "",
+        "sourceModule" to sourceModule.trim().uppercase(Locale.US).take(24),
+        "transportRouteId" to transportRouteId.trim().take(128),
+        "vehicleNumber" to vehicleNumber.trim().take(40),
+        "transportCategory" to transportCategory.trim().take(80)
     )
 
     companion object {
@@ -516,7 +529,11 @@ data class CashBookEntryRecord(
                 cancelledByUid = (data["cancelledByUid"] as? String).orEmpty(),
                 cancelledByName = (data["cancelledByName"] as? String).orEmpty(),
                 cancelReason = (data["cancelReason"] as? String).orEmpty(),
-                hasPendingWrites = hasPendingWrites
+                hasPendingWrites = hasPendingWrites,
+                sourceModule = (data["sourceModule"] as? String)?.trim().orEmpty(),
+                transportRouteId = (data["transportRouteId"] as? String)?.trim().orEmpty(),
+                vehicleNumber = (data["vehicleNumber"] as? String)?.trim().orEmpty(),
+                transportCategory = (data["transportCategory"] as? String)?.trim().orEmpty()
             )
         }
     }
@@ -600,7 +617,8 @@ data class CashBookAuditLogRecord(
     val actorUid: String,
     val actorName: String,
     val clientCreatedAtMs: Long,
-    val hasPendingWrites: Boolean = false
+    val hasPendingWrites: Boolean = false,
+    val sourceModule: String = ""
 ) {
     fun toFirestoreMap(): Map<String, Any> = mapOf(
         "schoolId" to schoolId,
@@ -612,7 +630,8 @@ data class CashBookAuditLogRecord(
         "summary" to summary.trim().take(400),
         "actorUid" to actorUid,
         "actorName" to actorName.trim().take(120),
-        "clientCreatedAtMs" to clientCreatedAtMs
+        "clientCreatedAtMs" to clientCreatedAtMs,
+        "sourceModule" to sourceModule.trim().uppercase(Locale.US).take(24)
     )
 
     companion object {
@@ -633,7 +652,8 @@ data class CashBookAuditLogRecord(
                 actorUid = (data["actorUid"] as? String).orEmpty(),
                 actorName = (data["actorName"] as? String).orEmpty(),
                 clientCreatedAtMs = (data["clientCreatedAtMs"] as? Number)?.toLong() ?: 0L,
-                hasPendingWrites = hasPendingWrites
+                hasPendingWrites = hasPendingWrites,
+                sourceModule = (data["sourceModule"] as? String)?.trim().orEmpty()
             )
         }
     }

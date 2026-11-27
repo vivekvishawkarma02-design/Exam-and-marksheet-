@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AdminPanelSettings
@@ -135,6 +136,7 @@ fun DashboardScreen(
     onNavigateToExams: () -> Unit = {},
     onNavigateToStock: () -> Unit = {},
     onNavigateToTransport: () -> Unit = {},
+    onNavigateToTransportVehiclesDocs: () -> Unit = onNavigateToTransport,
     onNavigateToSalary: () -> Unit = {},
     onNavigateToSessionPromotion: () -> Unit = {},
     onNavigateToBulkImport: () -> Unit = {},
@@ -142,6 +144,8 @@ fun DashboardScreen(
     onNavigateToResultAnalysis: () -> Unit = {},
     onNavigateToClassDiary: () -> Unit = {},
     onNavigateToBirthdays: () -> Unit = {},
+    onNavigateToStudentRemarks: () -> Unit = {},
+    onNavigateToGatePass: () -> Unit = {},
     onPrintOwnSalarySlip: (SalaryMonthlyRecord, SalarySlipPageSize) -> Unit = { _, _ -> },
     onOpenPendingMarksItem: (PendingMarksItem) -> Unit = {},
     onOpenCoScholasticSection: (String, String, String) -> Unit = { _, _, _ -> },
@@ -489,6 +493,38 @@ fun DashboardScreen(
                     accent = secondaryColor,
                     testTag = "tile_birthdays",
                     onClick = onNavigateToBirthdays
+                )
+            )
+        }
+        if (uiState.canOpenStudentRemarksModule) {
+            add(
+                QuickActionSpec(
+                    title = p10Label(isHindi, "टिप्पणियाँ व PTM", "Remarks & PTM"),
+                    subtitle = p10Label(
+                        isHindi,
+                        "छात्र टिप्पणियाँ, फॉलो-अप व अभिभावक बैठक",
+                        "Student remarks, follow-ups & Parent Meetings"
+                    ),
+                    icon = Icons.AutoMirrored.Filled.Assignment,
+                    accent = tertiaryColor,
+                    testTag = "tile_student_remarks",
+                    onClick = onNavigateToStudentRemarks
+                )
+            )
+        }
+        if (uiState.canViewGateModule) {
+            add(
+                QuickActionSpec(
+                    title = p10Label(isHindi, "गेट पास व आगंतुक", "Gate & Visitors"),
+                    subtitle = p10Label(
+                        isHindi,
+                        "A5 छुट्टी पर्ची, गेट रजिस्टर व आगंतुक",
+                        "A5 early leave pass, gate & visitor register"
+                    ),
+                    icon = Icons.Default.Badge,
+                    accent = primaryColor,
+                    testTag = "tile_gate_pass",
+                    onClick = onNavigateToGatePass
                 )
             )
         }
@@ -932,6 +968,170 @@ fun DashboardScreen(
                                     .testTag("today_open_birthdays_btn")
                             ) {
                                 Text(p10Label(isHindi, "जन्मदिन", "Birthdays"))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Phase 19: Today's Visitors & Early Leaves Tile on Today Home
+            if (uiState.canViewGateModule) {
+                item {
+                    val gateSummary = remember(
+                        uiState.gatePasses,
+                        uiState.visitorEntries,
+                        uiState.activeSchoolDocId,
+                        todayIso
+                    ) {
+                        uiState.todayGateSummaryForActiveSchool(
+                            todayIso = todayIso,
+                            schoolDocId = uiState.activeSchoolDocId
+                        )
+                    }
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onNavigateToGatePass)
+                            .testTag("today_gate_visitors_tile"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (gateSummary.todayVisitorsInside > 0 || gateSummary.todayEarlyLeavesCount > 0) {
+                                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                            }
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Badge,
+                                contentDescription = "Gate pass and visitors today",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = p10Label(
+                                        isHindi,
+                                        "🚪 आज गेट: जल्दी छुट्टी ${gateSummary.todayEarlyLeavesCount} • आगंतुक ${gateSummary.todayVisitorsTotal} (${gateSummary.todayVisitorsInside} अंदर)",
+                                        "🚪 Today's Gate: Early Leaves ${gateSummary.todayEarlyLeavesCount} • Visitors ${gateSummary.todayVisitorsTotal} (${gateSummary.todayVisitorsInside} Inside)"
+                                    ),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = p10Label(
+                                        isHindi,
+                                        "A5 गेट पास जारी करने या आगंतुक प्रवेश/बाहर दर्ज करने के लिए टैप करें",
+                                        "Tap to issue A5 early leave pass or check in / sign out visitors"
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = onNavigateToGatePass,
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("today_open_gate_btn")
+                            ) {
+                                Text(p10Label(isHindi, "गेट खोलें", "Open Gate"))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Transport Vehicle Documents Expiring / Expired Tile on Today Home (Transport access only)
+            todaySnapshot.transportDocsTile?.let { docTile ->
+                item {
+                    val hasExpired = docTile.expiredCount > 0
+                    val hasAlert = docTile.totalAlertCount > 0
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onNavigateToTransportVehiclesDocs)
+                            .testTag("today_transport_docs_tile"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = when {
+                                hasExpired -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                                hasAlert -> AbsentAmberContainer
+                                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                            }
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DirectionsBus,
+                                    contentDescription = "Transport vehicle documents",
+                                    tint = when {
+                                        hasExpired -> MaterialTheme.colorScheme.error
+                                        hasAlert -> AbsentAmber
+                                        else -> MaterialTheme.colorScheme.primary
+                                    }
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = when {
+                                            hasExpired && docTile.expiringSoonCount > 0 -> p10Label(
+                                                isHindi,
+                                                "🚌 वाहन कागज़ात: ${docTile.expiredCount} समाप्त • ${docTile.expiringSoonCount} जल्द समाप्त (30 दिन)",
+                                                "🚌 Vehicle Docs: ${docTile.expiredCount} Expired • ${docTile.expiringSoonCount} Expiring Soon"
+                                            )
+                                            hasExpired -> p10Label(
+                                                isHindi,
+                                                "🚌 वाहन कागज़ात: ${docTile.expiredCount} समाप्त हो चुके",
+                                                "🚌 Vehicle Docs: ${docTile.expiredCount} Expired"
+                                            )
+                                            hasAlert -> p10Label(
+                                                isHindi,
+                                                "🚌 वाहन कागज़ात: ${docTile.expiringSoonCount} जल्द समाप्त होने वाले",
+                                                "🚌 Vehicle Docs: ${docTile.expiringSoonCount} Expiring Within 30 Days"
+                                            )
+                                            else -> p10Label(
+                                                isHindi,
+                                                "🚌 वाहन कागज़ात: सभी वैध हैं",
+                                                "🚌 Vehicle Docs: All Valid"
+                                            )
+                                        },
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    if (docTile.topAlertLines.isNotEmpty()) {
+                                        Text(
+                                            text = docTile.topAlertLines.joinToString(" • "),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = onNavigateToTransportVehiclesDocs,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp)
+                                    .testTag("today_open_transport_docs_btn")
+                            ) {
+                                Text(p10Label(isHindi, "वाहन व कागज़ात खोलें", "Open Vehicle Docs"))
                             }
                         }
                     }

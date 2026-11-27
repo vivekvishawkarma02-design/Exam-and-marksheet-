@@ -1071,20 +1071,113 @@ object StockEngine {
 }
 
 // ============================================================================
-// PART D: TRANSPORT ROUTES, STOPS & STUDENT ASSIGNMENTS
+// PART D: TRANSPORT MODULE (REBUILT & ORGANISED — SINGLE SOURCE OF TRUTH)
 // ============================================================================
+
+enum class TransportTripType(
+    val wireValue: String,
+    val labelEn: String,
+    val labelHi: String
+) {
+    BOTH_WAYS("BOTH_WAYS", "Both ways", "आना-जाना"),
+    PICKUP_ONLY("PICKUP_ONLY", "Pickup only", "केवल पिकअप"),
+    DROP_ONLY("DROP_ONLY", "Drop only", "केवल ड्रॉप");
+
+    fun label(isHindi: Boolean): String = if (isHindi) labelHi else labelEn
+
+    companion object {
+        fun fromRaw(raw: String?): TransportTripType =
+            entries.firstOrNull { it.wireValue.equals(raw?.trim(), ignoreCase = true) } ?: BOTH_WAYS
+    }
+}
+
+enum class VehicleOwnershipType(
+    val wireValue: String,
+    val labelEn: String,
+    val labelHi: String
+) {
+    OWN("OWN", "School Own", "स्कूल का वाहन"),
+    RENTED("RENTED", "Rented / Contractor", "किराए का वाहन");
+
+    fun label(isHindi: Boolean): String = if (isHindi) labelHi else labelEn
+
+    companion object {
+        fun fromRaw(raw: String?): VehicleOwnershipType =
+            entries.firstOrNull { it.wireValue.equals(raw?.trim(), ignoreCase = true) } ?: OWN
+    }
+}
+
+enum class VehicleDocumentType(
+    val wireValue: String,
+    val labelEn: String,
+    val labelHi: String
+) {
+    INSURANCE("INSURANCE", "Insurance", "बीमा (Insurance)"),
+    FITNESS("FITNESS", "Fitness", "फिटनेस (Fitness)"),
+    PERMIT("PERMIT", "Permit", "परमिट (Permit)"),
+    PUC("PUC", "Pollution (PUC)", "प्रदूषण (PUC)"),
+    ROAD_TAX("ROAD_TAX", "Road Tax", "रोड टैक्स (Road Tax)"),
+    OTHER("OTHER", "Other Document", "अन्य दस्तावेज़");
+
+    fun label(isHindi: Boolean): String = if (isHindi) labelHi else labelEn
+
+    companion object {
+        fun fromRaw(raw: String?): VehicleDocumentType =
+            entries.firstOrNull { it.wireValue.equals(raw?.trim(), ignoreCase = true) } ?: OTHER
+    }
+}
+
+enum class VehicleDocExpiryStatus(
+    val wireValue: String,
+    val labelEn: String,
+    val labelHi: String
+) {
+    VALID("VALID", "Valid", "मान्य"),
+    EXPIRING_SOON("EXPIRING_SOON", "Expiring (≤30d)", "जल्द समाप्त"),
+    EXPIRED("EXPIRED", "Expired", "समाप्त");
+
+    fun label(isHindi: Boolean): String = if (isHindi) labelHi else labelEn
+}
 
 data class TransportStop(
     val stopId: String,
     val stopName: String,
     val pickupTime: String = "",
-    val monthlyFeeRs: Int = 0 // 0 = inherit route monthlyFeeRs
+    val monthlyFeeRs: Int = 0, // 0 = inherit route monthlyFeeRs (Both ways)
+    val pickupOnlyFeeRs: Int = 0, // 0 = same as Both ways (or route pickup fee if stop fee unset)
+    val dropOnlyFeeRs: Int = 0 // 0 = same as Both ways (or route drop fee if stop fee unset)
 ) {
+    fun feeForTripType(tripType: TransportTripType, route: TransportRouteRecord): Int {
+        return when (tripType) {
+            TransportTripType.BOTH_WAYS -> {
+                if (monthlyFeeRs > 0) monthlyFeeRs else route.monthlyFeeRs.coerceAtLeast(0)
+            }
+            TransportTripType.PICKUP_ONLY -> {
+                when {
+                    pickupOnlyFeeRs > 0 -> pickupOnlyFeeRs
+                    monthlyFeeRs > 0 -> monthlyFeeRs
+                    route.pickupOnlyFeeRs > 0 -> route.pickupOnlyFeeRs
+                    else -> route.monthlyFeeRs.coerceAtLeast(0)
+                }
+            }
+            TransportTripType.DROP_ONLY -> {
+                when {
+                    dropOnlyFeeRs > 0 -> dropOnlyFeeRs
+                    monthlyFeeRs > 0 -> monthlyFeeRs
+                    route.dropOnlyFeeRs > 0 -> route.dropOnlyFeeRs
+                    else -> route.monthlyFeeRs.coerceAtLeast(0)
+                }
+            }
+        }.coerceAtLeast(0)
+    }
+
     fun toMap(): Map<String, Any> = mapOf(
         "stopId" to stopId.trim().take(60),
         "stopName" to stopName.trim().take(80),
         "pickupTime" to pickupTime.trim().take(16),
-        "monthlyFeeRs" to monthlyFeeRs.coerceIn(0, 500_000).toLong()
+        "monthlyFeeRs" to monthlyFeeRs.coerceIn(0, 500_000).toLong(),
+        "pickupOnlyFeeRs" to pickupOnlyFeeRs.coerceIn(0, 500_000).toLong(),
+        "dropOnlyFeeRs" to dropOnlyFeeRs.coerceIn(0, 500_000).toLong()
     )
 
     companion object {
@@ -1098,7 +1191,9 @@ data class TransportStop(
                 stopId = id,
                 stopName = name,
                 pickupTime = (raw["pickupTime"] as? String)?.trim().orEmpty(),
-                monthlyFeeRs = (raw["monthlyFeeRs"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0
+                monthlyFeeRs = (raw["monthlyFeeRs"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
+                pickupOnlyFeeRs = (raw["pickupOnlyFeeRs"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
+                dropOnlyFeeRs = (raw["dropOnlyFeeRs"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0
             )
         }
     }
@@ -1113,20 +1208,54 @@ data class TransportRouteRecord(
     val seatCapacity: Int = 30,
     val driverName: String = "",
     val driverPhone: String = "",
-    val monthlyFeeRs: Int = 0,
+    val monthlyFeeRs: Int = 0, // Both ways default fee
     val stops: List<TransportStop> = emptyList(),
     val active: Boolean = true,
     val updatedByUid: String = "",
     val updatedByName: String = "",
     val clientEditedAtMs: Long = 0L,
-    val hasPendingWrites: Boolean = false
+    val hasPendingWrites: Boolean = false,
+    // Transport Rebuild fields (defaults preserve full backward compatibility)
+    val pickupOnlyFeeRs: Int = 0, // 0 = same as monthlyFeeRs (Both ways)
+    val dropOnlyFeeRs: Int = 0, // 0 = same as monthlyFeeRs (Both ways)
+    val vehicleOwnership: VehicleOwnershipType = VehicleOwnershipType.OWN,
+    val ownerContractorName: String = "",
+    val ownerContractorPhone: String = "",
+    val monthlyRentRs: Int = 0,
+    val driverLicenceNo: String = "",
+    val driverLicenceExpiryIso: String = "",
+    val conductorName: String = "",
+    val conductorPhone: String = ""
 ) {
-    fun effectiveFeeForStop(stopName: String?): Int {
-        if (!stopName.isNullOrBlank()) {
-            val stop = stops.firstOrNull { it.stopName.equals(stopName.trim(), ignoreCase = true) }
-            if (stop != null && stop.monthlyFeeRs > 0) return stop.monthlyFeeRs
+    fun routeFeeForTripType(tripType: TransportTripType): Int = when (tripType) {
+        TransportTripType.BOTH_WAYS -> monthlyFeeRs.coerceAtLeast(0)
+        TransportTripType.PICKUP_ONLY -> if (pickupOnlyFeeRs > 0) pickupOnlyFeeRs else monthlyFeeRs.coerceAtLeast(0)
+        TransportTripType.DROP_ONLY -> if (dropOnlyFeeRs > 0) dropOnlyFeeRs else monthlyFeeRs.coerceAtLeast(0)
+    }
+
+    fun effectiveFeeForStop(stopName: String?): Int =
+        effectiveFeeFor(stopId = null, stopName = stopName, tripType = TransportTripType.BOTH_WAYS)
+
+    fun effectiveFeeFor(
+        stopId: String?,
+        stopName: String?,
+        tripType: TransportTripType = TransportTripType.BOTH_WAYS
+    ): Int {
+        val stop = findStop(stopId = stopId, stopName = stopName)
+        if (stop != null) return stop.feeForTripType(tripType, this)
+        return routeFeeForTripType(tripType)
+    }
+
+    fun findStop(stopId: String?, stopName: String?): TransportStop? {
+        val cleanId = stopId?.trim().orEmpty()
+        if (cleanId.isNotEmpty()) {
+            stops.firstOrNull { it.stopId == cleanId }?.let { return it }
         }
-        return monthlyFeeRs.coerceAtLeast(0)
+        val cleanName = stopName?.trim().orEmpty()
+        if (cleanName.isNotEmpty()) {
+            stops.firstOrNull { it.stopName.equals(cleanName, ignoreCase = true) }?.let { return it }
+        }
+        return null
     }
 
     fun toFirestoreMap(uid: String, editorName: String, nowMs: Long): Map<String, Any> = mapOf(
@@ -1138,6 +1267,16 @@ data class TransportRouteRecord(
         "driverName" to driverName.trim().take(100),
         "driverPhone" to driverPhone.trim().take(24),
         "monthlyFeeRs" to monthlyFeeRs.coerceIn(0, 500_000).toLong(),
+        "pickupOnlyFeeRs" to pickupOnlyFeeRs.coerceIn(0, 500_000).toLong(),
+        "dropOnlyFeeRs" to dropOnlyFeeRs.coerceIn(0, 500_000).toLong(),
+        "vehicleOwnership" to vehicleOwnership.wireValue,
+        "ownerContractorName" to ownerContractorName.trim().take(100),
+        "ownerContractorPhone" to ownerContractorPhone.trim().take(24),
+        "monthlyRentRs" to monthlyRentRs.coerceIn(0, 500_000).toLong(),
+        "driverLicenceNo" to driverLicenceNo.trim().take(48),
+        "driverLicenceExpiryIso" to driverLicenceExpiryIso.trim().take(16),
+        "conductorName" to conductorName.trim().take(100),
+        "conductorPhone" to conductorPhone.trim().take(24),
         "stops" to stops.take(60).map { it.toMap() },
         "active" to active,
         "updatedByUid" to uid,
@@ -1169,11 +1308,238 @@ data class TransportRouteRecord(
                 updatedByUid = (data["updatedByUid"] as? String).orEmpty(),
                 updatedByName = (data["updatedByName"] as? String).orEmpty(),
                 clientEditedAtMs = (data["clientEditedAtMs"] as? Number)?.toLong() ?: 0L,
+                hasPendingWrites = hasPendingWrites,
+                pickupOnlyFeeRs = (data["pickupOnlyFeeRs"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
+                dropOnlyFeeRs = (data["dropOnlyFeeRs"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
+                vehicleOwnership = VehicleOwnershipType.fromRaw(data["vehicleOwnership"] as? String),
+                ownerContractorName = (data["ownerContractorName"] as? String)?.trim().orEmpty(),
+                ownerContractorPhone = (data["ownerContractorPhone"] as? String)?.trim().orEmpty(),
+                monthlyRentRs = (data["monthlyRentRs"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
+                driverLicenceNo = (data["driverLicenceNo"] as? String)?.trim().orEmpty(),
+                driverLicenceExpiryIso = (data["driverLicenceExpiryIso"] as? String)?.trim().orEmpty(),
+                conductorName = (data["conductorName"] as? String)?.trim().orEmpty(),
+                conductorPhone = (data["conductorPhone"] as? String)?.trim().orEmpty()
+            )
+        }
+    }
+}
+
+data class TransportVehicleDocumentRecord(
+    val id: String,
+    val schoolId: String,
+    val routeId: String,
+    val vehicleNumber: String,
+    val docType: VehicleDocumentType,
+    val documentNumber: String = "",
+    val expiryDateIso: String, // YYYY-MM-DD
+    val photoBase64: String = "",
+    val note: String = "",
+    val updatedByUid: String = "",
+    val updatedByName: String = "",
+    val clientEditedAtMs: Long = 0L,
+    val hasPendingWrites: Boolean = false
+) {
+    fun statusForDate(todayIso: String): VehicleDocExpiryStatus =
+        TransportEngine.evaluateVehicleDocumentStatus(expiryDateIso, todayIso)
+
+    fun daysRemainingFrom(todayIso: String): Long =
+        TransportEngine.daysBetweenIso(todayIso, expiryDateIso)
+
+    fun toFirestoreMap(uid: String, editorName: String, nowMs: Long): Map<String, Any> = mapOf(
+        "schoolId" to schoolId,
+        "routeId" to routeId.trim().take(128),
+        "vehicleNumber" to vehicleNumber.trim().take(40),
+        "docType" to docType.wireValue,
+        "documentNumber" to documentNumber.trim().take(64),
+        "expiryDateIso" to expiryDateIso.trim().take(16),
+        "photoBase64" to photoBase64.take(260_000),
+        "note" to note.trim().take(240),
+        "updatedByUid" to uid,
+        "updatedByName" to editorName.trim().take(120),
+        "clientEditedAtMs" to nowMs
+    )
+
+    companion object {
+        fun makeDocId(schoolId: String, routeId: String, docType: VehicleDocumentType): String =
+            "tvdoc_${StableDocId.sanitizeSegment(schoolId)}_${StableDocId.sanitizeSegment(routeId.ifBlank { "veh" })}_${docType.wireValue.lowercase(Locale.US)}_${System.currentTimeMillis().toString(36)}"
+
+        fun fromMap(docId: String, data: Map<String, Any>?, hasPendingWrites: Boolean = false): TransportVehicleDocumentRecord? {
+            if (data == null) return null
+            val schoolId = (data["schoolId"] as? String)?.trim().orEmpty()
+            val expiryDateIso = (data["expiryDateIso"] as? String)?.trim().orEmpty()
+            if (schoolId.isEmpty() || expiryDateIso.isEmpty()) return null
+            return TransportVehicleDocumentRecord(
+                id = docId,
+                schoolId = schoolId,
+                routeId = (data["routeId"] as? String)?.trim().orEmpty(),
+                vehicleNumber = (data["vehicleNumber"] as? String)?.trim().orEmpty(),
+                docType = VehicleDocumentType.fromRaw(data["docType"] as? String),
+                documentNumber = (data["documentNumber"] as? String)?.trim().orEmpty(),
+                expiryDateIso = expiryDateIso,
+                photoBase64 = (data["photoBase64"] as? String).orEmpty(),
+                note = (data["note"] as? String)?.trim().orEmpty(),
+                updatedByUid = (data["updatedByUid"] as? String).orEmpty(),
+                updatedByName = (data["updatedByName"] as? String).orEmpty(),
+                clientEditedAtMs = (data["clientEditedAtMs"] as? Number)?.toLong() ?: 0L,
                 hasPendingWrites = hasPendingWrites
             )
         }
     }
 }
+
+data class TransportSettingsConfig(
+    val id: String = "",
+    val schoolId: String,
+    val expenseCategories: List<String> = DEFAULT_TRANSPORT_EXPENSE_CATEGORIES,
+    val updatedByUid: String = "",
+    val updatedByName: String = "",
+    val clientEditedAtMs: Long = 0L,
+    val hasPendingWrites: Boolean = false
+) {
+    fun toFirestoreMap(uid: String, editorName: String, nowMs: Long): Map<String, Any> = mapOf(
+        "schoolId" to schoolId,
+        "expenseCategories" to expenseCategories.map { it.trim().take(60) }.filter { it.isNotEmpty() }.distinct().take(30)
+            .ifEmpty { DEFAULT_TRANSPORT_EXPENSE_CATEGORIES },
+        "updatedByUid" to uid,
+        "updatedByName" to editorName.trim().take(120),
+        "clientEditedAtMs" to nowMs
+    )
+
+    companion object {
+        val DEFAULT_TRANSPORT_EXPENSE_CATEGORIES: List<String> = listOf(
+            "Diesel",
+            "Repair",
+            "Tyre",
+            "Insurance",
+            "Driver Pay",
+            "Rent",
+            "Other"
+        )
+
+        fun makeDocId(schoolId: String): String = "tset_${StableDocId.sanitizeSegment(schoolId)}"
+
+        fun buildDefault(schoolId: String): TransportSettingsConfig =
+            TransportSettingsConfig(id = makeDocId(schoolId), schoolId = schoolId)
+
+        fun fromMap(docId: String, data: Map<String, Any>?, hasPendingWrites: Boolean = false): TransportSettingsConfig? {
+            if (data == null) return null
+            val schoolId = (data["schoolId"] as? String)?.trim().orEmpty()
+            if (schoolId.isEmpty()) return null
+            val cats = (data["expenseCategories"] as? List<*>)
+                ?.mapNotNull { (it as? String)?.trim() }
+                ?.filter { it.isNotEmpty() }
+                .orEmpty()
+                .ifEmpty { DEFAULT_TRANSPORT_EXPENSE_CATEGORIES }
+            return TransportSettingsConfig(
+                id = docId,
+                schoolId = schoolId,
+                expenseCategories = cats,
+                updatedByUid = (data["updatedByUid"] as? String).orEmpty(),
+                updatedByName = (data["updatedByName"] as? String).orEmpty(),
+                clientEditedAtMs = (data["clientEditedAtMs"] as? Number)?.toLong() ?: 0L,
+                hasPendingWrites = hasPendingWrites
+            )
+        }
+    }
+}
+
+enum class TransportStudentAttentionFlag(val labelEn: String, val labelHi: String) {
+    NO_ROUTE("No route assigned", "रूट तय नहीं"),
+    NO_START_MONTH("Start month not set", "शुरुआती महीना तय नहीं"),
+    ZERO_AMOUNT("Fee amount is ₹0", "फीस ₹0 है"),
+    STOP_NEEDS_UPDATE("Stop needs update", "स्टॉप अपडेट करें"),
+    OVER_CAPACITY("Route over capacity", "सीट क्षमता से अधिक");
+
+    fun label(isHindi: Boolean): String = if (isHindi) labelHi else labelEn
+}
+
+data class TransportResolvedDisplay(
+    val route: TransportRouteRecord?,
+    val routeName: String,
+    val stop: TransportStop?,
+    val stopName: String,
+    val stopNeedsUpdate: Boolean,
+    val tripType: TransportTripType,
+    val computedRouteOrStopFeeRs: Int,
+    val effectiveMonthlyFeeRs: Int,
+    val effectiveStartMonth: String,
+    val effectiveEndMonth: String,
+    val attentionFlags: List<TransportStudentAttentionFlag>
+) {
+    val needsAttention: Boolean get() = attentionFlags.isNotEmpty()
+}
+
+data class TransportMigrationItem(
+    val student: StudentEntity,
+    val assignedStartMonth: String,
+    val currentRouteName: String
+)
+
+data class TransportFeeApplyPreviewRow(
+    val student: StudentEntity,
+    val stopDisplayName: String,
+    val tripType: TransportTripType,
+    val oldMonthlyAmountRs: Int,
+    val newMonthlyAmountRs: Int
+) {
+    val hasChange: Boolean get() = oldMonthlyAmountRs != newMonthlyAmountRs
+}
+
+data class TransportDeleteCheckResult(
+    val canDeleteDirectly: Boolean,
+    val assignedCount: Int,
+    val assignedStudents: List<StudentEntity>
+)
+
+data class TransportMonthDueStudentRow(
+    val student: StudentEntity,
+    val studentDocId: String,
+    val routeId: String,
+    val routeName: String,
+    val stopName: String,
+    val tripType: TransportTripType,
+    val monthCode: String,
+    val scheduledRs: Int,
+    val paidRs: Int,
+    val dueRs: Int
+)
+
+data class TransportDuesSummary(
+    val monthCode: String,
+    val rows: List<TransportMonthDueStudentRow>,
+    val totalStudentsDue: Int,
+    val totalExpectedRs: Int,
+    val totalCollectedRs: Int,
+    val totalDueRs: Int,
+    val dueByRouteName: List<Pair<String, Int>>
+)
+
+data class TransportVehicleCostSummary(
+    val routeId: String,
+    val routeName: String,
+    val vehicleNumber: String,
+    val vehicleType: String,
+    val expectedIncomeRs: Int,
+    val collectedIncomeRs: Int,
+    val duesRs: Int,
+    val expenseRs: Int,
+    val profitOrLossRs: Int,
+    val expenseCount: Int
+)
+
+data class TransportMonthlyProfitLossReport(
+    val schoolName: String,
+    val session: String,
+    val monthCode: String,
+    val yearMonthIso: String,
+    val vehicleRows: List<TransportVehicleCostSummary>,
+    val unallocatedExpensesRs: Int,
+    val totalExpectedIncomeRs: Int,
+    val totalCollectedIncomeRs: Int,
+    val totalDuesRs: Int,
+    val totalExpenseRs: Int,
+    val netProfitOrLossRs: Int
+)
 
 data class TransportRouteSummary(
     val route: TransportRouteRecord,
@@ -1196,44 +1562,364 @@ data class TransportSchoolSummary(
 object TransportEngine {
 
     /**
-     * Safely assigns [student] to [route] and optional [stopName]:
-     * - Sets `usesTransport = true`, `transportRouteId = route.id`, `transportStopName`, and formatted `transportRouteName`.
-     * - **Preserves existing `student.transportMonthlyAmount`** when [preserveExistingAmountIfPositive] is true
-     *   and `student.transportMonthlyAmount > 0` (so existing Phase 9 per-student custom fees are never broken!).
-     * - Otherwise feeds the stop's monthly fee (if > 0) or the route's default monthly fee.
+     * Finds the matching route for [student]:
+     * Always resolves by `transportRouteId` first, using stored `transportRouteName` only as a legacy fallback.
+     */
+    fun resolveRoute(student: StudentEntity, routes: List<TransportRouteRecord>): TransportRouteRecord? {
+        if (!student.usesTransport) return null
+        if (student.transportRouteId.isNotBlank()) {
+            routes.firstOrNull { it.id == student.transportRouteId }?.let { return it }
+        }
+        val legacy = student.transportRouteName.trim()
+        if (legacy.isEmpty()) return null
+        return routes.firstOrNull { route ->
+            legacy.equals(route.routeName, ignoreCase = true) ||
+                legacy.startsWith("${route.routeName} -", ignoreCase = true) ||
+                legacy.startsWith("${route.routeName} (", ignoreCase = true)
+        }
+    }
+
+    fun resolveStop(student: StudentEntity, route: TransportRouteRecord?): TransportStop? {
+        if (route == null) return null
+        return route.findStop(student.transportStopId, student.transportStopName)
+    }
+
+    fun isStopMissing(student: StudentEntity, route: TransportRouteRecord?): Boolean {
+        if (!student.usesTransport || route == null) return false
+        val hadStop = student.transportStopId.isNotBlank() || student.transportStopName.isNotBlank()
+        if (!hadStop) return false
+        return resolveStop(student, route) == null
+    }
+
+    fun resolveDisplay(
+        student: StudentEntity,
+        routes: List<TransportRouteRecord>,
+        overCapacityRouteIds: Set<String> = emptySet(),
+        firstChargedMonthFallback: String = ""
+    ): TransportResolvedDisplay {
+        val route = resolveRoute(student, routes)
+        val stop = resolveStop(student, route)
+        val stopMissing = isStopMissing(student, route)
+        val tripType = TransportTripType.fromRaw(student.transportTripType)
+        val liveRouteName = route?.routeName
+            ?: student.transportRouteName.substringBefore(" -").trim().ifBlank { "No Route" }
+        val liveStopName = when {
+            stop != null -> stop.stopName
+            stopMissing -> student.transportStopName.ifBlank { "Removed stop" }
+            student.transportStopName.isNotBlank() -> student.transportStopName
+            else -> ""
+        }
+        val computedRouteOrStop = route?.effectiveFeeFor(
+            stopId = stop?.stopId ?: student.transportStopId,
+            stopName = liveStopName,
+            tripType = tripType
+        ) ?: student.transportMonthlyAmount.coerceAtLeast(0)
+
+        val effectiveStart = student.transportStartMonth.trim().uppercase(Locale.US)
+            .ifBlank { firstChargedMonthFallback.trim().uppercase(Locale.US) }
+        val effectiveEnd = student.transportEndMonth.trim().uppercase(Locale.US)
+
+        val flags = buildList {
+            if (student.usesTransport && route == null) {
+                add(TransportStudentAttentionFlag.NO_ROUTE)
+            }
+            if (student.usesTransport && student.transportStartMonth.isBlank()) {
+                add(TransportStudentAttentionFlag.NO_START_MONTH)
+            }
+            if (student.usesTransport && student.transportMonthlyAmount <= 0) {
+                add(TransportStudentAttentionFlag.ZERO_AMOUNT)
+            }
+            if (stopMissing) {
+                add(TransportStudentAttentionFlag.STOP_NEEDS_UPDATE)
+            }
+            if (route != null && route.id in overCapacityRouteIds) {
+                add(TransportStudentAttentionFlag.OVER_CAPACITY)
+            }
+        }
+
+        return TransportResolvedDisplay(
+            route = route,
+            routeName = liveRouteName,
+            stop = stop,
+            stopName = liveStopName,
+            stopNeedsUpdate = stopMissing,
+            tripType = tripType,
+            computedRouteOrStopFeeRs = computedRouteOrStop,
+            effectiveMonthlyFeeRs = student.transportMonthlyAmount.coerceAtLeast(0),
+            effectiveStartMonth = effectiveStart,
+            effectiveEndMonth = effectiveEnd,
+            attentionFlags = flags
+        )
+    }
+
+    /**
+     * Safely assigns [student] to [route], [stopName], [tripType], and [startMonth]:
+     * - Sets `usesTransport = true`, links by `transportRouteId` & `transportStopId`, and keeps fallback names.
+     * - Preserves existing `student.transportMonthlyAmount` when [preserveExistingAmountIfPositive] is true
+     *   and `student.transportMonthlyAmount > 0`, UNLESS `explicitMonthlyFeeOverride` is specified or
+     *   [preserveExistingAmountIfPositive] is false.
      */
     fun assignStudentToRoute(
         student: StudentEntity,
         route: TransportRouteRecord,
         stopName: String = "",
         preserveExistingAmountIfPositive: Boolean = true,
-        explicitMonthlyFeeOverride: Int? = null
+        explicitMonthlyFeeOverride: Int? = null,
+        stopId: String? = null,
+        tripType: TransportTripType = TransportTripType.fromRaw(student.transportTripType),
+        startMonth: String? = null,
+        endMonth: String? = null,
+        overrideRemark: String = ""
     ): StudentEntity {
-        val cleanStop = stopName.trim()
-        val displayRoute = if (cleanStop.isNotEmpty()) "${route.routeName} - $cleanStop" else route.routeName
-        val routeOrStopFee = route.effectiveFeeForStop(cleanStop)
+        val resolvedStop = route.findStop(stopId = stopId, stopName = stopName)
+        val cleanStopName = resolvedStop?.stopName ?: stopName.trim()
+        val resolvedStopId = resolvedStop?.stopId ?: stopId?.trim().orEmpty()
+        val displayRoute = if (cleanStopName.isNotEmpty()) "${route.routeName} - $cleanStopName" else route.routeName
+        val computedFee = route.effectiveFeeFor(
+            stopId = resolvedStopId,
+            stopName = cleanStopName,
+            tripType = tripType
+        )
+        val hasExplicitOverride = explicitMonthlyFeeOverride != null &&
+            (explicitMonthlyFeeOverride != computedFee || overrideRemark.isNotBlank())
         val finalAmount = when {
             explicitMonthlyFeeOverride != null -> explicitMonthlyFeeOverride.coerceAtLeast(0)
             preserveExistingAmountIfPositive && student.usesTransport && student.transportMonthlyAmount > 0 ->
                 student.transportMonthlyAmount
-            else -> routeOrStopFee
+            else -> computedFee
         }
+        val finalOverridden = when {
+            explicitMonthlyFeeOverride != null -> hasExplicitOverride
+            preserveExistingAmountIfPositive && student.usesTransport && student.transportFeeOverridden -> true
+            preserveExistingAmountIfPositive && student.usesTransport && student.transportMonthlyAmount > 0 &&
+                student.transportMonthlyAmount != computedFee -> student.transportFeeOverridden
+            else -> false
+        }
+        val finalRemark = when {
+            explicitMonthlyFeeOverride != null -> if (hasExplicitOverride) overrideRemark.trim() else ""
+            finalOverridden -> student.transportOverrideRemark
+            else -> ""
+        }
+        val finalStart = startMonth?.trim()?.uppercase(Locale.US)
+            ?: student.transportStartMonth.trim().uppercase(Locale.US)
+        val finalEnd = endMonth?.trim()?.uppercase(Locale.US)
+            ?: student.transportEndMonth.trim().uppercase(Locale.US)
+
         return student.copy(
             usesTransport = true,
             transportRouteId = route.id,
-            transportStopName = cleanStop,
+            transportStopId = resolvedStopId,
+            transportStopName = cleanStopName,
             transportRouteName = displayRoute,
-            transportMonthlyAmount = finalAmount
+            transportTripType = tripType.wireValue,
+            transportMonthlyAmount = finalAmount,
+            transportStartMonth = finalStart,
+            transportEndMonth = finalEnd,
+            transportFeeOverridden = finalOverridden,
+            transportOverrideRemark = finalRemark
+        )
+    }
+
+    fun overrideStudentFee(
+        student: StudentEntity,
+        overrideAmountRs: Int,
+        remark: String
+    ): StudentEntity {
+        val cleanRemark = remark.trim()
+        require(cleanRemark.isNotEmpty()) { "Override remark is mandatory." }
+        return student.copy(
+            transportMonthlyAmount = overrideAmountRs.coerceAtLeast(0),
+            transportFeeOverridden = true,
+            transportOverrideRemark = cleanRemark,
+            transportPriorMonthlyAmount = 0,
+            transportFeeEffectiveFromMonth = ""
+        )
+    }
+
+    fun resetStudentFeeToRoute(
+        student: StudentEntity,
+        routes: List<TransportRouteRecord>
+    ): StudentEntity {
+        val route = resolveRoute(student, routes) ?: return student.copy(
+            transportFeeOverridden = false,
+            transportOverrideRemark = ""
+        )
+        val trip = TransportTripType.fromRaw(student.transportTripType)
+        val routeFee = route.effectiveFeeFor(
+            stopId = student.transportStopId,
+            stopName = student.transportStopName,
+            tripType = trip
+        )
+        return student.copy(
+            transportMonthlyAmount = routeFee,
+            transportFeeOverridden = false,
+            transportOverrideRemark = "",
+            transportPriorMonthlyAmount = 0,
+            transportFeeEffectiveFromMonth = ""
+        )
+    }
+
+    fun changeStudentTripType(
+        student: StudentEntity,
+        tripType: TransportTripType,
+        routes: List<TransportRouteRecord>
+    ): StudentEntity {
+        val route = resolveRoute(student, routes)
+        val nextAmount = if (student.transportFeeOverridden || route == null) {
+            student.transportMonthlyAmount
+        } else {
+            route.effectiveFeeFor(
+                stopId = student.transportStopId,
+                stopName = student.transportStopName,
+                tripType = tripType
+            )
+        }
+        return student.copy(
+            transportTripType = tripType.wireValue,
+            transportMonthlyAmount = nextAmount
         )
     }
 
     fun removeStudentFromRoute(student: StudentEntity): StudentEntity = student.copy(
         usesTransport = false,
         transportRouteId = "",
+        transportStopId = "",
         transportStopName = "",
         transportRouteName = "",
-        transportMonthlyAmount = 0
+        transportMonthlyAmount = 0,
+        transportTripType = TransportTripType.BOTH_WAYS.wireValue,
+        transportStartMonth = "",
+        transportEndMonth = "",
+        transportFeeOverridden = false,
+        transportOverrideRemark = "",
+        transportPriorMonthlyAmount = 0,
+        transportFeeEffectiveFromMonth = ""
     )
+
+    fun firstChargedTransportMonth(structure: FeeStructureConfig): String =
+        structure.chargedTransportMonths
+            .firstOrNull { m -> structure.monthOrder.any { it.equals(m, ignoreCase = true) } }
+            ?: structure.monthOrder.firstOrNull()
+            ?: "APR"
+
+    /**
+     * Migrates legacy transport students whose `transportStartMonth` is blank:
+     * assigns them the first charged transport month of the session so existing dues & paid cells remain identical.
+     * Returns only the students that need migration along with their updated entities for review.
+     */
+    fun findAndPrepareLegacyMigration(
+        students: List<StudentEntity>,
+        routes: List<TransportRouteRecord>,
+        structure: FeeStructureConfig
+    ): List<TransportMigrationItem> {
+        val firstMonth = firstChargedTransportMonth(structure).uppercase(Locale.US)
+        return students
+            .filter { it.isActiveStatus && it.usesTransport && it.transportStartMonth.isBlank() }
+            .map { st ->
+                val resolvedRoute = resolveRoute(st, routes)
+                val migrated = st.copy(transportStartMonth = firstMonth)
+                TransportMigrationItem(
+                    student = migrated,
+                    assignedStartMonth = firstMonth,
+                    currentRouteName = resolvedRoute?.routeName
+                        ?: st.transportRouteName.ifBlank { "Unassigned Route" }
+                )
+            }
+    }
+
+    /**
+     * Builds preview rows for "Apply updated route/stop fees to students":
+     * - Excludes individually overridden students (`student.transportFeeOverridden == true`).
+     * - Shows student, stop, trip type, old monthly rate, and new monthly rate under [updatedRoute].
+     */
+    fun buildApplyRouteFeePreview(
+        students: List<StudentEntity>,
+        updatedRoute: TransportRouteRecord
+    ): Pair<List<TransportFeeApplyPreviewRow>, Int> {
+        val routeStudents = students.filter { studentMatchesRoute(it, updatedRoute) }
+        val excludedOverriddenCount = routeStudents.count { it.transportFeeOverridden }
+        val previewRows = routeStudents
+            .filter { !it.transportFeeOverridden }
+            .map { st ->
+                val tripType = TransportTripType.fromRaw(st.transportTripType)
+                val resolvedStop = resolveStop(st, updatedRoute)
+                val newAmt = updatedRoute.effectiveFeeFor(
+                    stopId = resolvedStop?.stopId ?: st.transportStopId,
+                    stopName = resolvedStop?.stopName ?: st.transportStopName,
+                    tripType = tripType
+                )
+                TransportFeeApplyPreviewRow(
+                    student = st,
+                    stopDisplayName = resolvedStop?.stopName ?: st.transportStopName.ifBlank { "-" },
+                    tripType = tripType,
+                    oldMonthlyAmountRs = st.transportMonthlyAmount,
+                    newMonthlyAmountRs = newAmt
+                )
+            }
+        return previewRows to excludedOverriddenCount
+    }
+
+    /**
+     * Applies [previewRows] starting from [effectiveFromMonth], preserving [student.transportMonthlyAmount]
+     * in `transportPriorMonthlyAmount` for months strictly prior to [effectiveFromMonth] so already-paid
+     * or earlier months never change silently.
+     */
+    fun buildUpdatedStudentsForFeeChange(
+        previewRows: List<TransportFeeApplyPreviewRow>,
+        updatedRoute: TransportRouteRecord,
+        effectiveFromMonth: String,
+        orderedSessionMonths: List<String>
+    ): List<StudentEntity> {
+        val cleanEff = effectiveFromMonth.trim().uppercase(Locale.US)
+        val firstMonth = orderedSessionMonths.firstOrNull()?.uppercase(Locale.US) ?: "APR"
+        val isFromSessionStart = cleanEff.isBlank() || cleanEff.equals(firstMonth, ignoreCase = true)
+        return previewRows
+            .filter { it.hasChange }
+            .map { row ->
+                val st = row.student
+                val resolvedStop = resolveStop(st, updatedRoute)
+                val cleanStopName = resolvedStop?.stopName ?: st.transportStopName
+                val routeDisp = if (cleanStopName.isNotBlank()) "${updatedRoute.routeName} - $cleanStopName" else updatedRoute.routeName
+                if (isFromSessionStart) {
+                    st.copy(
+                        transportRouteName = routeDisp,
+                        transportMonthlyAmount = row.newMonthlyAmountRs,
+                        transportPriorMonthlyAmount = 0,
+                        transportFeeEffectiveFromMonth = ""
+                    )
+                } else {
+                    st.copy(
+                        transportRouteName = routeDisp,
+                        transportMonthlyAmount = row.newMonthlyAmountRs,
+                        transportPriorMonthlyAmount = row.oldMonthlyAmountRs,
+                        transportFeeEffectiveFromMonth = cleanEff
+                    )
+                }
+            }
+    }
+
+    fun checkRouteDeletion(
+        route: TransportRouteRecord,
+        students: List<StudentEntity>
+    ): TransportDeleteCheckResult {
+        val assigned = students.filter { studentMatchesRoute(it, route) }
+        return TransportDeleteCheckResult(
+            canDeleteDirectly = assigned.isEmpty(),
+            assignedCount = assigned.size,
+            assignedStudents = assigned
+        )
+    }
+
+    fun willExceedCapacity(
+        route: TransportRouteRecord,
+        currentStudents: List<StudentEntity>,
+        additionalStudentIds: Set<Long>
+    ): Boolean {
+        val existingOnRoute = currentStudents.count { studentMatchesRoute(it, route) }
+        val alreadyOnRoute = currentStudents.count { it.id in additionalStudentIds && studentMatchesRoute(it, route) }
+        val projected = existingOnRoute + (additionalStudentIds.size - alreadyOnRoute)
+        return projected > route.seatCapacity
+    }
 
     fun studentMatchesRoute(student: StudentEntity, route: TransportRouteRecord): Boolean {
         if (!student.isActiveStatus || !student.usesTransport) return false
@@ -1256,7 +1942,10 @@ object TransportEngine {
                 .sortedWith(
                     compareBy<StudentEntity>(
                         { st ->
-                            val idx = route.stops.indexOfFirst { it.stopName.equals(st.transportStopName, ignoreCase = true) }
+                            val idx = route.stops.indexOfFirst {
+                                (st.transportStopId.isNotBlank() && it.stopId == st.transportStopId) ||
+                                    it.stopName.equals(st.transportStopName, ignoreCase = true)
+                            }
                             if (idx >= 0) idx else Int.MAX_VALUE
                         },
                         { it.className.lowercase(Locale.US) },
@@ -1286,5 +1975,266 @@ object TransportEngine {
             totalCapacity = summaries.filter { it.route.active }.sumOf { it.route.seatCapacity },
             totalExpectedMonthlyIncomeRs = activeTransportStudents.sumOf { it.transportMonthlyAmount.coerceAtLeast(0) }
         )
+    }
+
+    private fun parseIsoEpochDays(iso: String): Long? {
+        val m = Regex("^(\\d{4})-(\\d{2})-(\\d{2})$").matchEntire(iso.trim()) ?: return null
+        val y0 = m.groupValues[1].toInt()
+        val m0 = m.groupValues[2].toInt()
+        val d0 = m.groupValues[3].toInt()
+        val y = if (m0 <= 2) y0 - 1 else y0
+        val era = (if (y >= 0) y else y - 399) / 400
+        val yoe = y - era * 400
+        val doy = (153 * (m0 + (if (m0 > 2) -3 else 9)) + 2) / 5 + d0 - 1
+        val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+        return (era * 146097 + doe - 719468).toLong()
+    }
+
+    fun daysBetweenIso(fromIso: String, toIso: String): Long {
+        val fromDays = parseIsoEpochDays(fromIso) ?: return 9999L
+        val toDays = parseIsoEpochDays(toIso) ?: return 9999L
+        return toDays - fromDays
+    }
+
+    fun evaluateVehicleDocumentStatus(expiryDateIso: String, todayIso: String): VehicleDocExpiryStatus {
+        val diff = daysBetweenIso(todayIso, expiryDateIso)
+        return when {
+            diff < 0 -> VehicleDocExpiryStatus.EXPIRED
+            diff <= 30 -> VehicleDocExpiryStatus.EXPIRING_SOON
+            else -> VehicleDocExpiryStatus.VALID
+        }
+    }
+
+    fun computeTransportDuesForMonth(
+        monthCode: String,
+        studentsWithDocIds: List<Pair<String, StudentEntity>>,
+        routes: List<TransportRouteRecord>,
+        structure: FeeStructureConfig,
+        overridesByStudentDocId: Map<String, StudentFeeOverride>,
+        receipts: List<FeeReceiptRecord>,
+        routeIdFilter: String? = null,
+        classNameFilter: String? = null
+    ): TransportDuesSummary {
+        val cleanMonth = monthCode.trim().uppercase(Locale.US)
+        val receiptsByStudent = receipts.groupBy { it.studentId }
+        val rows = mutableListOf<TransportMonthDueStudentRow>()
+        var expectedSum = 0
+        var collectedSum = 0
+        var dueSum = 0
+        val dueByRoute = linkedMapOf<String, Int>()
+
+        for ((stuDocId, student) in studentsWithDocIds) {
+            if (!student.isActiveStatus || !student.usesTransport) continue
+            if (!student.session.equals(structure.session, ignoreCase = true)) continue
+            if (!classNameFilter.isNullOrBlank() && !student.className.equals(classNameFilter, ignoreCase = true)) continue
+
+            val route = resolveRoute(student, routes)
+            if (!routeIdFilter.isNullOrBlank()) {
+                if (routeIdFilter == "__NO_ROUTE__") {
+                    if (route != null) continue
+                } else if (route?.id != routeIdFilter) {
+                    continue
+                }
+            }
+
+            val acct = FeeCollectionEngine.computeStudentFeeAccount(
+                structure = structure,
+                student = student,
+                studentDocId = stuDocId,
+                override = overridesByStudentDocId[stuDocId],
+                receiptsForStudent = receiptsByStudent[stuDocId].orEmpty(),
+                routes = routes
+            )
+            val tCell = acct.monthRows
+                .firstOrNull { it.monthCode.equals(cleanMonth, ignoreCase = true) }
+                ?.transportCell
+                ?: continue
+            if (tCell.state == FeeCellState.NOT_APPLICABLE && tCell.scheduledAmount == 0) continue
+
+            expectedSum += tCell.scheduledAmount
+            collectedSum += (tCell.paidAmount + tCell.concessionAllocated).coerceAtMost(tCell.scheduledAmount)
+            if (tCell.remainingDue > 0) {
+                dueSum += tCell.remainingDue
+                val dispRoute = route?.routeName ?: student.transportRouteName.ifBlank { "No Route" }
+                dueByRoute[dispRoute] = (dueByRoute[dispRoute] ?: 0) + tCell.remainingDue
+                val resolvedStop = resolveStop(student, route)
+                rows += TransportMonthDueStudentRow(
+                    student = student,
+                    studentDocId = stuDocId,
+                    routeId = route?.id.orEmpty(),
+                    routeName = dispRoute,
+                    stopName = resolvedStop?.stopName ?: student.transportStopName.ifBlank { "-" },
+                    tripType = TransportTripType.fromRaw(student.transportTripType),
+                    monthCode = cleanMonth,
+                    scheduledRs = tCell.scheduledAmount,
+                    paidRs = tCell.paidAmount + tCell.concessionAllocated,
+                    dueRs = tCell.remainingDue
+                )
+            }
+        }
+
+        return TransportDuesSummary(
+            monthCode = cleanMonth,
+            rows = rows.sortedWith(compareBy({ it.routeName }, { it.student.className }, { it.student.rollNo }, { it.student.name })),
+            totalStudentsDue = rows.size,
+            totalExpectedRs = expectedSum,
+            totalCollectedRs = collectedSum,
+            totalDueRs = dueSum,
+            dueByRouteName = dueByRoute.entries.map { it.key to it.value }.sortedByDescending { it.second }
+        )
+    }
+
+    /**
+     * Maps session month code ("APR".."MAR") + session ("2026-2027") -> "YYYY-MM".
+     */
+    fun yearMonthForSessionMonth(session: String, monthCode: String): String {
+        val mUpper = monthCode.trim().uppercase(Locale.US)
+        val startYear = session.trim().take(4).toIntOrNull() ?: 2026
+        val (calYear, mm) = when (mUpper) {
+            "APR" -> startYear to "04"
+            "MAY" -> startYear to "05"
+            "JUN" -> startYear to "06"
+            "JUL" -> startYear to "07"
+            "AUG" -> startYear to "08"
+            "SEP" -> startYear to "09"
+            "OCT" -> startYear to "10"
+            "NOV" -> startYear to "11"
+            "DEC" -> startYear to "12"
+            "JAN" -> (startYear + 1) to "01"
+            "FEB" -> (startYear + 1) to "02"
+            "MAR" -> (startYear + 1) to "03"
+            else -> startYear to "04"
+        }
+        return "$calYear-$mm"
+    }
+
+    /**
+     * Computes monthly Income vs Expense & Profit/Loss per route/vehicle and for the school.
+     * Uses the unified `cashBookEntries` tagged with Transport (zero duplicate financial records).
+     */
+    fun computeMonthlyProfitLossReport(
+        schoolId: String,
+        schoolName: String,
+        session: String,
+        monthCode: String,
+        yearMonthIso: String,
+        routes: List<TransportRouteRecord>,
+        studentsWithDocIds: List<Pair<String, StudentEntity>>,
+        structure: FeeStructureConfig,
+        overridesByStudentDocId: Map<String, StudentFeeOverride>,
+        receipts: List<FeeReceiptRecord>,
+        cashBookEntries: List<CashBookEntryRecord>
+    ): TransportMonthlyProfitLossReport {
+        val cleanMonth = monthCode.trim().uppercase(Locale.US)
+        val schoolRoutes = routes.filter { it.schoolId == schoolId }.sortedBy { it.routeName.lowercase(Locale.US) }
+        val schoolTransportExpenses = cashBookEntries.filter { entry ->
+            entry.schoolId == schoolId &&
+                !entry.isCancelled &&
+                entry.isExpense &&
+                entry.isTransportExpense &&
+                entry.dateIso.startsWith(yearMonthIso)
+        }
+
+        val receiptsByStudent = receipts.filter {
+            it.schoolId == schoolId && it.session.equals(session, ignoreCase = true) && !it.isCancelled
+        }.groupBy { it.studentId }
+
+        val routeExpected = mutableMapOf<String, Int>()
+        val routeCollected = mutableMapOf<String, Int>()
+        val routeDues = mutableMapOf<String, Int>()
+
+        for ((stuDocId, student) in studentsWithDocIds) {
+            if (!student.isActiveStatus) continue
+            if (!student.session.equals(session, ignoreCase = true)) continue
+            val route = resolveRoute(student, schoolRoutes) ?: continue
+            val acct = FeeCollectionEngine.computeStudentFeeAccount(
+                structure = structure,
+                student = student,
+                studentDocId = stuDocId,
+                override = overridesByStudentDocId[stuDocId],
+                receiptsForStudent = receiptsByStudent[stuDocId].orEmpty(),
+                routes = schoolRoutes
+            )
+            val cell = acct.monthRows.firstOrNull { it.monthCode.equals(cleanMonth, ignoreCase = true) }?.transportCell
+                ?: continue
+            routeExpected[route.id] = (routeExpected[route.id] ?: 0) + cell.scheduledAmount
+            routeCollected[route.id] = (routeCollected[route.id] ?: 0) + (cell.paidAmount + cell.concessionAllocated).coerceAtMost(cell.scheduledAmount)
+            routeDues[route.id] = (routeDues[route.id] ?: 0) + cell.remainingDue
+        }
+
+        val matchedExpenseIds = mutableSetOf<String>()
+        val vehicleRows = schoolRoutes.map { rt ->
+            val matchingExp = schoolTransportExpenses.filter { e ->
+                (e.transportRouteId.isNotBlank() && e.transportRouteId == rt.id) ||
+                    (rt.vehicleNumber.isNotBlank() && e.vehicleNumber.equals(rt.vehicleNumber, ignoreCase = true))
+            }
+            matchedExpenseIds += matchingExp.map { it.id }
+            val expSum = matchingExp.sumOf { it.amount }
+            val expIncome = routeExpected[rt.id] ?: 0
+            val colIncome = routeCollected[rt.id] ?: 0
+            val dues = routeDues[rt.id] ?: 0
+            TransportVehicleCostSummary(
+                routeId = rt.id,
+                routeName = rt.routeName,
+                vehicleNumber = rt.vehicleNumber.ifBlank { "-" },
+                vehicleType = rt.vehicleType,
+                expectedIncomeRs = expIncome,
+                collectedIncomeRs = colIncome,
+                duesRs = dues,
+                expenseRs = expSum,
+                profitOrLossRs = colIncome - expSum,
+                expenseCount = matchingExp.size
+            )
+        }
+
+        val unallocatedExp = schoolTransportExpenses.filter { it.id !in matchedExpenseIds }.sumOf { it.amount }
+        val totalExpected = vehicleRows.sumOf { it.expectedIncomeRs }
+        val totalCollected = vehicleRows.sumOf { it.collectedIncomeRs }
+        val totalDues = vehicleRows.sumOf { it.duesRs }
+        val totalExp = vehicleRows.sumOf { it.expenseRs } + unallocatedExp
+        return TransportMonthlyProfitLossReport(
+            schoolName = schoolName,
+            session = session,
+            monthCode = cleanMonth,
+            yearMonthIso = yearMonthIso,
+            vehicleRows = vehicleRows,
+            unallocatedExpensesRs = unallocatedExp,
+            totalExpectedIncomeRs = totalExpected,
+            totalCollectedIncomeRs = totalCollected,
+            totalDuesRs = totalDues,
+            totalExpenseRs = totalExp,
+            netProfitOrLossRs = totalCollected - totalExp
+        )
+    }
+
+    fun buildMonthlySummaryCsv(report: TransportMonthlyProfitLossReport): String {
+        fun esc(v: String): String {
+            val clean = v.replace("\"", "\"\"")
+            return if (clean.contains(',') || clean.contains('"') || clean.contains('\n')) "\"$clean\"" else clean
+        }
+        val sb = StringBuilder()
+        sb.appendLine("School,Session,Month,Route,Vehicle No,Vehicle Type,Expected Income (Rs),Collected (Rs),Dues (Rs),Expenses (Rs),Profit/Loss (Rs)")
+        for (row in report.vehicleRows) {
+            sb.appendLine(
+                listOf(
+                    esc(report.schoolName),
+                    esc(report.session),
+                    esc("${report.monthCode} (${report.yearMonthIso})"),
+                    esc(row.routeName),
+                    esc(row.vehicleNumber),
+                    esc(row.vehicleType),
+                    row.expectedIncomeRs.toString(),
+                    row.collectedIncomeRs.toString(),
+                    row.duesRs.toString(),
+                    row.expenseRs.toString(),
+                    row.profitOrLossRs.toString()
+                ).joinToString(",")
+            )
+        }
+        if (report.unallocatedExpensesRs > 0) {
+            sb.appendLine("${esc(report.schoolName)},${esc(report.session)},${esc(report.monthCode)},Unallocated / General Vehicle,-,-,0,0,0,${report.unallocatedExpensesRs},-${report.unallocatedExpensesRs}")
+        }
+        sb.appendLine("${esc(report.schoolName)},${esc(report.session)},${esc(report.monthCode)},TOTAL,-,-,${report.totalExpectedIncomeRs},${report.totalCollectedIncomeRs},${report.totalDuesRs},${report.totalExpenseRs},${report.netProfitOrLossRs}")
+        return sb.toString()
     }
 }

@@ -2452,7 +2452,7 @@ fun PrivacyAndTermsScreen(
                 LegalDocType.PRIVACY_POLICY -> {
                     LegalSectionCard(
                         title = "1. What Data This App Collects / कौन-सा डेटा एकत्र होता है",
-                        body = "Account details (name, email, Firebase user ID) and authorised school records entered by your staff: school info & logos, student profiles (including DOB for academic records & in-app birthday wishes), guardian mobile numbers, optional compressed photos (<150 KB, including student/staff avatars, expense bills, and class diary blackboard/homework photos), attendance, exam marks, class diary entries, fee receipts, cash book & admission enquiries, and staff salary records (Owner/permitted Admin only)."
+                        body = "Account details (name, email, Firebase user ID) and authorised school records entered by your staff: school info & logos, student profiles (including DOB for academic records & in-app birthday wishes), guardian & authorised pickup person names/relations/mobile numbers, optional compressed photos (<150 KB, including student/staff avatars, expense bills, class diary blackboard/homework photos, and optional authorised pickup person or visitor photos), attendance, exam marks, class diary entries, sensitive student remarks & Parent-Teacher Meeting (PTM) notes/decisions, early leave gate passes, visitor register entries, fee receipts, cash book & admission enquiries, and staff salary records (Owner/permitted Admin only)."
                     )
                     LegalSectionCard(
                         title = "2. Storage, Sync & Local Cache / डेटा कहाँ सेव रहता है",

@@ -20,7 +20,7 @@ import com.example.domain.MarkComponent
         CoScholasticEntity::class,
         TermInfoEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

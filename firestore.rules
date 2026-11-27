@@ -40,14 +40,15 @@ service cloud.firestore {
 
     function isValidPermissionsMap(perms) {
       return perms is map &&
-        perms.size() >= 8 && perms.size() <= 21 &&
+        perms.size() >= 8 && perms.size() <= 23 &&
         perms.keys().hasAll(['students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members']) &&
         perms.keys().hasOnly([
           'students', 'marks', 'coScholastic', 'reports', 'timetable', 'teachers', 'settings', 'members',
           'attendance', 'fees', 'studentRegister',
           'certificates', 'cashBook', 'enquiry',
           'exams', 'stock', 'transport',
-          'salary', 'sessionPromotion', 'resultAnalysis', 'classDiary'
+          'salary', 'sessionPromotion', 'resultAnalysis', 'classDiary',
+          'studentRemarks', 'gate'
         ]) &&
         perms.students in ['none', 'view', 'edit'] &&
         perms.marks in ['none', 'view', 'edit'] &&
@@ -69,7 +70,9 @@ service cloud.firestore {
         (!('salary' in perms) || perms.salary in ['none', 'view', 'edit']) &&
         (!('sessionPromotion' in perms) || perms.sessionPromotion in ['none', 'view', 'edit']) &&
         (!('resultAnalysis' in perms) || perms.resultAnalysis in ['none', 'view', 'edit']) &&
-        (!('classDiary' in perms) || perms.classDiary in ['none', 'view', 'edit']);
+        (!('classDiary' in perms) || perms.classDiary in ['none', 'view', 'edit']) &&
+        (!('studentRemarks' in perms) || perms.studentRemarks in ['none', 'view', 'edit']) &&
+        (!('gate' in perms) || perms.gate in ['none', 'view', 'edit']);
     }
 
     function isValidStringList(listVal, maxLen) {
@@ -186,13 +189,24 @@ service cloud.firestore {
         changed.hasOnly(['status', 'leftDate', 'leftReason', 'updatedAt']);
       let canTransportEdit = !canFullEdit &&
         'transport' in m.permissions && m.permissions.transport == 'edit' &&
-        changed.hasOnly(['usesTransport', 'transportRouteId', 'transportRouteName', 'transportStopName', 'transportMonthlyAmount', 'updatedAt']);
+        changed.hasOnly([
+          'usesTransport', 'transportRouteId', 'transportRouteName',
+          'transportStopId', 'transportStopName', 'transportTripType',
+          'transportMonthlyAmount', 'transportStartMonth', 'transportEndMonth',
+          'transportFeeOverridden', 'transportOverrideRemark',
+          'transportPriorMonthlyAmount', 'transportFeeEffectiveFromMonth',
+          'updatedAt'
+        ]);
       return memberExists(orgId) && m.status == 'active' && inSchool && (
         (canFullEdit && changed.hasOnly([
           'classId', 'session', 'admNo', 'name', 'fatherName', 'motherName',
           'dob', 'mobile', 'secondMobile', 'address', 'photoBase64', 'className', 'section',
           'rollNo', 'admissionDate', 'previousSchool', 'siblingGroupId',
-          'usesTransport', 'transportRouteId', 'transportRouteName', 'transportStopName', 'transportMonthlyAmount',
+          'usesTransport', 'transportRouteId', 'transportRouteName',
+          'transportStopId', 'transportStopName', 'transportTripType',
+          'transportMonthlyAmount', 'transportStartMonth', 'transportEndMonth',
+          'transportFeeOverridden', 'transportOverrideRemark',
+          'transportPriorMonthlyAmount', 'transportFeeEffectiveFromMonth',
           'status', 'leftDate', 'leftReason',
           'sample', 'updatedAt'
         ])) ||
@@ -283,7 +297,9 @@ service cloud.firestore {
         ('reports' in p && p.reports in ['view', 'edit']) ||
         ('attendance' in p && p.attendance in ['view', 'edit']) ||
         ('sessionPromotion' in p && p.sessionPromotion in ['view', 'edit']) ||
-        ('classDiary' in p && p.classDiary in ['view', 'edit']);
+        ('classDiary' in p && p.classDiary in ['view', 'edit']) ||
+        ('studentRemarks' in p && p.studentRemarks in ['view', 'edit']) ||
+        ('gate' in p && p.gate in ['view', 'edit']);
       let hasResultAnalysis = ('resultAnalysis' in p && p.resultAnalysis in ['view', 'edit']) &&
         (m.role != 'TEACHER' || hasAnyTeacherSubjectScope(orgId));
       return memberExists(orgId) && m.status == 'active' && inSchool && (
@@ -579,7 +595,11 @@ service cloud.firestore {
           'schoolId', 'classId', 'session', 'admNo', 'name', 'fatherName', 'motherName',
           'dob', 'mobile', 'secondMobile', 'address', 'photoBase64', 'className', 'section', 'rollNo',
           'admissionDate', 'previousSchool', 'siblingGroupId',
-          'usesTransport', 'transportRouteId', 'transportRouteName', 'transportStopName', 'transportMonthlyAmount',
+          'usesTransport', 'transportRouteId', 'transportRouteName',
+          'transportStopId', 'transportStopName', 'transportTripType',
+          'transportMonthlyAmount', 'transportStartMonth', 'transportEndMonth',
+          'transportFeeOverridden', 'transportOverrideRemark',
+          'transportPriorMonthlyAmount', 'transportFeeEffectiveFromMonth',
           'status', 'leftDate', 'leftReason',
           'sample', 'createdAt', 'updatedAt'
         ]) &&
@@ -604,8 +624,16 @@ service cloud.firestore {
         (!('usesTransport' in data) || data.usesTransport is bool) &&
         (!('transportRouteId' in data) || (data.transportRouteId is string && data.transportRouteId.size() <= 128)) &&
         (!('transportRouteName' in data) || (data.transportRouteName is string && data.transportRouteName.size() <= 120)) &&
+        (!('transportStopId' in data) || (data.transportStopId is string && data.transportStopId.size() <= 60)) &&
         (!('transportStopName' in data) || (data.transportStopName is string && data.transportStopName.size() <= 80)) &&
+        (!('transportTripType' in data) || data.transportTripType in ['BOTH_WAYS', 'PICKUP_ONLY', 'DROP_ONLY']) &&
         (!('transportMonthlyAmount' in data) || (data.transportMonthlyAmount is int && data.transportMonthlyAmount >= 0 && data.transportMonthlyAmount <= 500000)) &&
+        (!('transportStartMonth' in data) || (data.transportStartMonth is string && data.transportStartMonth.size() <= 10)) &&
+        (!('transportEndMonth' in data) || (data.transportEndMonth is string && data.transportEndMonth.size() <= 10)) &&
+        (!('transportFeeOverridden' in data) || data.transportFeeOverridden is bool) &&
+        (!('transportOverrideRemark' in data) || (data.transportOverrideRemark is string && data.transportOverrideRemark.size() <= 240)) &&
+        (!('transportPriorMonthlyAmount' in data) || (data.transportPriorMonthlyAmount is int && data.transportPriorMonthlyAmount >= 0 && data.transportPriorMonthlyAmount <= 500000)) &&
+        (!('transportFeeEffectiveFromMonth' in data) || (data.transportFeeEffectiveFromMonth is string && data.transportFeeEffectiveFromMonth.size() <= 10)) &&
         (!('status' in data) || data.status in ['ACTIVE', 'LEFT']) &&
         (!('leftDate' in data) || (data.leftDate is string && data.leftDate.size() <= 40)) &&
         (!('leftReason' in data) || (data.leftReason is string && data.leftReason.size() <= 300)) &&
@@ -1177,7 +1205,7 @@ service cloud.firestore {
         data.section is string && data.section.size() >= 1 && data.section.size() <= 10 &&
         data.guardianName is string && data.guardianName.size() <= 120 &&
         data.normalizedMobile is string && data.normalizedMobile.size() <= 24 &&
-        data.messageType in ['FEE_DUE_REMINDER', 'FEE_RECEIPT', 'GENERAL'] &&
+        data.messageType in ['FEE_DUE_REMINDER', 'FEE_RECEIPT', 'GENERAL', 'TRANSPORT_DUE_REMINDER'] &&
         data.contextKey is string && data.contextKey.size() >= 1 && data.contextKey.size() <= 80 &&
         data.messageText is string && data.messageText.size() >= 1 && data.messageText.size() <= 600 &&
         data.channel in ['WHATSAPP', 'SMS'] &&
@@ -1350,7 +1378,9 @@ service cloud.firestore {
           'status', 'approvedByAdminUid', 'approvedByAdminName', 'approvalNote',
           'createdByUid', 'createdByName', 'createdAtMs',
           'updatedByUid', 'updatedByName', 'lastEditReason', 'clientEditedAtMs',
-          'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason', 'createdAt', 'updatedAt'
+          'cancelledAtMs', 'cancelledByUid', 'cancelledByName', 'cancelReason',
+          'sourceModule', 'transportRouteId', 'vehicleNumber', 'transportCategory',
+          'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.schoolId) &&
         isValidIsoDate(data.dateIso) &&
@@ -1375,6 +1405,10 @@ service cloud.firestore {
         data.cancelledByUid == '' &&
         data.cancelledByName == '' &&
         data.cancelReason == '' &&
+        (!('sourceModule' in data) || data.sourceModule in ['', 'TRANSPORT']) &&
+        (!('transportRouteId' in data) || (data.transportRouteId is string && data.transportRouteId.size() <= 128)) &&
+        (!('vehicleNumber' in data) || (data.vehicleNumber is string && data.vehicleNumber.size() <= 40)) &&
+        (!('transportCategory' in data) || (data.transportCategory is string && data.transportCategory.size() <= 80)) &&
         isValidTimestamp(data.createdAt) &&
         isValidTimestamp(data.updatedAt);
     }
@@ -1418,7 +1452,7 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'schoolId', 'action', 'targetId', 'dateIso', 'amount', 'reason', 'summary',
-          'actorUid', 'actorName', 'clientCreatedAtMs', 'createdAt'
+          'actorUid', 'actorName', 'clientCreatedAtMs', 'sourceModule', 'createdAt'
         ]) &&
         isValidId(data.schoolId) &&
         data.action is string && data.action.size() >= 1 && data.action.size() <= 60 &&
@@ -1430,6 +1464,7 @@ service cloud.firestore {
         data.actorUid == request.auth.uid &&
         data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
         data.clientCreatedAtMs is int && data.clientCreatedAtMs >= 0 &&
+        (!('sourceModule' in data) || data.sourceModule in ['', 'TRANSPORT']) &&
         isValidTimestamp(data.createdAt);
     }
 
@@ -1624,7 +1659,11 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'schoolId', 'routeName', 'vehicleNumber', 'vehicleType', 'seatCapacity',
-          'driverName', 'driverPhone', 'monthlyFeeRs', 'stops', 'active',
+          'driverName', 'driverPhone', 'monthlyFeeRs',
+          'pickupOnlyFeeRs', 'dropOnlyFeeRs',
+          'vehicleOwnership', 'ownerContractorName', 'ownerContractorPhone', 'monthlyRentRs',
+          'driverLicenceNo', 'driverLicenceExpiryIso', 'conductorName', 'conductorPhone',
+          'stops', 'active',
           'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
         ]) &&
         isValidId(data.schoolId) &&
@@ -1635,8 +1674,60 @@ service cloud.firestore {
         data.driverName is string && data.driverName.size() <= 100 &&
         data.driverPhone is string && data.driverPhone.size() <= 24 &&
         data.monthlyFeeRs is int && data.monthlyFeeRs >= 0 && data.monthlyFeeRs <= 500000 &&
+        (!('pickupOnlyFeeRs' in data) || (data.pickupOnlyFeeRs is int && data.pickupOnlyFeeRs >= 0 && data.pickupOnlyFeeRs <= 500000)) &&
+        (!('dropOnlyFeeRs' in data) || (data.dropOnlyFeeRs is int && data.dropOnlyFeeRs >= 0 && data.dropOnlyFeeRs <= 500000)) &&
+        (!('vehicleOwnership' in data) || data.vehicleOwnership in ['OWN', 'RENTED']) &&
+        (!('ownerContractorName' in data) || (data.ownerContractorName is string && data.ownerContractorName.size() <= 100)) &&
+        (!('ownerContractorPhone' in data) || (data.ownerContractorPhone is string && data.ownerContractorPhone.size() <= 24)) &&
+        (!('monthlyRentRs' in data) || (data.monthlyRentRs is int && data.monthlyRentRs >= 0 && data.monthlyRentRs <= 500000)) &&
+        (!('driverLicenceNo' in data) || (data.driverLicenceNo is string && data.driverLicenceNo.size() <= 48)) &&
+        (!('driverLicenceExpiryIso' in data) || (data.driverLicenceExpiryIso is string && data.driverLicenceExpiryIso.size() <= 16)) &&
+        (!('conductorName' in data) || (data.conductorName is string && data.conductorName.size() <= 100)) &&
+        (!('conductorPhone' in data) || (data.conductorPhone is string && data.conductorPhone.size() <= 24)) &&
         data.stops is list && data.stops.size() <= 60 &&
         data.active is bool &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidTransportVehicleDocument(data) {
+      return data.keys().hasAll([
+          'schoolId', 'routeId', 'vehicleNumber', 'docType', 'documentNumber',
+          'expiryDateIso', 'photoBase64', 'note',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'routeId', 'vehicleNumber', 'docType', 'documentNumber',
+          'expiryDateIso', 'photoBase64', 'note',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.routeId is string && data.routeId.size() <= 128 &&
+        data.vehicleNumber is string && data.vehicleNumber.size() <= 40 &&
+        data.docType in ['INSURANCE', 'FITNESS', 'PERMIT', 'PUC', 'ROAD_TAX', 'OTHER'] &&
+        data.documentNumber is string && data.documentNumber.size() <= 64 &&
+        isValidIsoDate(data.expiryDateIso) &&
+        data.photoBase64 is string && data.photoBase64.size() <= 260000 &&
+        data.note is string && data.note.size() <= 240 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidTransportSettings(data) {
+      return data.keys().hasAll([
+          'schoolId', 'expenseCategories',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'expenseCategories',
+          'updatedByUid', 'updatedByName', 'clientEditedAtMs', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        isValidStringList(data.expenseCategories, 30) && data.expenseCategories.size() >= 1 &&
         data.updatedByUid == request.auth.uid &&
         data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
         data.clientEditedAtMs is int && data.clientEditedAtMs >= 0 &&
@@ -2189,6 +2280,304 @@ service cloud.firestore {
         data.wishedByName is string && data.wishedByName.size() >= 1 && data.wishedByName.size() <= 120 &&
         data.wishedAtMs is int && data.wishedAtMs >= 0 &&
         data.channel in ['WHATSAPP', 'COPY', 'CARD', 'MANUAL', 'SHARE'] &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    // =========================================================================
+    // PHASE 19 VALIDATORS & RBAC HELPERS: STUDENT REMARKS ('studentRemarks'),
+    // PARENT MEETINGS (PTM) AND GATE ('gate')
+    // =========================================================================
+    function canReadStudentRemarkForClass(orgId, schoolId, className, section) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasExplicitRemarkView = isAdmin || ('studentRemarks' in p && p.studentRemarks in ['view', 'edit']);
+      let isCt = isClassTeacherOfSection(orgId, schoolId, className, section);
+      return memberExists(orgId) && m.status == 'active' && inSchool && (
+        hasExplicitRemarkView || isCt
+      );
+    }
+
+    function canWriteStudentRemarkForClass(orgId, schoolId, className, section) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasExplicitRemarkEdit = isAdmin || ('studentRemarks' in p && p.studentRemarks == 'edit');
+      let notRestrictedToView = !('studentRemarks' in p) || p.studentRemarks != 'view';
+      let isCtAllowed = notRestrictedToView && isClassTeacherOfSection(orgId, schoolId, className, section);
+      return memberExists(orgId) && m.status == 'active' && inSchool && (
+        hasExplicitRemarkEdit || isCtAllowed
+      );
+    }
+
+    function canReadAnyRemarksInSchool(orgId, schoolId) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasExplicitRemarkView = isAdmin || ('studentRemarks' in p && p.studentRemarks in ['view', 'edit']);
+      return memberExists(orgId) && m.status == 'active' && inSchool && (
+        hasExplicitRemarkView || hasAnyClassTeacherSection(orgId)
+      );
+    }
+
+    function canReadParentMeetingDoc(orgId, schoolId, className, section) {
+      return className == 'ALL'
+        ? canReadAnyRemarksInSchool(orgId, schoolId)
+        : canReadStudentRemarkForClass(orgId, schoolId, className, section);
+    }
+
+    function canWriteParentMeetingDoc(orgId, schoolId, className, section) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasExplicitRemarkEdit = isAdmin || ('studentRemarks' in p && p.studentRemarks == 'edit');
+      return className == 'ALL'
+        ? (memberExists(orgId) && m.status == 'active' && inSchool && hasExplicitRemarkEdit)
+        : canWriteStudentRemarkForClass(orgId, schoolId, className, section);
+    }
+
+    function canReadAuthorizedPickups(orgId, schoolId) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasView = isAdmin ||
+        ('studentRegister' in p && p.studentRegister in ['view', 'edit']) ||
+        ('students' in p && p.students in ['view', 'edit']) ||
+        ('gate' in p && p.gate in ['view', 'edit']);
+      return memberExists(orgId) && m.status == 'active' && inSchool && hasView;
+    }
+
+    function canWriteAuthorizedPickups(orgId, schoolId) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasEdit = isAdmin || ('studentRegister' in p && p.studentRegister == 'edit');
+      return memberExists(orgId) && m.status == 'active' && inSchool && hasEdit;
+    }
+
+    function canReadGateForSchool(orgId, schoolId) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasView = isAdmin || ('gate' in p && p.gate in ['view', 'edit']);
+      return memberExists(orgId) && m.status == 'active' && inSchool && hasView;
+    }
+
+    function canWriteGateForSchool(orgId, schoolId) {
+      let m = memberData(orgId);
+      let p = m.permissions;
+      let isAdmin = m.role in ['OWNER', 'ADMIN'];
+      let inSchool = isAdmin || m.allSchools == true || schoolId in m.schools;
+      let hasEdit = isAdmin || ('gate' in p && p.gate == 'edit');
+      return memberExists(orgId) && m.status == 'active' && inSchool && hasEdit;
+    }
+
+    function isValidStudentRemarkCreate(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'studentId', 'studentAdmNo', 'studentName',
+          'className', 'section', 'rollNo', 'dateIso', 'category', 'note',
+          'followUpDateIso', 'followUpCompleted', 'followUpCompletedNote',
+          'status', 'cancelledReason', 'cancelledByUid', 'cancelledByName', 'cancelledAtMs',
+          'authorUid', 'authorName', 'createdAtMs', 'updatedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'studentId', 'studentAdmNo', 'studentName',
+          'className', 'section', 'rollNo', 'dateIso', 'category', 'note',
+          'followUpDateIso', 'followUpCompleted', 'followUpCompletedNote',
+          'status', 'cancelledReason', 'cancelledByUid', 'cancelledByName', 'cancelledAtMs',
+          'authorUid', 'authorName', 'createdAtMs', 'updatedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        isValidId(data.studentId) &&
+        data.studentAdmNo is string && data.studentAdmNo.size() <= 40 &&
+        data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 16 &&
+        data.rollNo is int && data.rollNo >= 0 &&
+        isValidIsoDate(data.dateIso) &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 40 &&
+        data.note is string && data.note.size() >= 2 && data.note.size() <= 1000 &&
+        data.followUpDateIso is string && (data.followUpDateIso == '' || isValidIsoDate(data.followUpDateIso)) &&
+        data.followUpCompleted is bool &&
+        data.followUpCompletedNote is string && data.followUpCompletedNote.size() <= 500 &&
+        data.status == 'ACTIVE' &&
+        data.cancelledReason == '' &&
+        data.cancelledByUid == '' &&
+        data.cancelledByName == '' &&
+        data.cancelledAtMs == 0 &&
+        data.authorUid == request.auth.uid &&
+        data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120 &&
+        data.createdAtMs is int && data.createdAtMs >= 0 &&
+        data.updatedAtMs is int && data.updatedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSchoolRemarkCategoryConfig(data, schoolId) {
+      return data.keys().hasAll([
+          'schoolId', 'categories', 'hideSummaryPdfFromNonAdmins',
+          'updatedByUid', 'updatedByName', 'updatedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'categories', 'hideSummaryPdfFromNonAdmins',
+          'updatedByUid', 'updatedByName', 'updatedAtMs', 'updatedAt'
+        ]) &&
+        data.schoolId == schoolId &&
+        isValidStringList(data.categories, 30) &&
+        data.categories.size() >= 1 &&
+        data.hideSummaryPdfFromNonAdmins is bool &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.updatedAtMs is int && data.updatedAtMs >= 0 &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidParentMeeting(data) {
+      return data.keys().hasAll([
+          'schoolId', 'session', 'title', 'dateIso', 'timeLabel',
+          'className', 'section', 'agenda', 'entries',
+          'createdByUid', 'createdByName', 'createdAtMs', 'updatedAtMs',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'session', 'title', 'dateIso', 'timeLabel',
+          'className', 'section', 'agenda', 'entries',
+          'createdByUid', 'createdByName', 'createdAtMs', 'updatedAtMs',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+        isValidIsoDate(data.dateIso) &&
+        data.timeLabel is string && data.timeLabel.size() >= 1 && data.timeLabel.size() <= 60 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 16 &&
+        data.agenda is string && data.agenda.size() <= 600 &&
+        data.entries is list && data.entries.size() <= 250 &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+        data.createdByName is string && data.createdByName.size() >= 1 && data.createdByName.size() <= 120 &&
+        data.createdAtMs is int && data.createdAtMs >= 0 &&
+        data.updatedAtMs is int && data.updatedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAuthorizedPickup(data) {
+      return data.keys().hasAll([
+          'schoolId', 'studentId', 'studentAdmNo', 'studentName',
+          'className', 'section', 'personName', 'relation', 'mobile',
+          'photoBase64', 'updatedByUid', 'updatedByName', 'updatedAtMs',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'studentId', 'studentAdmNo', 'studentName',
+          'className', 'section', 'personName', 'relation', 'mobile',
+          'photoBase64', 'updatedByUid', 'updatedByName', 'updatedAtMs',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        isValidId(data.studentId) &&
+        data.studentAdmNo is string && data.studentAdmNo.size() <= 40 &&
+        data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 16 &&
+        data.personName is string && data.personName.size() >= 2 && data.personName.size() <= 120 &&
+        data.relation is string && data.relation.size() >= 1 && data.relation.size() <= 60 &&
+        data.mobile is string && data.mobile.size() <= 24 &&
+        data.photoBase64 is string && data.photoBase64.size() <= 260000 &&
+        data.updatedByUid == request.auth.uid &&
+        data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120 &&
+        data.updatedAtMs is int && data.updatedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidGatePass(data) {
+      return data.keys().hasAll([
+          'passNumber', 'schoolId', 'session', 'dateIso', 'leaveTime',
+          'studentId', 'studentAdmNo', 'studentName', 'className', 'section', 'rollNo',
+          'reason', 'pickupPersonId', 'pickupPersonName', 'pickupRelation', 'pickupMobile',
+          'isOneTimePickup', 'oneTimeNote', 'guardianPhoneConfirmed',
+          'approvedByUid', 'approvedByName', 'markedHalfDayAttendance', 'attendanceNote',
+          'createdByUid', 'createdByName', 'createdAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'passNumber', 'schoolId', 'session', 'dateIso', 'leaveTime',
+          'studentId', 'studentAdmNo', 'studentName', 'className', 'section', 'rollNo',
+          'reason', 'pickupPersonId', 'pickupPersonName', 'pickupRelation', 'pickupMobile',
+          'isOneTimePickup', 'oneTimeNote', 'guardianPhoneConfirmed',
+          'approvedByUid', 'approvedByName', 'markedHalfDayAttendance', 'attendanceNote',
+          'createdByUid', 'createdByName', 'createdAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.passNumber is string && data.passNumber.size() >= 4 && data.passNumber.size() <= 48 &&
+        isValidId(data.schoolId) &&
+        data.session is string && data.session.size() >= 4 && data.session.size() <= 30 &&
+        isValidIsoDate(data.dateIso) &&
+        data.leaveTime is string && data.leaveTime.size() >= 1 && data.leaveTime.size() <= 24 &&
+        isValidId(data.studentId) &&
+        data.studentAdmNo is string && data.studentAdmNo.size() <= 40 &&
+        data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120 &&
+        data.className is string && data.className.size() >= 1 && data.className.size() <= 40 &&
+        data.section is string && data.section.size() >= 1 && data.section.size() <= 16 &&
+        data.rollNo is int && data.rollNo >= 0 &&
+        data.reason is string && data.reason.size() >= 2 && data.reason.size() <= 400 &&
+        data.pickupPersonId is string && data.pickupPersonId.size() <= 128 &&
+        data.pickupPersonName is string && data.pickupPersonName.size() >= 2 && data.pickupPersonName.size() <= 120 &&
+        data.pickupRelation is string && data.pickupRelation.size() >= 1 && data.pickupRelation.size() <= 60 &&
+        data.pickupMobile is string && data.pickupMobile.size() <= 24 &&
+        data.isOneTimePickup is bool &&
+        data.oneTimeNote is string && data.oneTimeNote.size() <= 300 &&
+        data.guardianPhoneConfirmed is bool &&
+        (!data.isOneTimePickup || data.guardianPhoneConfirmed == true) &&
+        data.approvedByUid is string && data.approvedByUid.size() >= 1 && data.approvedByUid.size() <= 128 &&
+        data.approvedByName is string && data.approvedByName.size() >= 1 && data.approvedByName.size() <= 120 &&
+        data.markedHalfDayAttendance is bool &&
+        data.attendanceNote is string && data.attendanceNote.size() <= 240 &&
+        data.createdByUid == request.auth.uid &&
+        data.createdByName is string && data.createdByName.size() >= 1 && data.createdByName.size() <= 120 &&
+        data.createdAtMs is int && data.createdAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidVisitorEntry(data) {
+      return data.keys().hasAll([
+          'schoolId', 'dateIso', 'visitorName', 'mobile', 'purpose', 'whomToMeet',
+          'timeIn', 'timeOut', 'status', 'photoBase64',
+          'recordedByUid', 'recordedByName', 'signedOutByUid', 'signedOutByName',
+          'createdAtMs', 'updatedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'schoolId', 'dateIso', 'visitorName', 'mobile', 'purpose', 'whomToMeet',
+          'timeIn', 'timeOut', 'status', 'photoBase64',
+          'recordedByUid', 'recordedByName', 'signedOutByUid', 'signedOutByName',
+          'createdAtMs', 'updatedAtMs', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.schoolId) &&
+        isValidIsoDate(data.dateIso) &&
+        data.visitorName is string && data.visitorName.size() >= 2 && data.visitorName.size() <= 120 &&
+        data.mobile is string && data.mobile.size() <= 24 &&
+        data.purpose is string && data.purpose.size() >= 2 && data.purpose.size() <= 300 &&
+        data.whomToMeet is string && data.whomToMeet.size() >= 1 && data.whomToMeet.size() <= 120 &&
+        data.timeIn is string && data.timeIn.size() >= 1 && data.timeIn.size() <= 24 &&
+        data.timeOut is string && data.timeOut.size() <= 24 &&
+        data.status in ['IN', 'OUT'] &&
+        data.photoBase64 is string && data.photoBase64.size() <= 260000 &&
+        data.recordedByUid is string && data.recordedByUid.size() >= 1 && data.recordedByUid.size() <= 128 &&
+        data.recordedByName is string && data.recordedByName.size() >= 1 && data.recordedByName.size() <= 120 &&
+        data.signedOutByUid is string && data.signedOutByUid.size() <= 128 &&
+        data.signedOutByName is string && data.signedOutByName.size() <= 120 &&
+        data.createdAtMs is int && data.createdAtMs >= 0 &&
+        data.updatedAtMs is int && data.updatedAtMs >= 0 &&
+        isValidTimestamp(data.createdAt) &&
         isValidTimestamp(data.updatedAt);
     }
 
@@ -3126,6 +3515,7 @@ service cloud.firestore {
           hasModuleView(orgId, 'fees') ||
           hasModuleView(orgId, 'stock') ||
           hasModuleView(orgId, 'exams') ||
+          hasModuleView(orgId, 'transport') ||
           hasModuleView(orgId, 'sessionPromotion')
         );
 
@@ -3192,6 +3582,7 @@ service cloud.firestore {
           hasModuleView(orgId, 'cashBook') ||
           hasModuleView(orgId, 'stock') ||
           hasModuleView(orgId, 'exams') ||
+          hasModuleView(orgId, 'transport') ||
           hasModuleView(orgId, 'sessionPromotion')
         );
 
@@ -3350,19 +3741,39 @@ service cloud.firestore {
       }
 
       match /cashBookEntries/{entryId} {
-        allow get, list: if isSignedIn() && hasModuleView(orgId, 'cashBook');
+        allow get, list: if isSignedIn() && (
+          hasModuleView(orgId, 'cashBook') ||
+          (hasModuleView(orgId, 'transport') && resource.data.sourceModule == 'TRANSPORT')
+        );
 
         allow create: if isSignedIn() &&
           isValidId(entryId) &&
           isValidCashBookEntryCreate(incoming()) &&
-          hasModuleEdit(orgId, 'cashBook') &&
+          (
+            hasModuleEdit(orgId, 'cashBook') ||
+            (
+              hasModuleEdit(orgId, 'transport') &&
+              'sourceModule' in incoming() && incoming().sourceModule == 'TRANSPORT' &&
+              incoming().entryType == 'EXPENSE' &&
+              'transportCategory' in incoming() &&
+              incoming().transportCategory is string && incoming().transportCategory.size() >= 1
+            )
+          ) &&
           canAccessSchool(orgId, incoming().schoolId) &&
           canRecordCashBookExpense(orgId, incoming());
 
         // Edit or Cancel an ACTIVE entry ONLY with mandatory reason; nothing silently deleted.
         allow update: if isSignedIn() &&
           isValidId(entryId) &&
-          hasModuleEdit(orgId, 'cashBook') &&
+          (
+            hasModuleEdit(orgId, 'cashBook') ||
+            (
+              hasModuleEdit(orgId, 'transport') &&
+              ('sourceModule' in existing() && existing().sourceModule == 'TRANSPORT') &&
+              ('sourceModule' in incoming() && incoming().sourceModule == 'TRANSPORT') &&
+              existing().entryType == 'EXPENSE'
+            )
+          ) &&
           canAccessSchool(orgId, existing().schoolId) &&
           existing().status == 'ACTIVE' &&
           incoming().schoolId == existing().schoolId &&
@@ -3370,6 +3781,7 @@ service cloud.firestore {
           incoming().entryType == existing().entryType &&
           incoming().createdByUid == existing().createdByUid &&
           incoming().createdAt == existing().createdAt &&
+          !('sourceModule' in incoming().diff(existing()).affectedKeys()) &&
           incoming().updatedByUid == request.auth.uid &&
           incoming().updatedByName is string && incoming().updatedByName.size() >= 1 && incoming().updatedByName.size() <= 120 &&
           incoming().clientEditedAtMs is int && incoming().clientEditedAtMs >= 0 &&
@@ -3383,9 +3795,13 @@ service cloud.firestore {
               incoming().note is string && incoming().note.size() <= 300 &&
               incoming().billPhotoBase64 is string && incoming().billPhotoBase64.size() <= 260000 &&
               incoming().lastEditReason is string && incoming().lastEditReason.size() >= 1 && incoming().lastEditReason.size() <= 300 &&
+              (!('transportRouteId' in incoming()) || (incoming().transportRouteId is string && incoming().transportRouteId.size() <= 128)) &&
+              (!('vehicleNumber' in incoming()) || (incoming().vehicleNumber is string && incoming().vehicleNumber.size() <= 40)) &&
+              (!('transportCategory' in incoming()) || (incoming().transportCategory is string && incoming().transportCategory.size() <= 80)) &&
               canRecordCashBookExpense(orgId, incoming()) &&
               incoming().diff(existing()).affectedKeys().hasOnly([
                 'category', 'amount', 'paymentMode', 'note', 'billPhotoBase64',
+                'transportRouteId', 'vehicleNumber', 'transportCategory',
                 'approvedByAdminUid', 'approvedByAdminName', 'approvalNote',
                 'updatedByUid', 'updatedByName', 'lastEditReason', 'clientEditedAtMs', 'updatedAt'
               ])
@@ -3429,12 +3845,18 @@ service cloud.firestore {
       }
 
       match /cashBookAuditLogs/{logId} {
-        allow get, list: if isSignedIn() && hasModuleView(orgId, 'cashBook');
+        allow get, list: if isSignedIn() && (
+          hasModuleView(orgId, 'cashBook') ||
+          (hasModuleView(orgId, 'transport') && resource.data.sourceModule == 'TRANSPORT')
+        );
 
         allow create: if isSignedIn() &&
           isValidId(logId) &&
           isValidCashBookAuditLog(incoming()) &&
-          hasModuleEdit(orgId, 'cashBook') &&
+          (
+            hasModuleEdit(orgId, 'cashBook') ||
+            (hasModuleEdit(orgId, 'transport') && 'sourceModule' in incoming() && incoming().sourceModule == 'TRANSPORT')
+          ) &&
           canAccessSchool(orgId, incoming().schoolId);
 
         allow update: if false;
@@ -3579,7 +4001,8 @@ service cloud.firestore {
       match /transportRoutes/{routeId} {
         allow get, list: if isSignedIn() && (
           hasModuleView(orgId, 'transport') ||
-          hasModuleView(orgId, 'studentRegister')
+          hasModuleView(orgId, 'studentRegister') ||
+          hasModuleView(orgId, 'fees')
         );
 
         allow create, update: if isSignedIn() &&
@@ -3592,6 +4015,33 @@ service cloud.firestore {
           isValidId(routeId) &&
           hasModuleEdit(orgId, 'transport') &&
           canAccessSchool(orgId, existing().schoolId);
+      }
+
+      match /transportVehicleDocuments/{docId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'transport');
+
+        allow create, update: if isSignedIn() &&
+          isValidId(docId) &&
+          isValidTransportVehicleDocument(incoming()) &&
+          hasModuleEdit(orgId, 'transport') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(docId) &&
+          hasModuleEdit(orgId, 'transport') &&
+          canAccessSchool(orgId, existing().schoolId);
+      }
+
+      match /transportSettings/{settingId} {
+        allow get, list: if isSignedIn() && hasModuleView(orgId, 'transport');
+
+        allow create, update: if isSignedIn() &&
+          isValidId(settingId) &&
+          isValidTransportSettings(incoming()) &&
+          hasModuleEdit(orgId, 'transport') &&
+          canAccessSchool(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
 
       // -----------------------------------------------------------------------
@@ -3943,6 +4393,188 @@ service cloud.firestore {
         allow delete: if isSignedIn() &&
           isValidId(wishId) &&
           canReadBirthdaysForSchool(orgId, existing().schoolId);
+      }
+
+      // -----------------------------------------------------------------------
+      // 3q. PHASE 19: STUDENT REMARKS ('studentRemarks'), PARENT MEETINGS (PTM)
+      //     AND GATE ('gate')
+      // - Remarks are sensitive: by default only the Class Teacher of that student's
+      //   class-section, the Owner, and Admins can read/write a student's remarks;
+      //   other teachers see nothing unless granted 'studentRemarks'.
+      // - Remarks can NEVER be silently deleted: they are cancelled with a mandatory
+      //   reason and remain in the audit log.
+      // -----------------------------------------------------------------------
+
+      match /studentRemarks/{remarkId} {
+        allow get, list: if isSignedIn() &&
+          canReadStudentRemarkForClass(
+            orgId,
+            resource.data.schoolId,
+            resource.data.className,
+            resource.data.section
+          );
+
+        allow create: if isSignedIn() &&
+          isValidId(remarkId) &&
+          isValidStudentRemarkCreate(incoming()) &&
+          canWriteStudentRemarkForClass(
+            orgId,
+            incoming().schoolId,
+            incoming().className,
+            incoming().section
+          );
+
+        // Remarks can NEVER be silently deleted or have their core note/author overwritten.
+        // Only two updates are permitted:
+        // Branch A: Cancelling an ACTIVE remark with a mandatory cancelledReason (>= 3 chars)
+        // Branch B: Marking follow-up completed/uncompleted on an ACTIVE remark
+        allow update: if isSignedIn() &&
+          isValidId(remarkId) &&
+          existing().status == 'ACTIVE' &&
+          canWriteStudentRemarkForClass(
+            orgId,
+            existing().schoolId,
+            existing().className,
+            existing().section
+          ) &&
+          isValidTimestamp(incoming().updatedAt) &&
+          incoming().updatedAtMs is int && incoming().updatedAtMs >= 0 && (
+            (
+              incoming().status == 'CANCELLED' &&
+              incoming().cancelledByUid == request.auth.uid &&
+              incoming().cancelledByName is string &&
+              incoming().cancelledByName.size() >= 1 &&
+              incoming().cancelledByName.size() <= 120 &&
+              incoming().cancelledAtMs is int &&
+              incoming().cancelledAtMs > 0 &&
+              incoming().cancelledReason is string &&
+              incoming().cancelledReason.size() >= 3 &&
+              incoming().cancelledReason.size() <= 500 &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'cancelledReason', 'cancelledByUid', 'cancelledByName',
+                'cancelledAtMs', 'updatedAtMs', 'updatedAt'
+              ])
+            ) || (
+              incoming().status == 'ACTIVE' &&
+              incoming().followUpCompleted is bool &&
+              incoming().followUpCompletedNote is string &&
+              incoming().followUpCompletedNote.size() <= 500 &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'followUpCompleted', 'followUpCompletedNote', 'updatedAtMs', 'updatedAt'
+              ])
+            )
+          );
+
+        // Silent deletion is strictly prohibited (only Owner org teardown when org doc is deleted)
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
+      }
+
+      match /studentRemarkCategories/{schoolId} {
+        allow get, list: if isSignedIn() &&
+          canReadAnyRemarksInSchool(orgId, schoolId);
+
+        allow create, update: if isSignedIn() &&
+          isValidId(schoolId) &&
+          isValidSchoolRemarkCategoryConfig(incoming(), schoolId) &&
+          isOrgAdmin(orgId) &&
+          canAccessSchool(orgId, schoolId);
+
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
+      }
+
+      match /parentMeetings/{meetingId} {
+        allow get, list: if isSignedIn() &&
+          canReadParentMeetingDoc(
+            orgId,
+            resource.data.schoolId,
+            resource.data.className,
+            resource.data.section
+          );
+
+        allow create: if isSignedIn() &&
+          isValidId(meetingId) &&
+          isValidParentMeeting(incoming()) &&
+          incoming().createdByUid == request.auth.uid &&
+          canWriteParentMeetingDoc(
+            orgId,
+            incoming().schoolId,
+            incoming().className,
+            incoming().section
+          );
+
+        allow update: if isSignedIn() &&
+          isValidId(meetingId) &&
+          isValidParentMeeting(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().session == existing().session &&
+          incoming().className == existing().className &&
+          incoming().section == existing().section &&
+          incoming().createdByUid == existing().createdByUid &&
+          canWriteParentMeetingDoc(
+            orgId,
+            existing().schoolId,
+            existing().className,
+            existing().section
+          );
+
+        allow delete: if isSignedIn() &&
+          isValidId(meetingId) &&
+          isOrgAdmin(orgId) &&
+          canAccessSchool(orgId, existing().schoolId);
+      }
+
+      match /studentAuthorizedPickups/{pickupId} {
+        allow get, list: if isSignedIn() &&
+          canReadAuthorizedPickups(orgId, resource.data.schoolId);
+
+        allow create, update: if isSignedIn() &&
+          isValidId(pickupId) &&
+          isValidAuthorizedPickup(incoming()) &&
+          canWriteAuthorizedPickups(orgId, incoming().schoolId);
+
+        allow delete: if isSignedIn() &&
+          isValidId(pickupId) &&
+          canWriteAuthorizedPickups(orgId, existing().schoolId);
+      }
+
+      match /gatePasses/{passId} {
+        allow get, list: if isSignedIn() &&
+          canReadGateForSchool(orgId, resource.data.schoolId);
+
+        allow create: if isSignedIn() &&
+          isValidId(passId) &&
+          isValidGatePass(incoming()) &&
+          canWriteGateForSchool(orgId, incoming().schoolId);
+
+        allow update: if false;
+
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
+      }
+
+      match /visitorEntries/{visitorId} {
+        allow get, list: if isSignedIn() &&
+          canReadGateForSchool(orgId, resource.data.schoolId);
+
+        allow create: if isSignedIn() &&
+          isValidId(visitorId) &&
+          isValidVisitorEntry(incoming()) &&
+          incoming().recordedByUid == request.auth.uid &&
+          incoming().status == 'IN' &&
+          canWriteGateForSchool(orgId, incoming().schoolId);
+
+        allow update: if isSignedIn() &&
+          isValidId(visitorId) &&
+          isValidVisitorEntry(incoming()) &&
+          incoming().schoolId == existing().schoolId &&
+          incoming().dateIso == existing().dateIso &&
+          incoming().visitorName == existing().visitorName &&
+          incoming().recordedByUid == existing().recordedByUid &&
+          incoming().status == 'OUT' &&
+          incoming().signedOutByUid == request.auth.uid &&
+          incoming().timeOut.size() >= 1 &&
+          canWriteGateForSchool(orgId, existing().schoolId);
+
+        allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
     }
   }

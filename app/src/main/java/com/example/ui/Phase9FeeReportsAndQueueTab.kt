@@ -57,6 +57,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,6 +82,9 @@ import com.example.domain.Phase9AccessEvaluator
 import com.example.domain.PhoneNormalizer
 import com.example.domain.PhoneValidationResult
 import com.example.domain.SendQueueGuardianRow
+import com.example.domain.StudentDueCellBreakdown
+import com.example.domain.StudentDuesListRow
+import com.example.domain.TransportEngine
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -771,7 +775,11 @@ fun Phase9FeeReportsTab(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Phase9SendQueueAndNoticesTab(
-    viewModel: SchoolViewModel
+    viewModel: SchoolViewModel,
+    initialMessageType: FeeMessageType? = null,
+    initialMonthFilter: String? = null,
+    initialRouteIdFilter: String? = null,
+    onJumpConsumed: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -782,15 +790,42 @@ fun Phase9SendQueueAndNoticesTab(
     val structure = remember(uiState.feeStructures, schoolDocId, session, uiState.activeSchoolClassNames) {
         uiState.feeStructureForSchool(schoolDocId, session)
     }
+    val schoolRoutes = remember(uiState.transportRoutes, schoolDocId) {
+        uiState.transportRoutes.filter { it.schoolId == schoolDocId }.sortedBy { it.routeName.lowercase() }
+    }
 
     var showNoticesMode by remember { mutableStateOf(false) }
 
     // Send Queue Filters
+    var queueMessageType by remember {
+        mutableStateOf(
+            if (initialMessageType == FeeMessageType.TRANSPORT_DUE_REMINDER) {
+                FeeMessageType.TRANSPORT_DUE_REMINDER
+            } else {
+                FeeMessageType.FEE_DUE_REMINDER
+            }
+        )
+    }
     var filterClass by remember { mutableStateOf<String?>(null) }
-    var filterMonth by remember { mutableStateOf<String?>(null) }
+    var filterMonth by remember { mutableStateOf(initialMonthFilter) }
+    var filterRouteId by remember { mutableStateOf(initialRouteIdFilter) }
     var minDueAmountText by remember { mutableStateOf("1") }
     var showPendingOnly by remember { mutableStateOf(false) }
     var showEditTemplatesDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(initialMessageType, initialMonthFilter, initialRouteIdFilter) {
+        if (initialMessageType != null || initialMonthFilter != null || initialRouteIdFilter != null) {
+            showNoticesMode = false
+            if (initialMessageType != null) {
+                queueMessageType = initialMessageType
+            }
+            if (initialMonthFilter != null) {
+                filterMonth = initialMonthFilter
+            }
+            filterRouteId = initialRouteIdFilter
+            onJumpConsumed()
+        }
+    }
 
     // Post-WhatsApp return prompt ("Sent?")
     var pendingReturnSentRow by remember { mutableStateOf<SendQueueGuardianRow?>(null) }
@@ -825,34 +860,86 @@ fun Phase9SendQueueAndNoticesTab(
         structure,
         uiState.activeSchool.name,
         uiState.feeMessageSentLogs,
+        schoolRoutes,
+        queueMessageType,
         filterClass,
         filterMonth,
+        filterRouteId,
         minDueAmountText
     ) {
         val minDue = (minDueAmountText.toIntOrNull() ?: 1).coerceAtLeast(1)
-        val duesRows = FeeReportsAndQueueEngine.buildDuesList(
-            studentsWithDocIds = activeStudentsWithDocIds,
-            schoolDocId = schoolDocId,
-            schoolName = uiState.activeSchool.name,
-            structure = structure,
-            overridesByStudentDocId = overridesByStudentDocId,
-            receipts = uiState.feeReceipts,
-            classNameFilter = filterClass,
-            monthFilter = filterMonth,
-            minimumDueAmount = minDue
-        )
-        val ctxKey = filterMonth ?: Phase6DateUtils.todayIso().take(7)
-        FeeReportsAndQueueEngine.buildSendQueue(
-            duesRows = duesRows,
-            schoolName = uiState.activeSchool.name,
-            templates = structure.messageTemplates,
-            messageType = FeeMessageType.FEE_DUE_REMINDER,
-            contextDateOrMonthKey = ctxKey,
-            sentLogs = uiState.feeMessageSentLogs.filter {
-                it.schoolId == schoolDocId && it.session.equals(session, ignoreCase = true)
-            },
-            showPendingOnly = false
-        )
+        if (queueMessageType == FeeMessageType.TRANSPORT_DUE_REMINDER) {
+            val targetMonth = filterMonth ?: currentSessionMonthCode().let { cur ->
+                if (structure.monthOrder.any { it.equals(cur, ignoreCase = true) }) cur
+                else structure.monthOrder.firstOrNull() ?: "APR"
+            }
+            val tDues = TransportEngine.computeTransportDuesForMonth(
+                monthCode = targetMonth,
+                studentsWithDocIds = activeStudentsWithDocIds,
+                routes = schoolRoutes,
+                structure = structure,
+                overridesByStudentDocId = overridesByStudentDocId,
+                receipts = uiState.feeReceipts,
+                routeIdFilter = filterRouteId,
+                classNameFilter = filterClass
+            )
+            val mappedRows = tDues.rows
+                .filter { it.dueRs >= minDue }
+                .map { row ->
+                    StudentDuesListRow(
+                        schoolDocId = schoolDocId,
+                        schoolName = uiState.activeSchool.name,
+                        studentDocId = row.studentDocId,
+                        student = row.student,
+                        dueBreakdowns = listOf(
+                            StudentDueCellBreakdown(
+                                monthCode = row.monthCode,
+                                headType = FeeHeadType.TRANSPORT,
+                                label = "${row.routeName} (${row.monthCode})",
+                                dueAmount = row.dueRs
+                            )
+                        ),
+                        dueByHead = mapOf(FeeHeadType.TRANSPORT to row.dueRs),
+                        dueMonths = listOf(row.monthCode),
+                        totalDueAmount = row.dueRs
+                    )
+                }
+            FeeReportsAndQueueEngine.buildSendQueue(
+                duesRows = mappedRows,
+                schoolName = uiState.activeSchool.name,
+                templates = structure.messageTemplates,
+                messageType = FeeMessageType.TRANSPORT_DUE_REMINDER,
+                contextDateOrMonthKey = targetMonth,
+                sentLogs = uiState.feeMessageSentLogs.filter {
+                    it.schoolId == schoolDocId && it.session.equals(session, ignoreCase = true)
+                },
+                showPendingOnly = false
+            )
+        } else {
+            val duesRows = FeeReportsAndQueueEngine.buildDuesList(
+                studentsWithDocIds = activeStudentsWithDocIds,
+                schoolDocId = schoolDocId,
+                schoolName = uiState.activeSchool.name,
+                structure = structure,
+                overridesByStudentDocId = overridesByStudentDocId,
+                receipts = uiState.feeReceipts,
+                classNameFilter = filterClass,
+                monthFilter = filterMonth,
+                minimumDueAmount = minDue
+            )
+            val ctxKey = filterMonth ?: Phase6DateUtils.todayIso().take(7)
+            FeeReportsAndQueueEngine.buildSendQueue(
+                duesRows = duesRows,
+                schoolName = uiState.activeSchool.name,
+                templates = structure.messageTemplates,
+                messageType = FeeMessageType.FEE_DUE_REMINDER,
+                contextDateOrMonthKey = ctxKey,
+                sentLogs = uiState.feeMessageSentLogs.filter {
+                    it.schoolId == schoolDocId && it.session.equals(session, ignoreCase = true)
+                },
+                showPendingOnly = false
+            )
+        }
     }
 
     val displayedQueueRows = remember(allQueueRowsUnfilteredBySent, showPendingOnly) {
@@ -963,6 +1050,56 @@ fun Phase9SendQueueAndNoticesTab(
                                         checked = showPendingOnly,
                                         onCheckedChange = { showPendingOnly = it },
                                         modifier = Modifier.testTag("send_queue_pending_only_switch")
+                                    )
+                                }
+                            }
+                        }
+
+                        // Queue Type Selector (All Fee Dues vs Transport Dues)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = queueMessageType == FeeMessageType.FEE_DUE_REMINDER,
+                                onClick = {
+                                    queueMessageType = FeeMessageType.FEE_DUE_REMINDER
+                                    filterRouteId = null
+                                },
+                                label = { Text("All Fee Dues") },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("send_queue_type_fee")
+                            )
+                            FilterChip(
+                                selected = queueMessageType == FeeMessageType.TRANSPORT_DUE_REMINDER,
+                                onClick = { queueMessageType = FeeMessageType.TRANSPORT_DUE_REMINDER },
+                                label = { Text("Transport Dues") },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("send_queue_type_transport")
+                            )
+                        }
+
+                        if (queueMessageType == FeeMessageType.TRANSPORT_DUE_REMINDER && schoolRoutes.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                FilterChip(
+                                    selected = filterRouteId == null,
+                                    onClick = { filterRouteId = null },
+                                    label = { Text("All Routes") }
+                                )
+                                schoolRoutes.forEach { rt ->
+                                    FilterChip(
+                                        selected = filterRouteId == rt.id,
+                                        onClick = { filterRouteId = if (filterRouteId == rt.id) null else rt.id },
+                                        label = { Text(rt.routeName) }
                                     )
                                 }
                             }
@@ -1430,7 +1567,7 @@ fun Phase9SendQueueAndNoticesTab(
                             section = row.student.section,
                             guardianName = row.guardianName,
                             guardianMobileE164 = e164,
-                            messageType = FeeMessageType.FEE_DUE_REMINDER,
+                            messageType = row.messageType,
                             contextKey = row.contextKey,
                             messageText = row.messageText
                         )
@@ -1452,6 +1589,7 @@ fun Phase9SendQueueAndNoticesTab(
     // Edit Message Templates Dialog
     if (showEditTemplatesDialog) {
         var dueTpl by remember { mutableStateOf(structure.messageTemplates.feeDueTemplate) }
+        var transportTpl by remember { mutableStateOf(structure.messageTemplates.transportDueTemplate) }
         var rcpTpl by remember { mutableStateOf(structure.messageTemplates.feeReceiptTemplate) }
         var genTpl by remember { mutableStateOf(structure.messageTemplates.generalTemplate) }
 
@@ -1469,6 +1607,13 @@ fun Phase9SendQueueAndNoticesTab(
                         value = dueTpl,
                         onValueChange = { dueTpl = it },
                         label = { Text("Fee Due Reminder Template") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = transportTpl,
+                        onValueChange = { transportTpl = it },
+                        label = { Text("Transport Due Reminder Template") },
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1497,7 +1642,8 @@ fun Phase9SendQueueAndNoticesTab(
                             templates = FeeMessageTemplates(
                                 feeDueTemplate = dueTpl.trim(),
                                 feeReceiptTemplate = rcpTpl.trim(),
-                                generalTemplate = genTpl.trim()
+                                generalTemplate = genTpl.trim(),
+                                transportDueTemplate = transportTpl.trim()
                             )
                         ) { ok, _ ->
                             if (ok) showEditTemplatesDialog = false

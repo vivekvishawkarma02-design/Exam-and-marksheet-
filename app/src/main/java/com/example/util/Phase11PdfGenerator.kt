@@ -17,7 +17,12 @@ import com.example.domain.ExamScheduleEntry
 import com.example.domain.ExamScheduleRecord
 import com.example.domain.ExamSeatAllocation
 import com.example.domain.StockItemSummary
+import com.example.domain.TransportDuesSummary
+import com.example.domain.TransportMonthDueStudentRow
+import com.example.domain.TransportMonthlyProfitLossReport
+import com.example.domain.TransportRouteRecord
 import com.example.domain.TransportRouteSummary
+import com.example.domain.TransportTripType
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
@@ -67,6 +72,21 @@ data class TransportRoutePdfBundle(
     val session: String,
     val generatedDateIso: String,
     val summary: TransportRouteSummary
+)
+
+data class TransportDuesPdfBundle(
+    val school: SchoolEntity,
+    val session: String,
+    val generatedDateIso: String,
+    val duesSummary: TransportDuesSummary,
+    val unassignedStudents: List<StudentEntity>,
+    val routes: List<TransportRouteRecord>
+)
+
+data class TransportMonthlySummaryPdfBundle(
+    val school: SchoolEntity,
+    val generatedDateIso: String,
+    val report: TransportMonthlyProfitLossReport
 )
 
 /**
@@ -718,19 +738,32 @@ object Phase11PdfGenerator {
         val left = MARGIN
         val right = A4_W - MARGIN
         val route = bundle.summary.route
+        val ownerTxt = "${route.vehicleOwnership.labelEn}${if (route.monthlyRentRs > 0) " (₹${route.monthlyRentRs}/mo)" else ""}"
+        val licTxt = route.driverLicenceNo.takeIf { it.isNotBlank() }?.let { " • DL: $it" }.orEmpty()
         var y = drawCompactSchoolHeader(
             canvas = canvas,
             school = bundle.school,
             title = "TRANSPORT ROUTE LIST — ${route.routeName.uppercase(Locale.US)}",
-            subtitle = "${route.vehicleType} ${route.vehicleNumber.ifBlank { "-" }}  •  Driver: ${route.driverName.ifBlank { "-" }} (${route.driverPhone.ifBlank { "-" }})  •  Seats: ${bundle.summary.seatsUsed}/${route.seatCapacity}  •  Page $pageNo/$totalPages"
+            subtitle = "${route.vehicleType} ${route.vehicleNumber.ifBlank { "-" }} ($ownerTxt)  •  Driver: ${route.driverName.ifBlank { "-" }} (${route.driverPhone.ifBlank { "-" }})$licTxt  •  Seats: ${bundle.summary.seatsUsed}/${route.seatCapacity}  •  P$pageNo/$totalPages"
         )
         y += 8f
 
         val totalW = right - left
-        val cols = floatArrayOf(30f, totalW - 355f, 65f, 105f, 95f, 60f)
-        y = drawTableHeader(canvas, left, y, cols, listOf("#", "Student Name", "Class", "Stop", "Guardian Mob.", "Fee/Mo"))
+        val cols = floatArrayOf(28f, totalW - 398f, 55f, 118f, 65f, 76f, 56f)
+        y = drawTableHeader(canvas, left, y, cols, listOf("#", "Student Name", "Class", "Stop (Time)", "Trip", "Mob.", "Fee/Mo"))
         val startOffset = (pageNo - 1) * 24
         rows.forEachIndexed { idx, st ->
+            val stopObj = route.findStop(st.transportStopId, st.transportStopName)
+            val stopOrder = stopObj?.let { s ->
+                val ord = route.stops.indexOfFirst { it.stopId == s.stopId } + 1
+                val tm = s.pickupTime.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+                if (ord > 0) "$ord.${s.stopName}$tm" else "${s.stopName}$tm"
+            } ?: st.transportStopName.ifBlank { "-" }
+            val tripShort = when (TransportTripType.fromRaw(st.transportTripType)) {
+                TransportTripType.BOTH_WAYS -> "Both"
+                TransportTripType.PICKUP_ONLY -> "Pickup"
+                TransportTripType.DROP_ONLY -> "Drop"
+            }
             y = drawTableRow(
                 canvas = canvas,
                 left = left,
@@ -739,9 +772,10 @@ object Phase11PdfGenerator {
                 cols = cols,
                 values = listOf(
                     "${startOffset + idx + 1}",
-                    truncateText(st.name, 24),
+                    truncateText(st.name, 20),
                     "${st.className}-${st.section}",
-                    truncateText(st.transportStopName.ifBlank { "-" }, 16),
+                    truncateText(stopOrder, 18),
+                    tripShort,
                     st.mobile.ifBlank { st.secondMobile.ifBlank { "-" } },
                     "₹${st.transportMonthlyAmount}"
                 ),
@@ -807,19 +841,31 @@ object Phase11PdfGenerator {
         val left = MARGIN
         val right = A4_W - MARGIN
         val route = bundle.summary.route
+        val condInfo = route.conductorName.takeIf { it.isNotBlank() }?.let { "  •  Conductor: $it (${route.conductorPhone.ifBlank { "-" }})" }.orEmpty()
         var y = drawCompactSchoolHeader(
             canvas = canvas,
             school = bundle.school,
             title = "DRIVER'S PICKUP & DROP CONTACT SHEET",
-            subtitle = "Route: ${route.routeName} (${route.vehicleType} ${route.vehicleNumber.ifBlank { "-" }})  •  Driver: ${route.driverName.ifBlank { "-" }} (${route.driverPhone.ifBlank { "-" }})  •  Page $pageNo/$totalPages"
+            subtitle = "Route: ${route.routeName} (${route.vehicleType} ${route.vehicleNumber.ifBlank { "-" }})  •  Driver: ${route.driverName.ifBlank { "-" }} (${route.driverPhone.ifBlank { "-" }})$condInfo  •  P$pageNo/$totalPages"
         )
         y += 8f
 
         val totalW = right - left
-        val cols = floatArrayOf(28f, 108f, totalW - 392f, 56f, 100f, 100f)
-        y = drawTableHeader(canvas, left, y, cols, listOf("#", "Stop", "Student Name", "Class", "Guardian Name", "Mobile(s)"))
+        val cols = floatArrayOf(26f, 118f, 54f, totalW - 418f, 108f, 112f)
+        y = drawTableHeader(canvas, left, y, cols, listOf("#", "Stop & Time", "Trip", "Student (Class)", "Guardian", "Mobile(s)"))
         val startOffset = (pageNo - 1) * 22
         rows.forEachIndexed { idx, st ->
+            val stopObj = route.findStop(st.transportStopId, st.transportStopName)
+            val stopDisp = stopObj?.let { s ->
+                val ord = route.stops.indexOfFirst { it.stopId == s.stopId } + 1
+                val tm = s.pickupTime.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+                if (ord > 0) "$ord.${s.stopName}$tm" else "${s.stopName}$tm"
+            } ?: st.transportStopName.ifBlank { route.routeName }
+            val tripShort = when (TransportTripType.fromRaw(st.transportTripType)) {
+                TransportTripType.BOTH_WAYS -> "Both"
+                TransportTripType.PICKUP_ONLY -> "Pickup"
+                TransportTripType.DROP_ONLY -> "Drop"
+            }
             val phones = listOf(st.mobile.trim(), st.secondMobile.trim()).filter { it.isNotEmpty() }.joinToString(" / ").ifBlank { "-" }
             y = drawTableRow(
                 canvas = canvas,
@@ -829,16 +875,300 @@ object Phase11PdfGenerator {
                 cols = cols,
                 values = listOf(
                     "${startOffset + idx + 1}",
-                    truncateText(st.transportStopName.ifBlank { route.routeName }, 17),
-                    truncateText(st.name, 22),
-                    "${st.className}-${st.section}",
-                    truncateText(st.fatherName.ifBlank { st.motherName.ifBlank { "-" } }, 16),
-                    truncateText(phones, 18)
+                    truncateText(stopDisp, 19),
+                    tripShort,
+                    truncateText("${st.name} (${st.className}-${st.section})", 22),
+                    truncateText(st.fatherName.ifBlank { st.motherName.ifBlank { "-" } }, 17),
+                    truncateText(phones, 20)
                 ),
                 shaded = idx % 2 == 1
             )
         }
         drawFooterSignatures(canvas, "Driver Signature", "Transport In-Charge")
+    }
+
+    // =========================================================================
+    // 8. TRANSPORT DUES, UNASSIGNED STUDENTS & FEE LIST PDF (A4 PORTRAIT)
+    // =========================================================================
+    fun generateTransportDuesAndFeeListPdf(context: Context, bundle: TransportDuesPdfBundle): File {
+        val dir = File(context.cacheDir, "phase11_pdfs").apply { mkdirs() }
+        val outFile = File(dir, "TransportDues_${sanitize(bundle.duesSummary.monthCode, "Month")}_${sanitize(bundle.session, "Ses")}.pdf")
+        val rowPages = bundle.duesSummary.rows.chunked(22).ifEmpty { listOf(emptyList()) }
+        val pdf = PdfDocument()
+        try {
+            var pageIdx = 1
+            val totalPages = rowPages.size + 1
+            rowPages.forEach { chunk ->
+                val page = pdf.startPage(PdfDocument.PageInfo.Builder(A4_W, A4_H, pageIdx).create())
+                drawTransportDuesRowsPage(page.canvas, bundle, chunk, pageIdx, totalPages, isLastDuesPage = pageIdx == rowPages.size)
+                pdf.finishPage(page)
+                pageIdx++
+            }
+            val schedulePage = pdf.startPage(PdfDocument.PageInfo.Builder(A4_W, A4_H, pageIdx).create())
+            drawTransportUnassignedAndFeeSchedulePage(schedulePage.canvas, bundle, pageIdx, totalPages)
+            pdf.finishPage(schedulePage)
+            FileOutputStream(outFile).use { pdf.writeTo(it) }
+        } finally {
+            pdf.close()
+        }
+        return outFile
+    }
+
+    fun renderTransportDuesPreviewBitmaps(bundle: TransportDuesPdfBundle, scale: Int = 2): List<Bitmap> {
+        val rowPages = bundle.duesSummary.rows.chunked(22).ifEmpty { listOf(emptyList()) }
+        val totalPages = rowPages.size + 1
+        val out = mutableListOf<Bitmap>()
+        rowPages.forEachIndexed { idx, chunk ->
+            val bmp = Bitmap.createBitmap(A4_W * scale, A4_H * scale, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp)
+            canvas.drawColor(Color.WHITE)
+            canvas.save()
+            canvas.scale(scale.toFloat(), scale.toFloat())
+            drawTransportDuesRowsPage(canvas, bundle, chunk, idx + 1, totalPages, isLastDuesPage = idx == rowPages.lastIndex)
+            canvas.restore()
+            out += bmp
+        }
+        val bmp2 = Bitmap.createBitmap(A4_W * scale, A4_H * scale, Bitmap.Config.ARGB_8888)
+        val c2 = Canvas(bmp2)
+        c2.drawColor(Color.WHITE)
+        c2.save()
+        c2.scale(scale.toFloat(), scale.toFloat())
+        drawTransportUnassignedAndFeeSchedulePage(c2, bundle, totalPages, totalPages)
+        c2.restore()
+        out += bmp2
+        return out
+    }
+
+    private fun drawTransportDuesRowsPage(
+        canvas: Canvas,
+        bundle: TransportDuesPdfBundle,
+        rows: List<TransportMonthDueStudentRow>,
+        pageNo: Int,
+        totalPages: Int,
+        isLastDuesPage: Boolean
+    ) {
+        val left = MARGIN
+        val right = A4_W - MARGIN
+        val d = bundle.duesSummary
+        var y = drawCompactSchoolHeader(
+            canvas = canvas,
+            school = bundle.school,
+            title = "TRANSPORT DUES REPORT — ${d.monthCode}",
+            subtitle = "Session ${bundle.session}  •  As on ${bundle.generatedDateIso}  •  Pending Students: ${d.totalStudentsDue}  •  Total Due: ₹${d.totalDueRs}  •  P$pageNo/$totalPages"
+        )
+        y += 8f
+
+        val totalW = right - left
+        val cols = floatArrayOf(totalW - 392f, 62f, 108f, 62f, 52f, 54f, 54f)
+        y = drawTableHeader(canvas, left, y, cols, listOf("Student Name", "Class", "Route / Stop", "Trip", "Fee", "Paid", "Due"))
+        if (rows.isEmpty()) {
+            drawScaledText(canvas, "No pending transport dues for ${d.monthCode}.", left + 8f, y + 18f, makeTextPaint(9.5f, COLOR_GREEN, bold = true))
+            y += 28f
+        } else {
+            rows.forEachIndexed { idx, row ->
+                val tripShort = when (row.tripType) {
+                    TransportTripType.BOTH_WAYS -> "Both"
+                    TransportTripType.PICKUP_ONLY -> "Pickup"
+                    TransportTripType.DROP_ONLY -> "Drop"
+                }
+                y = drawTableRow(
+                    canvas = canvas,
+                    left = left,
+                    y = y,
+                    rowH = 22f,
+                    cols = cols,
+                    values = listOf(
+                        truncateText(row.student.name, 22),
+                        "${row.student.className}-${row.student.section}",
+                        truncateText("${row.routeName} • ${row.stopName}", 18),
+                        tripShort,
+                        "₹${row.scheduledRs}",
+                        "₹${row.paidRs}",
+                        "₹${row.dueRs}"
+                    ),
+                    shaded = idx % 2 == 1,
+                    lastColColor = COLOR_RED
+                )
+            }
+        }
+
+        if (isLastDuesPage && y < A4_H - 95f) {
+            y += 10f
+            val box = RectF(left, y, right, y + 32f)
+            canvas.drawRect(box, Paint().apply { color = COLOR_TINT; style = Paint.Style.FILL })
+            canvas.drawRect(box, Paint().apply { color = COLOR_PRIMARY; style = Paint.Style.STROKE; strokeWidth = 0.8f })
+            drawScaledText(
+                canvas,
+                "Expected (${d.monthCode}): ₹${d.totalExpectedRs}    •    Collected: ₹${d.totalCollectedRs}    •    Total Due: ₹${d.totalDueRs}",
+                left + 10f,
+                y + 20f,
+                makeTextPaint(9f, COLOR_PRIMARY, bold = true)
+            )
+        }
+        drawFooterSignatures(canvas, "Transport Clerk", "Principal")
+    }
+
+    private fun drawTransportUnassignedAndFeeSchedulePage(
+        canvas: Canvas,
+        bundle: TransportDuesPdfBundle,
+        pageNo: Int,
+        totalPages: Int
+    ) {
+        val left = MARGIN
+        val right = A4_W - MARGIN
+        val totalW = right - left
+        var y = drawCompactSchoolHeader(
+            canvas = canvas,
+            school = bundle.school,
+            title = "TRANSPORT FEE SCHEDULE & STUDENTS NEEDING ROUTE",
+            subtitle = "Session ${bundle.session}  •  Routes: ${bundle.routes.size}  •  Without Route: ${bundle.unassignedStudents.size}  •  P$pageNo/$totalPages"
+        )
+        y += 10f
+
+        drawScaledText(canvas, "1. Route & Stop Monthly Fee List", left, y, makeTextPaint(10f, COLOR_PRIMARY, bold = true))
+        y += 6f
+        val rCols = floatArrayOf(130f, 88f, 64f, 68f, 64f, totalW - 414f)
+        y = drawTableHeader(canvas, left, y, rCols, listOf("Route", "Vehicle No", "Both Ways", "Pickup Only", "Drop Only", "Stops & Custom Fees"))
+        bundle.routes.take(14).forEachIndexed { idx, rt ->
+            val pFee = if (rt.pickupOnlyFeeRs > 0) "₹${rt.pickupOnlyFeeRs}" else "₹${rt.monthlyFeeRs}"
+            val dFee = if (rt.dropOnlyFeeRs > 0) "₹${rt.dropOnlyFeeRs}" else "₹${rt.monthlyFeeRs}"
+            val stopsTxt = if (rt.stops.isEmpty()) "Route fee only" else rt.stops.joinToString(", ") {
+                val sf = if (it.monthlyFeeRs > 0) " ₹${it.monthlyFeeRs}" else ""
+                "${it.stopName}$sf"
+            }
+            y = drawTableRow(
+                canvas, left, y, 22f, rCols,
+                listOf(
+                    truncateText(rt.routeName, 20),
+                    truncateText(rt.vehicleNumber.ifBlank { "-" }, 13),
+                    "₹${rt.monthlyFeeRs}",
+                    pFee,
+                    dFee,
+                    truncateText(stopsTxt, 24)
+                ),
+                shaded = idx % 2 == 1
+            )
+        }
+
+        y += 16f
+        drawScaledText(
+            canvas,
+            "2. Students Marked on Transport Without a Route (${bundle.unassignedStudents.size})",
+            left, y, makeTextPaint(10f, COLOR_RED, bold = true)
+        )
+        y += 6f
+        if (bundle.unassignedStudents.isEmpty()) {
+            drawScaledText(canvas, "All transport students are mapped to a route.", left + 6f, y + 14f, makeTextPaint(8.8f, COLOR_GREEN))
+        } else {
+            val uCols = floatArrayOf(30f, 160f, 75f, 95f, totalW - 360f)
+            y = drawTableHeader(canvas, left, y, uCols, listOf("#", "Student Name", "Class", "Mobile", "Current Remark / Saved Text"))
+            bundle.unassignedStudents.take(10).forEachIndexed { idx, st ->
+                y = drawTableRow(
+                    canvas, left, y, 20f, uCols,
+                    listOf(
+                        "${idx + 1}",
+                        truncateText(st.name, 25),
+                        "${st.className}-${st.section}",
+                        st.mobile.ifBlank { "-" },
+                        truncateText(st.transportRouteName.ifBlank { "No route / ₹${st.transportMonthlyAmount}" }, 28)
+                    ),
+                    shaded = idx % 2 == 1
+                )
+            }
+        }
+        drawFooterSignatures(canvas, "Transport Clerk", "Principal")
+    }
+
+    // =========================================================================
+    // 9. TRANSPORT MONTHLY SUMMARY (INCOME VS EXPENSE PROFIT/LOSS A4 PDF)
+    // =========================================================================
+    fun generateTransportMonthlySummaryPdf(context: Context, bundle: TransportMonthlySummaryPdfBundle): File {
+        val dir = File(context.cacheDir, "phase11_pdfs").apply { mkdirs() }
+        val rpt = bundle.report
+        val outFile = File(dir, "TransportSummary_${sanitize(rpt.monthCode, "Month")}_${sanitize(rpt.session, "Ses")}.pdf")
+        val pdf = PdfDocument()
+        try {
+            val page = pdf.startPage(PdfDocument.PageInfo.Builder(A4_W, A4_H, 1).create())
+            drawTransportMonthlySummaryPage(page.canvas, bundle)
+            pdf.finishPage(page)
+            FileOutputStream(outFile).use { pdf.writeTo(it) }
+        } finally {
+            pdf.close()
+        }
+        return outFile
+    }
+
+    fun renderTransportMonthlySummaryPreviewBitmap(bundle: TransportMonthlySummaryPdfBundle, scale: Int = 2): Bitmap {
+        val bmp = Bitmap.createBitmap(A4_W * scale, A4_H * scale, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        canvas.drawColor(Color.WHITE)
+        canvas.save()
+        canvas.scale(scale.toFloat(), scale.toFloat())
+        drawTransportMonthlySummaryPage(canvas, bundle)
+        canvas.restore()
+        return bmp
+    }
+
+    private fun drawTransportMonthlySummaryPage(canvas: Canvas, bundle: TransportMonthlySummaryPdfBundle) {
+        val left = MARGIN
+        val right = A4_W - MARGIN
+        val totalW = right - left
+        val rpt = bundle.report
+        var y = drawCompactSchoolHeader(
+            canvas = canvas,
+            school = bundle.school,
+            title = "TRANSPORT MONTHLY INCOME & EXPENSE SUMMARY — ${rpt.monthCode}",
+            subtitle = "Session ${rpt.session} (${rpt.yearMonthIso})  •  Generated ${bundle.generatedDateIso}  •  Cash Book Linked"
+        )
+        y += 10f
+
+        val cols = floatArrayOf(totalW - 392f, 82f, 62f, 62f, 62f, 62f, 62f)
+        y = drawTableHeader(canvas, left, y, cols, listOf("Route", "Vehicle", "Expected", "Collected", "Dues", "Expense", "Net P/L"))
+        rpt.vehicleRows.take(22).forEachIndexed { idx, row ->
+            val plColor = if (row.profitOrLossRs >= 0) COLOR_GREEN else COLOR_RED
+            val plText = if (row.profitOrLossRs >= 0) "+₹${row.profitOrLossRs}" else "-₹${-row.profitOrLossRs}"
+            y = drawTableRow(
+                canvas, left, y, 22f, cols,
+                listOf(
+                    truncateText(row.routeName, 22),
+                    truncateText(row.vehicleNumber, 13),
+                    "₹${row.expectedIncomeRs}",
+                    "₹${row.collectedIncomeRs}",
+                    "₹${row.duesRs}",
+                    "₹${row.expenseRs}",
+                    plText
+                ),
+                shaded = idx % 2 == 1,
+                lastColColor = plColor
+            )
+        }
+        if (rpt.unallocatedExpensesRs > 0) {
+            y = drawTableRow(
+                canvas, left, y, 22f, cols,
+                listOf("General / Unallocated", "-", "₹0", "₹0", "₹0", "₹${rpt.unallocatedExpensesRs}", "-₹${rpt.unallocatedExpensesRs}"),
+                shaded = false,
+                explicitBgColor = COLOR_AMBER_BG,
+                lastColColor = COLOR_RED
+            )
+        }
+
+        y += 14f
+        val netColor = if (rpt.netProfitOrLossRs >= 0) COLOR_GREEN else COLOR_RED
+        val netText = if (rpt.netProfitOrLossRs >= 0) "PROFIT +₹${rpt.netProfitOrLossRs}" else "LOSS -₹${-rpt.netProfitOrLossRs}"
+        val box = RectF(left, y, right, y + 48f)
+        canvas.drawRect(box, Paint().apply { color = COLOR_TINT; style = Paint.Style.FILL })
+        canvas.drawRect(box, Paint().apply { color = COLOR_PRIMARY; style = Paint.Style.STROKE; strokeWidth = 0.9f })
+        drawScaledText(
+            canvas,
+            "Expected Income: ₹${rpt.totalExpectedIncomeRs}    •    Collected: ₹${rpt.totalCollectedIncomeRs}    •    Pending Dues: ₹${rpt.totalDuesRs}",
+            left + 10f, y + 19f, makeTextPaint(9.2f, COLOR_PRIMARY, bold = true)
+        )
+        drawScaledText(
+            canvas,
+            "Total Vehicle Expenses (Cash Book): ₹${rpt.totalExpenseRs}        •        School Net Result: $netText",
+            left + 10f, y + 37f, makeTextPaint(9.5f, netColor, bold = true)
+        )
+        drawFooterSignatures(canvas, "Transport Clerk", "Principal / Treasurer")
     }
 
     // =========================================================================

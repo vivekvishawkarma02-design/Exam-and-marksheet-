@@ -89,15 +89,15 @@ class Phase15DeletionAndReadinessTest {
     @Test
     fun soleOwnerDeletionValidation_requiresExactOrgCodeOrMultiOrgPhrase() {
         val singleOwned = listOf(
-            OrgMembershipRef("org1", "STS Primary", "sts-ghazipur", OrgRole.OWNER, MemberStatus.ACTIVE),
+            OrgMembershipRef("org1", "Demo Primary", "demo-primary", OrgRole.OWNER, MemberStatus.ACTIVE),
             OrgMembershipRef("org2", "Guest Org", "guest-org", OrgRole.TEACHER, MemberStatus.ACTIVE)
         )
         val nonOwnerOnly = listOf(
             OrgMembershipRef("org2", "Guest Org", "guest-org", OrgRole.TEACHER, MemberStatus.ACTIVE)
         )
         val multiOwned = listOf(
-            OrgMembershipRef("org1", "STS Primary", "sts-ghazipur", OrgRole.OWNER, MemberStatus.ACTIVE),
-            OrgMembershipRef("org3", "STS Inter", "sts-inter", OrgRole.OWNER, MemberStatus.ACTIVE)
+            OrgMembershipRef("org1", "Demo Primary", "demo-primary", OrgRole.OWNER, MemberStatus.ACTIVE),
+            OrgMembershipRef("org3", "Demo Senior", "demo-senior", OrgRole.OWNER, MemberStatus.ACTIVE)
         )
 
         // Normal member allowed directly
@@ -113,10 +113,10 @@ class Phase15DeletionAndReadinessTest {
         // Single owned org requires exact normalised org code
         assertNotNull(OrgAccessEvaluator.validateOwnerAccountAndOrgDeletion(singleOwned, ""))
         assertNotNull(OrgAccessEvaluator.validateOwnerAccountAndOrgDeletion(singleOwned, "wrong-code"))
-        assertNull(OrgAccessEvaluator.validateOwnerAccountAndOrgDeletion(singleOwned, "  STS-GHAZIPUR "))
+        assertNull(OrgAccessEvaluator.validateOwnerAccountAndOrgDeletion(singleOwned, "  DEMO-PRIMARY "))
 
         // Multiple owned orgs require exact phrase
-        assertNotNull(OrgAccessEvaluator.validateOwnerAccountAndOrgDeletion(multiOwned, "sts-ghazipur"))
+        assertNotNull(OrgAccessEvaluator.validateOwnerAccountAndOrgDeletion(multiOwned, "demo-primary"))
         assertNull(OrgAccessEvaluator.validateOwnerAccountAndOrgDeletion(multiOwned, "DELETE ALL ORGANISATIONS"))
     }
 

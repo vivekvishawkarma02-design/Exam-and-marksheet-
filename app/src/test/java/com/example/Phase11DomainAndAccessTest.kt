@@ -116,7 +116,7 @@ class Phase11DomainAndAccessTest {
         section = section,
         rollNo = rollNo,
         mobile = "98765432%02d".format(id.toInt() % 100),
-        address = "Main Road, Ghazipur",
+        address = "123 Station Road, Demo Nagar",
         status = status,
         usesTransport = usesTransport,
         transportRouteId = transportRouteId,

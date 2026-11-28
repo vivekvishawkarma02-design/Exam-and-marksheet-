@@ -70,6 +70,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ads.findActivityOrNull
 import com.example.data.ClassGroupEntity
 import com.example.data.SchoolClassEntity
 import com.example.data.SchoolEntity
@@ -98,13 +100,23 @@ fun SchoolsScreen(
     var managingClassesSchoolId by remember { mutableStateOf<Long?>(null) }
     var deletingSchool by remember { mutableStateOf<SchoolEntity?>(null) }
     val canEditSchools = uiState.canEdit(AppModule.SETTINGS)
+    val adsUiState by viewModel.adsUiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivityOrNull() }
+    val isHindi = uiState.phase10HindiLabels
+    val anyDataEntryDialogOpen = showAddEditDialog || managingClassesSchoolId != null || deletingSchool != null
 
-    Box(
+    Column(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
             Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 2.dp) {
                 Row(
                     modifier = Modifier
@@ -176,25 +188,49 @@ fun SchoolsScreen(
                             onDelete = { deletingSchool = school }
                         )
                     }
+
+                    if (adsUiState.rewardedOfferStatus.visible) {
+                        item(key = "schools_rewarded_ad_free_card") {
+                            RewardedAdFreeCard(
+                                offerStatus = adsUiState.rewardedOfferStatus,
+                                isHindi = isHindi,
+                                isRewardedLoading = adsUiState.isRewardedLoading,
+                                onWatchConfirmed = { viewModel.watchRewardedAdForAdFreeTime(activity) },
+                                compact = true,
+                                testTagPrefix = "school_chooser_rewarded"
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        if (canEditSchools) {
-            FloatingActionButton(
-                onClick = {
-                    editingSchool = null
-                    showAddEditDialog = true
-                },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(16.dp)
-                    .testTag("add_school_fab")
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Add School")
+            if (canEditSchools) {
+                FloatingActionButton(
+                    onClick = {
+                        editingSchool = null
+                        showAddEditDialog = true
+                    },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(16.dp)
+                        .testTag("add_school_fab")
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Add School")
+                }
             }
+        }
+
+        // Phase 16A: Adaptive Banner strictly at bottom of School Chooser (below FAB, hidden during dialogs)
+        if (!anyDataEntryDialogOpen) {
+            AdaptiveAdBannerSlot(
+                eligibility = adsUiState.bannerEligibility(com.example.domain.AdScreenSurface.SCHOOL_CHOOSER),
+                canRequestAds = adsUiState.canRequestAdsFromConsent,
+                bannerUnitId = adsUiState.unitIds.bannerId,
+                testTagPrefix = "school_chooser"
+            )
         }
     }
 
@@ -531,7 +567,7 @@ private fun SchoolFormDialog(
                     value = name,
                     onValueChange = { name = it },
                     label = { Text("School Name*") },
-                    placeholder = { Text("e.g. STS Public School") },
+                    placeholder = { Text("e.g. Your School Name") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()

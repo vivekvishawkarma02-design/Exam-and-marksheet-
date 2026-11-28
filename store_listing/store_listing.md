@@ -6,6 +6,8 @@
 
 - **App Title (`<= 30` chars, current = 18 chars):**
   `School Report Card`
+- **Package Name (`applicationId`):**
+  `com.vivek.schoolreportcard`
 - **App Category:**
   `Education`
 - **Default Language:**

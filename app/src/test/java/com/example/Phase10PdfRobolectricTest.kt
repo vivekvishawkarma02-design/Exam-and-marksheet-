@@ -35,10 +35,10 @@ class Phase10PdfRobolectricTest {
 
     private val school = SchoolEntity(
         id = 1L,
-        name = "C.P.S. SCHOOL",
-        address = "Harikaranpur Bijaura, Ghazipur (U.P.)",
+        name = "DEMO MODEL SCHOOL",
+        address = "123 Station Road, Demo Nagar",
         mobile = "9876543210",
-        email = "cps@example.edu",
+        email = "office@demoschool.example",
         active = true
     )
 
@@ -65,7 +65,7 @@ class Phase10PdfRobolectricTest {
         section = "A",
         rollNo = 1,
         admissionDate = "01-04-2021",
-        address = "Harikaranpur Bijaura, Ghazipur",
+        address = "123 Station Road, Demo Nagar",
         reasonForLeaving = "Parent's request / family relocation",
         lastAttendanceDateIso = "2026-04-12",
         conduct = "Very Good",

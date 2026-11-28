@@ -80,10 +80,10 @@ class Phase17ResultAnalysisTest {
 
     private fun makeSchool(): SchoolEntity = SchoolEntity(
         id = 1L,
-        name = "S.T.S. PUBLIC SCHOOL",
-        address = "Main Road, Ghazipur (U.P.)",
+        name = "DEMO MODEL SCHOOL",
+        address = "123 Station Road, Demo Nagar",
         mobile = "9876543210",
-        email = "sts@example.edu",
+        email = "office@demoschool.example",
         logoBase64 = samplePngBase64(Color.rgb(22, 49, 92)),
         active = true
     )
@@ -565,7 +565,7 @@ class Phase17ResultAnalysisTest {
         assertEquals(listOf("English"), progress.failedOrWeakSubjectsLatest)
 
         val msgEn = Phase17ResultAnalysisEngine.buildGuardianProgressMessage(
-            schoolName = "S.T.S. PUBLIC SCHOOL",
+            schoolName = "DEMO MODEL SCHOOL",
             session = "2026-2027",
             progress = progress,
             isHindi = false
@@ -575,7 +575,7 @@ class Phase17ResultAnalysisTest {
         assertTrue(msgEn.contains("English"))
 
         val msgHi = Phase17ResultAnalysisEngine.buildGuardianProgressMessage(
-            schoolName = "S.T.S. PUBLIC SCHOOL",
+            schoolName = "DEMO MODEL SCHOOL",
             session = "2026-2027",
             progress = progress,
             isHindi = true

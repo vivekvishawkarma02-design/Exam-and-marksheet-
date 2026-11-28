@@ -42,3 +42,22 @@
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
 -dontwarn kotlinx.coroutines.flow.**
+
+# Phase 16A: Google Mobile Ads SDK (AdMob) & Google UMP Consent SDK
+-keep class com.google.android.gms.ads.** { *; }
+-keep class com.google.ads.** { *; }
+-keep class com.google.android.ump.** { *; }
+-keepclassmembers class * extends com.google.android.gms.ads.mediation.MediationAdapter {
+    public <init>();
+}
+-keep public class com.google.android.gms.ads.MobileAdsInitProvider { *; }
+-dontwarn com.google.android.gms.ads.**
+-dontwarn com.google.android.ump.**
+
+# Phase 16B: Google Play Billing Library & Firebase Functions
+-keep class com.android.billingclient.api.** { *; }
+-keep class com.android.vending.billing.** { *; }
+-keep class com.google.firebase.functions.** { *; }
+-dontwarn com.android.billingclient.**
+
+

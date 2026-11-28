@@ -1110,6 +1110,14 @@ internal fun TimetablePdfPreviewDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val onFinishedPdfClosed = LocalOnFinishedPdfPreviewClosed.current
+    val handleClosePreview = {
+        val finishedSuccessfully = pdfState.generatedFile != null && !pdfState.isGenerating && pdfState.error == null
+        onDismiss()
+        if (finishedSuccessfully) {
+            onFinishedPdfClosed(true)
+        }
+    }
 
     val savePdfLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/pdf")
@@ -1124,7 +1132,7 @@ internal fun TimetablePdfPreviewDialog(
     }
 
     AlertDialog(
-        onDismissRequest = { if (!pdfState.isGenerating) onDismiss() },
+        onDismissRequest = { if (!pdfState.isGenerating) handleClosePreview() },
         title = {
             Column {
                 Text(
@@ -1311,7 +1319,7 @@ internal fun TimetablePdfPreviewDialog(
         },
         confirmButton = {
             if (!pdfState.isGenerating) {
-                Button(onClick = onDismiss) { Text("Done") }
+                Button(onClick = handleClosePreview) { Text("Done") }
             }
         }
     )

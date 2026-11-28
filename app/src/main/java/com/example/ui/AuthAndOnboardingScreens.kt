@@ -981,6 +981,7 @@ fun OrgPickerAndOnboardingScreen(
     onOpenLegalDoc: (LegalDocType) -> Unit,
     onDeleteAccountClick: () -> Unit,
     onSignOutClick: () -> Unit,
+    adsUiState: Phase16AdsUiState = Phase16AdsUiState(),
     modifier: Modifier = Modifier
 ) {
     val account = state.userAccount
@@ -1066,7 +1067,9 @@ fun OrgPickerAndOnboardingScreen(
         }
 
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -1231,6 +1234,14 @@ fun OrgPickerAndOnboardingScreen(
                 }
             }
         }
+
+        // Phase 16A: Adaptive Banner strictly at bottom of Organisation Chooser (never on Login, Create Org, or Join Org)
+        AdaptiveAdBannerSlot(
+            eligibility = adsUiState.bannerEligibility(com.example.domain.AdScreenSurface.ORG_CHOOSER),
+            canRequestAds = adsUiState.canRequestAdsFromConsent,
+            bannerUnitId = adsUiState.unitIds.bannerId,
+            testTagPrefix = "org_chooser"
+        )
     }
 }
 
@@ -1579,7 +1590,7 @@ fun CreateOrganisationScreen(
                         value = orgName,
                         onValueChange = { orgName = it },
                         label = { Text("Organisation Name *") },
-                        placeholder = { Text("e.g. Bright Future Education Society") },
+                        placeholder = { Text("e.g. Your School Organisation") },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1593,7 +1604,7 @@ fun CreateOrganisationScreen(
                             onCheckCode(cleaned)
                         },
                         label = { Text("Unique Organisation Code *") },
-                        placeholder = { Text("e.g. bright-future-schools") },
+                        placeholder = { Text("e.g. your-school-code") },
                         singleLine = true,
                         supportingText = {
                             when (val c = state.codeCheckState) {
@@ -1662,7 +1673,7 @@ fun CreateOrganisationScreen(
                         value = schoolName,
                         onValueChange = { schoolName = it.take(120) },
                         label = { Text("School Name *") },
-                        placeholder = { Text("e.g. Sunrise Public School") },
+                        placeholder = { Text("e.g. Your School Name") },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1897,7 +1908,7 @@ fun JoinOrganisationScreen(
                                     if (state.joinLookupState !is JoinOrgLookupState.Idle) onResetLookup()
                                 },
                                 label = { Text("Organisation Code") },
-                                placeholder = { Text("e.g. bright-future") },
+                                placeholder = { Text("e.g. your-school-code") },
                                 singleLine = true,
                                 modifier = Modifier
                                     .weight(1f)
@@ -2070,7 +2081,7 @@ fun JoinOrganisationScreen(
                                 inviteOrgCode = raw.lowercase().filter { it in 'a'..'z' || it in '0'..'9' || it == '-' }.take(30)
                             },
                             label = { Text("Organisation Code *") },
-                            placeholder = { Text("e.g. bright-future") },
+                            placeholder = { Text("e.g. your-school-code") },
                             singleLine = true,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2467,7 +2478,11 @@ fun PrivacyAndTermsScreen(
                         body = "This app is designed strictly for adult school staff (owners, principals, teachers, fee clerks)—not for children to use directly. Student academic records are managed exclusively by authorised school staff."
                     )
                     LegalSectionCard(
-                        title = "5. Retention, Deletion & Contact / संपर्क और डेटा हटाना",
+                        title = "5. Advertising, School Subscriptions & Consent / विज्ञापन, स्कूल सब्सक्रिप्शन और सहमति",
+                        body = "Free organisations may see limited, workplace-safe Google AdMob ads only on Today home, organisation/school choosers, student list, teacher list, report list, and timetable view, plus an optional capped interstitial after finishing a task (closing a finished PDF preview or returning from a list) and optional rewarded ads for temporary ad-free time (विज्ञापन-रहित समय). Ads never appear on login, settings, subscription screen, account deletion, open PDF previews, printed/shared PDFs, or any data-entry, fee, salary, attendance-taking, marks, cash book, receipt, certificate, or transport screen. School Owners can optionally purchase a Google Play school subscription (school_ad_free) to remove all ads for every member; Google Play handles all payment details directly, and all school work features stay 100% free with or without a subscription. We never share student, guardian, staff, or school records, emails, names, phone numbers, or user IDs with the ad SDK. Manage consent anytime under Settings → Privacy and ad choices or Android Settings → Google → Ads."
+                    )
+                    LegalSectionCard(
+                        title = "6. Retention, Deletion & Contact / संपर्क और डेटा हटाना",
                         body = "Use Settings → Account → Delete My Account anytime to delete your account. Contact email: ${LegalConfig.CONTACT_EMAIL_PLACEHOLDER}"
                     )
                 }

@@ -33,10 +33,10 @@ Play Store के लिए एक स्थायी **Upload Keystore** चा
 
 ## चरण 3: GitHub Secrets और Firebase में SHA जोड़ें
 
-1. **Firebase Console** (अपने प्रोजेक्ट की Settings → Android App) में जाएँ और:
+1. **Firebase Console** (अपने प्रोजेक्ट की Settings → Android App — पैकेज नाम `com.vivek.schoolreportcard`) में जाएँ और:
    - Upload Keystore का **SHA-1** और **SHA-256** जोड़ें।
    - जब ऐप Google Play App Signing से लाइव हो जाए, तो Play Console के **App integrity → App signing** से मिलने वाला **App signing key certificate (SHA-1 और SHA-256)** भी Firebase Console में जोड़ना न भूलें — तभी Play Store से डाउनलोड किए गए ऐप में Google Sign-In काम करेगा!
-   - ताज़ा `google-services.json` डाउनलोड करें।
+   - ताज़ा `google-services.json` डाउनलोड करें (जिसमें `com.vivek.schoolreportcard` क्लाइंट शामिल हो)।
 2. **GitHub रिपॉज़िटरी → Settings → Secrets and variables → Actions** में ये Secrets जोड़ें:
    - `UPLOAD_KEYSTORE_BASE64`: `PASSWORDS_AND_BASE64.txt` में दिया गया बेस64 कोड
    - `STORE_PASSWORD`: टेक्स्ट फ़ाइल में दिया स्टोर पासवर्ड

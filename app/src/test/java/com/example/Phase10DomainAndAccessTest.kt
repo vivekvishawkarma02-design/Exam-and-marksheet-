@@ -623,7 +623,7 @@ class Phase10DomainAndAccessTest {
         val queue = AdmissionEnquiryEngine.buildFollowUpQueue(
             enquiries = enqs,
             schoolId = "sch_1",
-            schoolName = "C.P.S. School",
+            schoolName = "Demo Model School",
             todayIso = "2026-04-15",
             template = EnquirySettingsConfig.DEFAULT_WHATSAPP_TEMPLATE,
             includeUpcoming = false
@@ -647,7 +647,7 @@ class Phase10DomainAndAccessTest {
         assertTrue(queue[0].whatsappMessageText.contains("Ramesh Patel"))
         assertTrue(queue[0].whatsappMessageText.contains("Meera Patel"))
         assertTrue(queue[0].whatsappMessageText.contains("Nursery"))
-        assertTrue(queue[0].whatsappMessageText.contains("C.P.S. School"))
+        assertTrue(queue[0].whatsappMessageText.contains("Demo Model School"))
 
         // Monthly summary: 6 enquiries in 2026-04, 1 admitted -> 16.7%
         val summary = AdmissionEnquiryEngine.computeMonthlySummary(enqs, "sch_1", todayIso = "2026-04-15")

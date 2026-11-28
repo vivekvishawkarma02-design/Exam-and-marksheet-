@@ -2,7 +2,7 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Core C.P.I. School Brand Palette (Navy & Academic Light Blue)
+// Core Neutral Academic Palette (Navy & Light Blue)
 val NavyPrimary = Color(0xFF1F3A5F)
 val NavyDark = Color(0xFF132640)
 val NavyContainer = Color(0xFFDCE5F0)

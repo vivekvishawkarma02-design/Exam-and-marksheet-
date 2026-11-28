@@ -2,7 +2,21 @@
   "firestore": [
     {
       "database": "ai-studio-android-cpirepor-c096c7ab-e70c-4a6e-a857-45480b7c6954",
-      "rules": "firestore.rules"
+      "rules": "firestore.rules",
+      "indexes": "firestore.indexes.json"
+    }
+  ],
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "test"
+      ]
     }
   ],
   "emulators": {

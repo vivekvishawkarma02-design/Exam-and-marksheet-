@@ -173,6 +173,75 @@ data class CloudOrgSettings(
 
 @Keep
 @IgnoreExtraProperties
+data class CloudOrgSubscription(
+    val status: String = com.example.domain.OrgSubscriptionStatus.NONE.wireValue,
+    val plan: String = "",
+    val expiresAt: Timestamp? = null,
+    val autoRenewing: Boolean = false,
+    val updatedAt: Timestamp? = null,
+    val purchaseTokenHash: String = ""
+) {
+    fun toDomain(): com.example.domain.OrgSubscription = com.example.domain.OrgSubscription(
+        status = com.example.domain.OrgSubscriptionStatus.fromWire(status),
+        plan = plan,
+        expiresAtMs = expiresAt?.toDate()?.time,
+        autoRenewing = autoRenewing,
+        updatedAtMs = updatedAt?.toDate()?.time,
+        purchaseTokenHash = purchaseTokenHash
+    )
+
+    companion object {
+        fun fromMap(map: Map<*, *>?): CloudOrgSubscription {
+            if (map == null) return CloudOrgSubscription()
+            return CloudOrgSubscription(
+                status = (map["status"] as? String).orEmpty()
+                    .ifBlank { com.example.domain.OrgSubscriptionStatus.NONE.wireValue },
+                plan = (map["plan"] as? String).orEmpty(),
+                expiresAt = map["expiresAt"] as? Timestamp,
+                autoRenewing = (map["autoRenewing"] as? Boolean) ?: false,
+                updatedAt = map["updatedAt"] as? Timestamp,
+                purchaseTokenHash = (map["purchaseTokenHash"] as? String).orEmpty()
+            )
+        }
+    }
+}
+
+@Keep
+@IgnoreExtraProperties
+data class CloudAdsWatchedWindow(
+    val windowStartAt: Timestamp? = null,
+    val countInWindow: Long = 0L,
+    val dailyDateKey: String = "",
+    val dailyCount: Long = 0L,
+    val totalCount: Long = 0L,
+    val lastRewardedAt: Timestamp? = null
+) {
+    fun toDomain(): com.example.domain.RewardedAdsWindow = com.example.domain.RewardedAdsWindow(
+        windowStartAtMs = windowStartAt?.toDate()?.time ?: 0L,
+        countInWindow = countInWindow.toInt().coerceAtLeast(0),
+        dailyDateKey = dailyDateKey,
+        dailyCount = dailyCount.toInt().coerceAtLeast(0),
+        totalCount = totalCount.coerceAtLeast(0L),
+        lastRewardedAtMs = lastRewardedAt?.toDate()?.time ?: 0L
+    )
+
+    companion object {
+        fun fromMap(map: Map<*, *>?): CloudAdsWatchedWindow {
+            if (map == null) return CloudAdsWatchedWindow()
+            return CloudAdsWatchedWindow(
+                windowStartAt = map["windowStartAt"] as? Timestamp,
+                countInWindow = (map["countInWindow"] as? Number)?.toLong() ?: 0L,
+                dailyDateKey = (map["dailyDateKey"] as? String).orEmpty(),
+                dailyCount = (map["dailyCount"] as? Number)?.toLong() ?: 0L,
+                totalCount = (map["totalCount"] as? Number)?.toLong() ?: 0L,
+                lastRewardedAt = map["lastRewardedAt"] as? Timestamp
+            )
+        }
+    }
+}
+
+@Keep
+@IgnoreExtraProperties
 data class CloudOrganisation(
     @DocumentId val id: String = "",
     val name: String = "",
@@ -181,6 +250,7 @@ data class CloudOrganisation(
     val contactMobile: String = "",
     val contactEmail: String = "",
     val settings: CloudOrgSettings = CloudOrgSettings(),
+    val subscription: CloudOrgSubscription = CloudOrgSubscription(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
@@ -204,6 +274,8 @@ data class CloudMember(
     val requestedClasses: List<String> = emptyList(),
     val assignedClassSubjects: List<String> = emptyList(),
     val inviteCodeUsed: String? = null,
+    val adFreeUntil: Timestamp? = null,
+    val adsWatchedWindow: CloudAdsWatchedWindow = CloudAdsWatchedWindow(),
     @ServerTimestamp val lastActiveAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
@@ -211,6 +283,12 @@ data class CloudMember(
     val orgRole: OrgRole get() = OrgRole.fromRaw(role)
     val memberStatus: MemberStatus get() = MemberStatus.fromRaw(status)
     val parsedPermissions: MemberPermissions get() = MemberPermissions.fromMap(permissions)
+
+    fun toRewardedAdFreeState(): com.example.domain.RewardedAdFreeState =
+        com.example.domain.RewardedAdFreeState(
+            adFreeUntilMs = adFreeUntil?.toDate()?.time ?: 0L,
+            window = adsWatchedWindow.toDomain()
+        )
 
     fun toAccessProfile(): MemberAccessProfile = MemberAccessProfile(
         uid = uid.ifBlank { id },

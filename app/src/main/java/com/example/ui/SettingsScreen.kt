@@ -94,6 +94,7 @@ import com.example.data.SubjectEntity
 import com.example.data.cloud.LocalMigrationSummary
 import com.example.domain.AppModule
 import com.example.domain.ExamType
+import com.example.ads.findActivityOrNull
 import com.example.domain.LegalConfig
 import com.example.ui.theme.AbsentAmber
 import com.example.ui.theme.AbsentAmberContainer
@@ -115,11 +116,17 @@ fun SettingsScreen(
     onLeaveOrganisation: () -> Unit = {},
     onDeleteOrganisationClick: () -> Unit = {},
     onOpenLegalDoc: (LegalDocType) -> Unit = {},
+    onOpenSubscriptionScreen: () -> Unit = {},
     onSignOut: () -> Unit = {},
     onDeleteAccountClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val activity = remember(context) { context.findActivityOrNull() }
+    val adsUiState by viewModel.adsUiState.collectAsStateWithLifecycle()
+    val isHindi = uiState.phase10HindiLabels
+    var showPrivacyAdChoicesDialog by remember { mutableStateOf(false) }
+    var privacyFeedback by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val pendingImport by viewModel.pendingImportBackup.collectAsStateWithLifecycle()
     val pendingLegacyImport by viewModel.pendingLegacyBackup.collectAsStateWithLifecycle()
@@ -1187,6 +1194,95 @@ fun SettingsScreen(
             }
         }
 
+        // PHASE 16A: ADS, AD-FREE TIME, PRIVACY & AD CHOICES (NO banner ads ever in Settings)
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                RemoveAdsForEveryoneCard(
+                    effectiveSubscription = adsUiState.effectiveSubscription,
+                    isOwner = uiState.isOwner,
+                    isHindi = isHindi,
+                    onOpenSubscriptionScreen = onOpenSubscriptionScreen
+                )
+
+                if (adsUiState.rewardedOfferStatus.visible) {
+                    RewardedAdFreeCard(
+                        offerStatus = adsUiState.rewardedOfferStatus,
+                        isHindi = isHindi,
+                        isRewardedLoading = adsUiState.isRewardedLoading,
+                        onWatchConfirmed = { viewModel.watchRewardedAdForAdFreeTime(activity) },
+                        testTagPrefix = "settings_rewarded"
+                    )
+                }
+
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PrivacyTip,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = p10Label(isHindi, "गोपनीयता और विज्ञापन विकल्प", "Privacy and ad choices"),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Text(
+                            text = p10Label(
+                                isHindi,
+                                "विज्ञापन सहमति विकल्प बदलें या अपने फोन की सेटिंग्स से व्यक्तिगत विज्ञापन बंद करें। कोई भी स्कूल या छात्र डेटा विज्ञापन SDK को नहीं भेजा जाता।",
+                                "Manage your ad consent choices or opt out of personalised ads in device settings. No school or student data is ever sent to the ad SDK."
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (!privacyFeedback.isNullOrBlank()) {
+                            Text(
+                                text = privacyFeedback!!,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { showPrivacyAdChoicesDialog = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("settings_privacy_ad_choices_button")
+                        ) {
+                            Icon(Icons.Default.PrivacyTip, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(p10Label(isHindi, "गोपनीयता और विज्ञापन विकल्प", "Privacy and ad choices"))
+                        }
+                    }
+                }
+
+                // Debug-only hidden developer switch (stripped from release builds)
+                if (BuildConfig.DEBUG) {
+                    DebugAdsSimulationSection(
+                        isHindi = isHindi,
+                        currentSimulation = adsUiState.debugSimulation,
+                        bypassInstallGrace = adsUiState.debugBypassInstallGrace,
+                        onSimulationChanged = viewModel::setDebugSubscriptionSimulation,
+                        onBypassInstallGraceChanged = viewModel::setDebugBypassInstallGrace
+                    )
+                }
+            }
+        }
+
         // LAST CARD: About App, Version, Privacy Policy, Support & Deletion Guide (Always visible)
         item {
             SettingsAboutAndLegalCard(
@@ -1195,6 +1291,15 @@ fun SettingsScreen(
                 onOpenLegalDoc = onOpenLegalDoc
             )
         }
+    }
+
+    if (showPrivacyAdChoicesDialog) {
+        PrivacyAndAdChoicesDialog(
+            isHindi = isHindi,
+            isPrivacyOptionsRequired = adsUiState.isPrivacyOptionsRequired,
+            onDismiss = { showPrivacyAdChoicesDialog = false },
+            onFeedback = { privacyFeedback = it }
+        )
     }
 
     if (confirmLeaveOrg) {

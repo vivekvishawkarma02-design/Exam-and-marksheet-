@@ -1,0 +1,22 @@
+{
+  "name": "school-report-card-functions",
+  "description": "Phase 16B Firebase Cloud Functions (asia-south1) for Google Play subscription verification, RTDN, and AdMob SSV.",
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.js"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "main": "lib/index.js",
+  "private": true,
+  "dependencies": {
+    "firebase-admin": "^13.0.2",
+    "firebase-functions": "^6.1.1",
+    "google-auth-library": "^9.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

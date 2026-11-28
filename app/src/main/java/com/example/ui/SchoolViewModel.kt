@@ -1870,6 +1870,93 @@ class SchoolViewModel(
     private val _deletedUserUids = MutableStateFlow<Set<String>>(emptySet())
     private val _isOnline = MutableStateFlow(connectivityMonitor.isCurrentlyOnline())
 
+    // Phase 16A/16B: Ads with Ad-Free Time & School Subscription (isolated StateFlows; zero disruption to SchoolUiState)
+    private val _remoteAdsConfig = MutableStateFlow(com.example.domain.RemoteAdsConfig())
+    private val _serverClockOffsetMs = MutableStateFlow(offlinePrefs.getLastKnownServerOffsetMs())
+    private val _adsClockTickMs = MutableStateFlow(System.currentTimeMillis())
+    private val _localRewardedState = MutableStateFlow(offlinePrefs.loadCachedRewardedAdFreeState(currentUserId, orgId))
+    private val _interstitialFreqState = MutableStateFlow(offlinePrefs.loadInterstitialFrequencyState())
+    private val _debugSubSimulation = MutableStateFlow(
+        if (com.example.BuildConfig.DEBUG) offlinePrefs.getDebugSubscriptionSimulation()
+        else com.example.domain.DebugSubscriptionSimulation.FOLLOW_SERVER
+    )
+    private val _debugBypassInstallGrace = MutableStateFlow(
+        if (com.example.BuildConfig.DEBUG) offlinePrefs.getDebugBypassInstallGrace() else false
+    )
+    private val _dismissedLapsedNoticeMarkerMs = MutableStateFlow(
+        offlinePrefs.getDismissedLapsedNoticeMarker(orgId)
+    )
+    val dismissedLapsedNoticeMarkerMs: StateFlow<Long> = _dismissedLapsedNoticeMarkerMs.asStateFlow()
+
+    private val _billingUiState = MutableStateFlow(
+        com.example.domain.PlayBillingUiSnapshot(
+            hasQueuedOfflineVerification = offlinePrefs.loadPendingPurchaseVerifications(orgId).isNotEmpty()
+        )
+    )
+    val billingUiState: StateFlow<com.example.domain.PlayBillingUiSnapshot> = _billingUiState.asStateFlow()
+    private var playBillingManager: com.example.billing.Phase16PlayBillingManager? = null
+    private var lastSelectedBasePlanId: String = ""
+
+    private val _phase16ControlFlow = combine(
+        _remoteAdsConfig,
+        _serverClockOffsetMs,
+        _adsClockTickMs,
+        _debugSubSimulation,
+        _debugBypassInstallGrace
+    ) { remoteCfg, offsetMs, tickMs, debugSim, debugBypass ->
+        Phase16ControlSnapshot(remoteCfg, offsetMs, tickMs, debugSim, debugBypass)
+    }
+
+    private val _phase16SdkFlow = combine(
+        com.example.ads.Phase16AdMobController.canRequestAds,
+        com.example.ads.Phase16AdMobController.isPrivacyOptionsRequired,
+        com.example.ads.Phase16AdMobController.isRewardedLoading,
+        _localRewardedState,
+        _interstitialFreqState
+    ) { canReq, privacyReq, rewardedLoading, localRewarded, interstitialFreq ->
+        Phase16SdkSnapshot(canReq, privacyReq, rewardedLoading, localRewarded, interstitialFreq)
+    }
+
+    val adsUiState: StateFlow<Phase16AdsUiState> = combine(
+        _orgState,
+        _ownMember,
+        _isOnline,
+        _phase16ControlFlow,
+        _phase16SdkFlow
+    ) { org, member, online, ctrl, sdk ->
+        val unitIds = com.example.ads.AdMobRequestFactory.currentBuildUnitIds()
+        val serverNow = com.example.domain.Phase16AdsPolicyEngine.serverNowMs(ctrl.tickMs, ctrl.offsetMs)
+        val firstInstallMs = offlinePrefs.getOrInitFirstInstallMs(serverNow)
+        val baseSub = org?.subscription?.toDomain() ?: offlinePrefs.getCachedOrgSubscription(orgId)
+        val effectiveSub = com.example.domain.Phase16AdsPolicyEngine.resolveEffectiveSubscription(
+            orgSubscription = baseSub,
+            isDebugBuild = com.example.BuildConfig.DEBUG,
+            debugSimulation = ctrl.debugSim
+        )
+        val cloudRewarded = member?.toRewardedAdFreeState() ?: com.example.domain.RewardedAdFreeState.EMPTY
+        val mergedRewarded = com.example.domain.RewardedLadderEngine.mergeMonotonic(sdk.localRewarded, cloudRewarded)
+        Phase16AdsUiState(
+            orgSubscription = baseSub,
+            effectiveSubscription = effectiveSub,
+            rewardedState = mergedRewarded,
+            remoteConfig = ctrl.remoteCfg,
+            unitIds = unitIds,
+            interstitialFrequency = sdk.interstitialFreq,
+            isOnline = online,
+            firstInstallServerMs = firstInstallMs,
+            serverNowMs = serverNow,
+            canRequestAdsFromConsent = sdk.canReq,
+            isPrivacyOptionsRequired = sdk.privacyReq,
+            isRewardedLoading = sdk.rewardedLoading,
+            debugSimulation = if (com.example.BuildConfig.DEBUG) ctrl.debugSim else com.example.domain.DebugSubscriptionSimulation.FOLLOW_SERVER,
+            debugBypassInstallGrace = com.example.BuildConfig.DEBUG && ctrl.debugBypass
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = Phase16AdsUiState(isOnline = connectivityMonitor.isCurrentlyOnline())
+    )
+
     // In-memory lookups from stable Long IDs back to Firestore doc IDs
     internal var schoolRecordsByLongId: Map<Long, CloudSchoolRecord> = emptyMap()
     internal var studentDocIdByLongId: Map<Long, Pair<String, StudentEntity>> = emptyMap()
@@ -2191,10 +2278,13 @@ class SchoolViewModel(
     }
 
     private fun startObservers() {
-        // 1. Connectivity
+        // 1. Connectivity (+ flush any offline-queued Play purchase verifications when back online)
         viewModelScope.launch {
             connectivityMonitor.isOnline.collect { online ->
                 _isOnline.value = online
+                if (online) {
+                    flushPendingSubscriptionVerifications()
+                }
             }
         }
 
@@ -2219,6 +2309,15 @@ class SchoolViewModel(
                     val member = meta.member
                     val newProfile = member?.toAccessProfile()
                     _ownMember.value = member
+
+                    if (member != null) {
+                        val merged = com.example.domain.RewardedLadderEngine.mergeMonotonic(
+                            _localRewardedState.value,
+                            member.toRewardedAdFreeState()
+                        )
+                        _localRewardedState.value = merged
+                        offlinePrefs.saveCachedRewardedAdFreeState(currentUserId, orgId, merged)
+                    }
 
                     if (member != null && member.memberStatus == MemberStatus.ACTIVE) {
                         if (!seenActiveMemberOnce) {
@@ -2266,11 +2365,39 @@ class SchoolViewModel(
                 }
                 .collect { org ->
                     _orgState.value = org
-                    if (org != null && !sessionInitializedFromOrg) {
-                        sessionInitializedFromOrg = true
-                        _filter.value = _filter.value.copy(session = org.settings.currentSession)
+                    if (org != null) {
+                        val domainSub = org.subscription.toDomain()
+                        offlinePrefs.setCachedOrgSubscription(orgId, domainSub)
+                        if (domainSub.suppressesAllAds) {
+                            com.example.ads.Phase16AdMobController.clearPreloadedAds()
+                        }
+                        if (!sessionInitializedFromOrg) {
+                            sessionInitializedFromOrg = true
+                            _filter.value = _filter.value.copy(session = org.settings.currentSession)
+                        }
                     }
                 }
+        }
+
+        // 3b. Phase 16A: Remote ads config + server clock offset + live ad-free countdown tick
+        viewModelScope.launch {
+            orgRepo.observeRemoteAdsConfig().collect { cfg ->
+                _remoteAdsConfig.value = cfg
+            }
+        }
+        viewModelScope.launch {
+            val offset = orgRepo.syncServerClockOffset(currentUserId)
+            if (offset != null) {
+                offlinePrefs.setLastKnownServerOffsetMs(offset)
+                _serverClockOffsetMs.value = offset
+                _adsClockTickMs.value = System.currentTimeMillis()
+            }
+        }
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(30_000L)
+                _adsClockTickMs.value = System.currentTimeMillis()
+            }
         }
 
         // 4. Allowed schools (scoped strictly to current member's access profile)
@@ -6585,6 +6712,472 @@ class SchoolViewModel(
         }
     }
 
+    // =========================================================================
+    // PHASE 16A: ADS WITH AD-FREE TIME ACTIONS
+    // =========================================================================
+    fun setDebugSubscriptionSimulation(sim: com.example.domain.DebugSubscriptionSimulation) {
+        if (!com.example.BuildConfig.DEBUG) return
+        offlinePrefs.setDebugSubscriptionSimulation(sim)
+        _debugSubSimulation.value = sim
+        if (sim == com.example.domain.DebugSubscriptionSimulation.FORCE_ACTIVE) {
+            com.example.ads.Phase16AdMobController.clearPreloadedAds()
+        }
+    }
+
+    fun setDebugBypassInstallGrace(bypass: Boolean) {
+        if (!com.example.BuildConfig.DEBUG) return
+        offlinePrefs.setDebugBypassInstallGrace(bypass)
+        _debugBypassInstallGrace.value = bypass
+    }
+
+    fun preloadPdfCloseInterstitialIfEligible() {
+        val snap = adsUiState.value
+        val eligible = snap.pdfCloseInterstitialEligibility(pdfWasFinishedSuccessfully = true).allowed
+        if (eligible) {
+            com.example.ads.Phase16AdMobController.preloadInterstitialIfEligible(
+                context = appContext,
+                eligible = true,
+                unitIds = snap.unitIds
+            )
+        }
+    }
+
+    fun onFinishedPdfPreviewClosed(activity: android.app.Activity?, pdfWasFinishedSuccessfully: Boolean) {
+        val snap = adsUiState.value
+        val eligibility = snap.pdfCloseInterstitialEligibility(pdfWasFinishedSuccessfully)
+        if (!eligibility.allowed) return
+        showCappedInterstitialOrPreload(activity)
+    }
+
+    /**
+     * Phase 16B: Optional interstitial ONLY when returning after finishing a list/view task
+     * (never mid-task; capped at once per 8 minutes and max 8 per day per device).
+     */
+    fun onTaskFinishedReturnFromList(activity: android.app.Activity?) {
+        val snap = adsUiState.value
+        val eligibility = snap.taskFinishedReturnInterstitialEligibility()
+        if (!eligibility.allowed) return
+        showCappedInterstitialOrPreload(activity)
+    }
+
+    private fun showCappedInterstitialOrPreload(activity: android.app.Activity?) {
+        val shown = com.example.ads.Phase16AdMobController.showPreloadedInterstitialIfReady(
+            activity = activity,
+            onShown = {
+                val nowServer = com.example.domain.Phase16AdsPolicyEngine.serverNowMs(
+                    System.currentTimeMillis(),
+                    _serverClockOffsetMs.value
+                )
+                val updatedFreq = _interstitialFreqState.value.recordShownAt(nowServer)
+                _interstitialFreqState.value = updatedFreq
+                offlinePrefs.saveInterstitialFrequencyState(updatedFreq)
+            }
+        )
+        if (!shown) {
+            // Non-blocking: silently preload for next eligible completion
+            preloadPdfCloseInterstitialIfEligible()
+        }
+    }
+
+    fun watchRewardedAdForAdFreeTime(activity: android.app.Activity?) {
+        val isHindi = _phase10HindiLabels.value
+        val snap = adsUiState.value
+        if (!snap.rewardedOfferStatus.canWatchNow) {
+            emitMessage(
+                if (isHindi) "अभी रिवॉर्ड विज्ञापन उपलब्ध नहीं है।"
+                else "Rewarded ad is not available right now."
+            )
+            return
+        }
+        viewModelScope.launch {
+            // Phase 16B: Fetch an optional zero-PII opaque single-use SSV nonce from Cloud Functions.
+            // If Cloud Functions are not yet deployed, gracefully fall back to client-bounded mode
+            // unless `requireServerVerifiedRewards` is explicitly enabled in `appConfig/adsConfig`.
+            val ssvNonce = if (snap.isOnline) {
+                orgRepo.requestRewardedAdSsvNonce(orgId)
+            } else null
+
+            com.example.ads.Phase16AdMobController.showRewardedAd(
+                activity = activity,
+                isOnline = snap.isOnline,
+                unitIds = snap.unitIds,
+                opaqueSsvNonce = ssvNonce,
+                onRewardEarned = {
+                    viewModelScope.launch {
+                        val refreshedOffset = orgRepo.syncServerClockOffset(currentUserId)
+                        if (refreshedOffset != null) {
+                            offlinePrefs.setLastKnownServerOffsetMs(refreshedOffset)
+                            _serverClockOffsetMs.value = refreshedOffset
+                        }
+                        val serverNow = com.example.domain.Phase16AdsPolicyEngine.serverNowMs(
+                            System.currentTimeMillis(),
+                            _serverClockOffsetMs.value
+                        )
+                        if (adsUiState.value.remoteConfig.requireServerVerifiedRewards && !ssvNonce.isNullOrBlank()) {
+                            // Server SSV callback writes the authoritative reward directly to member doc
+                            com.example.ads.Phase16AdMobController.clearPreloadedAds()
+                            emitMessage(
+                                if (isHindi) "धन्यवाद! विज्ञापन-रहित समय सर्वर से सत्यापित होकर कुछ ही सेकंड में चालू हो जाएगा।"
+                                else "Thank you! Your ad-free time is being verified by the server and will activate in a moment."
+                            )
+                            return@launch
+                        }
+                        val current = adsUiState.value.rewardedState
+                        val nextState = com.example.domain.RewardedLadderEngine.recordCompletedReward(
+                            current = current,
+                            serverNowMs = serverNow
+                        )
+                        if (nextState != null) {
+                            _localRewardedState.value = nextState
+                            offlinePrefs.saveCachedRewardedAdFreeState(currentUserId, orgId, nextState)
+                            _adsClockTickMs.value = System.currentTimeMillis()
+                            com.example.ads.Phase16AdMobController.clearPreloadedAds()
+                            val writeRes = orgRepo.recordMemberRewardedAdCompletion(
+                                orgId = orgId,
+                                uid = currentUserId,
+                                updatedState = nextState
+                            )
+                            val remaining = com.example.domain.RewardedLadderEngine.formatRemainingTime(
+                                nextState.remainingAdFreeMs(serverNow),
+                                isHindi
+                            )
+                            if (writeRes.isSuccess) {
+                                emitMessage(
+                                    if (isHindi) "धन्यवाद! अब $remaining तक विज्ञापन-रहित समय चालू है (${nextState.window.countInWindow}/4)।"
+                                    else "Ad-free time active for $remaining (${nextState.window.countInWindow} of 4 ads)."
+                                )
+                            } else {
+                                emitMessage(
+                                    if (isHindi) "विज्ञापन-रहित समय इस फोन पर चालू है ($remaining); ऑनलाइन होने पर सिंक होगा।"
+                                    else "Ad-free time active on this phone ($remaining); will sync when online."
+                                )
+                            }
+                        }
+                    }
+                },
+                onClosedWithoutReward = {
+                    emitMessage(
+                        if (isHindi) "विज्ञापन पूरा नहीं देखा गया — कोई विज्ञापन-रहित समय नहीं जोड़ा गया।"
+                        else "Ad closed early — no ad-free time was added."
+                    )
+                },
+                onUnavailable = {
+                    emitMessage(
+                        if (isHindi) "अभी विज्ञापन उपलब्ध नहीं है। ऐप सामान्य रूप से काम करता रहेगा।"
+                        else "No ad available right now. You can continue using the app normally."
+                    )
+                }
+            )
+        }
+    }
+
+    // =========================================================================
+    // PHASE 16B: OWNER GOOGLE PLAY SUBSCRIPTION ACTIONS
+    // =========================================================================
+    fun dismissLapsedSubscriptionNotice() {
+        val marker = adsUiState.value.lapsedNoticeMarkerMs()
+        offlinePrefs.setDismissedLapsedNoticeMarker(orgId, marker)
+        _dismissedLapsedNoticeMarkerMs.value = marker
+    }
+
+    private fun ensurePlayBillingManager(): com.example.billing.Phase16PlayBillingManager {
+        playBillingManager?.let { return it }
+        val mgr = com.example.billing.Phase16PlayBillingManager(
+            context = appContext,
+            callbacks = object : com.example.billing.Phase16PlayBillingCallbacks {
+                override fun onConnectionStateChanged(connected: Boolean, billingAvailable: Boolean) {
+                    _billingUiState.value = _billingUiState.value.copy(
+                        isConnected = connected,
+                        isPlayBillingAvailable = billingAvailable
+                    )
+                }
+
+                override fun onOffersLoaded(
+                    monthly: com.example.domain.PlaySubscriptionPlanOffer?,
+                    yearly: com.example.domain.PlaySubscriptionPlanOffer?,
+                    errorMessage: String?
+                ) {
+                    _billingUiState.value = _billingUiState.value.copy(
+                        isLoadingProducts = false,
+                        monthlyOffer = monthly,
+                        yearlyOffer = yearly,
+                        errorMessage = errorMessage
+                    )
+                }
+
+                override fun onPurchaseCompletedReadyForServer(
+                    purchase: com.example.billing.PlayPurchaseSnapshot
+                ) {
+                    val isHindi = _phase10HindiLabels.value
+                    _billingUiState.value = _billingUiState.value.copy(
+                        isPendingPayment = false,
+                        errorMessage = null,
+                        statusMessage = if (isHindi) "खरीद की सर्वर से पुष्टि हो रही है..." else "Verifying purchase with server..."
+                    )
+                    verifyPurchaseTokenWithServer(
+                        purchaseToken = purchase.purchaseToken,
+                        productId = purchase.productId,
+                        basePlanId = lastSelectedBasePlanId
+                    )
+                }
+
+                override fun onPurchasePending() {
+                    val isHindi = _phase10HindiLabels.value
+                    _billingUiState.value = _billingUiState.value.copy(
+                        isPendingPayment = true,
+                        isVerifyingPurchase = false,
+                        errorMessage = null,
+                        statusMessage = if (isHindi) {
+                            "भुगतान लंबित है। Google Play से पुष्टि होते ही स्कूल विज्ञापन-रहित हो जाएगा।"
+                        } else {
+                            "Payment is pending. Your school will become ad-free as soon as Google Play confirms it."
+                        }
+                    )
+                }
+
+                override fun onPurchaseCancelled() {
+                    val isHindi = _phase10HindiLabels.value
+                    _billingUiState.value = _billingUiState.value.copy(
+                        isVerifyingPurchase = false,
+                        statusMessage = if (isHindi) "खरीद रद्द की गई। कोई शुल्क नहीं लिया गया।" else "Purchase cancelled. You were not charged."
+                    )
+                }
+
+                override fun onPurchaseFlowError(message: String) {
+                    _billingUiState.value = _billingUiState.value.copy(
+                        isVerifyingPurchase = false,
+                        errorMessage = message
+                    )
+                }
+
+                override fun onRestoredPurchasesFound(
+                    purchases: List<com.example.billing.PlayPurchaseSnapshot>,
+                    errorMessage: String?
+                ) {
+                    val isHindi = _phase10HindiLabels.value
+                    if (errorMessage != null) {
+                        _billingUiState.value = _billingUiState.value.copy(
+                            isVerifyingPurchase = false,
+                            errorMessage = errorMessage
+                        )
+                        return
+                    }
+                    val activePurchases = purchases.filter {
+                        it.purchaseState == com.android.billingclient.api.Purchase.PurchaseState.PURCHASED
+                    }
+                    val pendingPurchases = purchases.filter {
+                        it.purchaseState == com.android.billingclient.api.Purchase.PurchaseState.PENDING
+                    }
+                    if (activePurchases.isNotEmpty()) {
+                        val preferred = activePurchases.firstOrNull {
+                            it.obfuscatedAccountId == orgId
+                        } ?: activePurchases.first()
+                        verifyPurchaseTokenWithServer(
+                            purchaseToken = preferred.purchaseToken,
+                            productId = preferred.productId,
+                            basePlanId = ""
+                        )
+                    } else if (pendingPurchases.isNotEmpty()) {
+                        onPurchasePending()
+                    } else {
+                        // Also try flushing any offline-queued verification token
+                        val queued = offlinePrefs.loadPendingPurchaseVerifications(orgId)
+                        if (queued.isNotEmpty()) {
+                            flushPendingSubscriptionVerifications()
+                        } else {
+                            _billingUiState.value = _billingUiState.value.copy(
+                                isVerifyingPurchase = false,
+                                statusMessage = if (isHindi) {
+                                    "इस Google Play खाते पर कोई सक्रिय स्कूल सब्सक्रिप्शन नहीं मिला।"
+                                } else {
+                                    "No active school subscription found on this Google Play account."
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        )
+        playBillingManager = mgr
+        return mgr
+    }
+
+    fun refreshSubscriptionOffers() {
+        if (!uiState.value.isOwner) return
+        _billingUiState.value = _billingUiState.value.copy(
+            isLoadingProducts = true,
+            errorMessage = null,
+            hasQueuedOfflineVerification = offlinePrefs.loadPendingPurchaseVerifications(orgId).isNotEmpty()
+        )
+        ensurePlayBillingManager().connectAndLoadProducts()
+        if (_isOnline.value) {
+            flushPendingSubscriptionVerifications()
+        }
+    }
+
+    fun startOwnerSubscriptionPurchase(
+        activity: android.app.Activity?,
+        offer: com.example.domain.PlaySubscriptionPlanOffer
+    ) {
+        val isHindi = _phase10HindiLabels.value
+        if (!uiState.value.isOwner) {
+            _billingUiState.value = _billingUiState.value.copy(
+                errorMessage = if (isHindi) "केवल स्कूल ओनर ही सब्सक्रिप्शन खरीद सकते हैं।"
+                else "Only the school owner can purchase a subscription."
+            )
+            return
+        }
+        if (!_isOnline.value) {
+            _billingUiState.value = _billingUiState.value.copy(
+                errorMessage = if (isHindi) "सब्सक्रिप्शन खरीदने के लिए इंटरनेट चालू करें।"
+                else "Please connect to the internet to subscribe."
+            )
+            return
+        }
+        lastSelectedBasePlanId = offer.basePlanId
+        _billingUiState.value = _billingUiState.value.copy(
+            errorMessage = null,
+            statusMessage = null
+        )
+        ensurePlayBillingManager().launchSubscriptionPurchase(
+            activity = activity,
+            orgId = orgId,
+            offer = offer
+        )
+    }
+
+    fun restoreOwnerPurchases() {
+        val isHindi = _phase10HindiLabels.value
+        if (!uiState.value.isOwner) return
+        if (!_isOnline.value) {
+            _billingUiState.value = _billingUiState.value.copy(
+                errorMessage = if (isHindi) "खरीद वापस लाने के लिए इंटरनेट चालू करें।"
+                else "Please connect to the internet to restore purchases."
+            )
+            return
+        }
+        _billingUiState.value = _billingUiState.value.copy(
+            isVerifyingPurchase = true,
+            errorMessage = null,
+            statusMessage = null
+        )
+        ensurePlayBillingManager().queryActivePurchasesForRestore()
+    }
+
+    private fun verifyPurchaseTokenWithServer(
+        purchaseToken: String,
+        productId: String,
+        basePlanId: String
+    ) {
+        val isHindi = _phase10HindiLabels.value
+        val pendingItem = com.example.domain.PendingPurchaseVerification(
+            orgId = orgId,
+            purchaseToken = purchaseToken,
+            productId = productId,
+            basePlanId = basePlanId,
+            queuedAtMs = System.currentTimeMillis()
+        )
+
+        if (!_isOnline.value) {
+            offlinePrefs.savePendingPurchaseVerification(pendingItem)
+            _billingUiState.value = _billingUiState.value.copy(
+                isVerifyingPurchase = false,
+                hasQueuedOfflineVerification = true,
+                errorMessage = null,
+                statusMessage = if (isHindi) {
+                    "खरीद सुरक्षित कर ली गई है। ऑनलाइन होते ही सर्वर से पुष्टि हो जाएगी।"
+                } else {
+                    "Purchase saved. It will verify with the server automatically once you are back online."
+                }
+            )
+            return
+        }
+
+        viewModelScope.launch {
+            _billingUiState.value = _billingUiState.value.copy(
+                isVerifyingPurchase = true,
+                errorMessage = null
+            )
+            val result = orgRepo.verifyPlaySubscriptionWithServer(
+                orgId = orgId,
+                purchaseToken = purchaseToken,
+                productId = productId,
+                basePlanId = basePlanId
+            )
+            result.onSuccess { verifiedSub ->
+                offlinePrefs.removePendingPurchaseVerification(orgId, purchaseToken)
+                offlinePrefs.setCachedOrgSubscription(orgId, verifiedSub)
+                if (verifiedSub.suppressesAllAds) {
+                    com.example.ads.Phase16AdMobController.clearPreloadedAds()
+                }
+                playBillingManager?.acknowledgePurchaseIfNeeded(purchaseToken)
+                _billingUiState.value = _billingUiState.value.copy(
+                    isVerifyingPurchase = false,
+                    isPendingPayment = false,
+                    hasQueuedOfflineVerification = offlinePrefs.loadPendingPurchaseVerifications(orgId).isNotEmpty(),
+                    errorMessage = null,
+                    statusMessage = if (verifiedSub.suppressesAllAds) {
+                        if (isHindi) "सत्यापन पूरा हुआ! अब आपके स्कूल के सभी सदस्यों के लिए विज्ञापन बंद हैं।"
+                        else "Verified! Ads are now removed for every member of your school."
+                    } else {
+                        if (isHindi) "सब्सक्रिप्शन स्थिति अपडेट की गई (${verifiedSub.status.wireValue})।"
+                        else "Subscription status updated (${verifiedSub.status.wireValue})."
+                    }
+                )
+            }.onFailure { err ->
+                val msg = err.message.orEmpty()
+                val isPermanentRejection = msg.contains("ALREADY_EXISTS", ignoreCase = true) ||
+                    msg.contains("another organisation", ignoreCase = true) ||
+                    msg.contains("PERMISSION_DENIED", ignoreCase = true) ||
+                    msg.contains("INVALID_ARGUMENT", ignoreCase = true)
+                if (isPermanentRejection) {
+                    offlinePrefs.removePendingPurchaseVerification(orgId, purchaseToken)
+                } else {
+                    // Network or transient server outage — queue safely and keep cached status working
+                    offlinePrefs.savePendingPurchaseVerification(pendingItem)
+                }
+                _billingUiState.value = _billingUiState.value.copy(
+                    isVerifyingPurchase = false,
+                    hasQueuedOfflineVerification = offlinePrefs.loadPendingPurchaseVerifications(orgId).isNotEmpty(),
+                    errorMessage = if (isPermanentRejection) {
+                        msg.ifBlank {
+                            if (isHindi) "यह खरीद इस स्कूल से जोड़ी नहीं जा सकी।"
+                            else "This purchase could not be linked to this school."
+                        }
+                    } else {
+                        if (isHindi) "सर्वर से अभी संपर्क नहीं हो सका। आपकी खरीद सुरक्षित है और नेटवर्क मिलते ही फिर से सत्यापित होगी।"
+                        else "Could not reach the verification server right now. Your purchase is saved and will retry automatically when online."
+                    }
+                )
+            }
+        }
+    }
+
+    fun flushPendingSubscriptionVerifications() {
+        if (!_isOnline.value) return
+        val member = _ownMember.value
+        if (member != null && member.orgRole != OrgRole.OWNER) return
+        val queued = offlinePrefs.loadPendingPurchaseVerifications(orgId)
+        if (queued.isEmpty()) {
+            if (_billingUiState.value.hasQueuedOfflineVerification) {
+                _billingUiState.value = _billingUiState.value.copy(hasQueuedOfflineVerification = false)
+            }
+            return
+        }
+        val first = queued.first()
+        verifyPurchaseTokenWithServer(
+            purchaseToken = first.purchaseToken,
+            productId = first.productId,
+            basePlanId = first.basePlanId
+        )
+    }
+
+    override fun onCleared() {
+        playBillingManager?.destroy()
+        playBillingManager = null
+        super.onCleared()
+    }
+
     companion object {
         fun provideFactory(
             appContext: Application,
@@ -6726,4 +7319,20 @@ private data class SyncExtrasBundle(
     val isInitialized: Boolean,
     val membershipRevoked: Boolean,
     val deletedUserUids: Set<String>
+)
+
+private data class Phase16ControlSnapshot(
+    val remoteCfg: com.example.domain.RemoteAdsConfig,
+    val offsetMs: Long,
+    val tickMs: Long,
+    val debugSim: com.example.domain.DebugSubscriptionSimulation,
+    val debugBypass: Boolean
+)
+
+private data class Phase16SdkSnapshot(
+    val canReq: Boolean,
+    val privacyReq: Boolean,
+    val rewardedLoading: Boolean,
+    val localRewarded: com.example.domain.RewardedAdFreeState,
+    val interstitialFreq: com.example.domain.InterstitialFrequencyState
 )

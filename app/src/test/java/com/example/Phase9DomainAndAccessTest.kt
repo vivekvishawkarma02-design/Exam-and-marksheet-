@@ -91,7 +91,7 @@ class Phase9DomainAndAccessTest {
         dob = "10-05-2017",
         mobile = "9876543210",
         secondMobile = "9123456780",
-        address = "Civil Lines, Ghazipur",
+        address = "123 Station Road, Demo Nagar",
         className = "3rd",
         section = "A",
         rollNo = id.toInt(),
@@ -397,7 +397,7 @@ class Phase9DomainAndAccessTest {
         val dues = FeeReportsAndQueueEngine.buildDuesList(
             studentsWithDocIds = listOf("stu_1" to student),
             schoolDocId = "sch_1",
-            schoolName = "C.P.S. SCHOOL",
+            schoolName = "DEMO MODEL SCHOOL",
             structure = structure,
             overridesByStudentDocId = emptyMap(),
             receipts = emptyList()
@@ -429,7 +429,7 @@ class Phase9DomainAndAccessTest {
         )
         val queueAll = FeeReportsAndQueueEngine.buildSendQueue(
             duesRows = dues,
-            schoolName = "C.P.S. SCHOOL",
+            schoolName = "DEMO MODEL SCHOOL",
             templates = structure.messageTemplates,
             messageType = FeeMessageType.FEE_DUE_REMINDER,
             contextDateOrMonthKey = "2026-04",
@@ -441,7 +441,7 @@ class Phase9DomainAndAccessTest {
 
         val queuePendingOnly = FeeReportsAndQueueEngine.buildSendQueue(
             duesRows = dues,
-            schoolName = "C.P.S. SCHOOL",
+            schoolName = "DEMO MODEL SCHOOL",
             templates = structure.messageTemplates,
             messageType = FeeMessageType.FEE_DUE_REMINDER,
             contextDateOrMonthKey = "2026-04",

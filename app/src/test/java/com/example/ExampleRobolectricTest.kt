@@ -108,33 +108,33 @@ class ExampleRobolectricTest {
 
     @Test
     fun `two schools with different names and logos render reports with distinct headers and logos`() = runBlocking {
-        val logoSts = makeSolidLogoBase64(Color.rgb(200, 30, 30), Color.WHITE)
+        val logoAlpha = makeSolidLogoBase64(Color.rgb(200, 30, 30), Color.WHITE)
         val logoAbc = makeSolidLogoBase64(Color.rgb(20, 140, 60), Color.YELLOW)
 
-        assertTrue("STS logo must be under 200 KB", ImageUtils.estimateDecodedBytes(logoSts) < 200 * 1024)
+        assertTrue("Alpha logo must be under 200 KB", ImageUtils.estimateDecodedBytes(logoAlpha) < 200 * 1024)
         assertTrue("ABC logo must be under 200 KB", ImageUtils.estimateDecodedBytes(logoAbc) < 200 * 1024)
-        assertNotNull(ImageUtils.resolveSchoolLogoBitmap(logoSts))
+        assertNotNull(ImageUtils.resolveSchoolLogoBitmap(logoAlpha))
         assertNotNull(ImageUtils.resolveSchoolLogoBitmap(logoAbc))
 
-        val stsId = repo.createSchool(
-            name = "STS Public School",
-            address = "12 Station Road, Lucknow",
+        val alphaId = repo.createSchool(
+            name = "Alpha Model School",
+            address = "12 Station Road, Demo Nagar",
             mobile = "9000000001",
-            email = "sts@example.org",
-            logoBase64 = logoSts,
+            email = "alpha@example.org",
+            logoBase64 = logoAlpha,
             templateSource = SchoolTemplateSource.DefaultTemplate
         ).getOrThrow()
 
         val abcId = repo.createSchool(
             name = "ABC Academy",
-            address = "45 Park Avenue, Varanasi",
+            address = "45 Park Avenue, Sample Town",
             mobile = "9000000002",
             email = "abc@example.org",
             logoBase64 = logoAbc,
-            templateSource = SchoolTemplateSource.CopyFromSchool(stsId)
+            templateSource = SchoolTemplateSource.CopyFromSchool(alphaId)
         ).getOrThrow()
 
-        val stsSchool = repo.getAllSchools().first { it.id == stsId }
+        val alphaSchool = repo.getAllSchools().first { it.id == alphaId }
         val abcSchool = repo.getAllSchools().first { it.id == abcId }
         assertEquals(11, repo.getClassesForSchool(abcId).size)
 
@@ -181,35 +181,35 @@ class ExampleRobolectricTest {
             )
         }
 
-        val stsBundle = bundleFor(stsSchool, 1L)
+        val alphaBundle = bundleFor(alphaSchool, 1L)
         val abcBundle = bundleFor(abcSchool, 2L)
 
         // Verify school-specific PDF filenames (without invoking native PdfDocument which Robolectric stubs out)
-        val stsFileName = PdfReportGenerator.buildPdfFileName(ReportType.ANNUAL, listOf(stsBundle))
+        val alphaFileName = PdfReportGenerator.buildPdfFileName(ReportType.ANNUAL, listOf(alphaBundle))
         val abcFileName = PdfReportGenerator.buildPdfFileName(ReportType.ANNUAL, listOf(abcBundle))
-        assertTrue(stsFileName.startsWith("STS_Public_School_"))
+        assertTrue(alphaFileName.startsWith("Alpha_Model_School_"))
         assertTrue(abcFileName.startsWith("ABC_Academy_"))
-        assertTrue(stsFileName.endsWith(".pdf") && abcFileName.endsWith(".pdf"))
+        assertTrue(alphaFileName.endsWith(".pdf") && abcFileName.endsWith(".pdf"))
 
         // Render bitmaps and assert both fit 1 A4 page and have distinct rendered logo/header pixels
-        val stsPages = PdfReportGenerator.renderPagesToBitmapsForVerification(context, settings, ReportType.ANNUAL, listOf(stsBundle))
+        val alphaPages = PdfReportGenerator.renderPagesToBitmapsForVerification(context, settings, ReportType.ANNUAL, listOf(alphaBundle))
         val abcPages = PdfReportGenerator.renderPagesToBitmapsForVerification(context, settings, ReportType.ANNUAL, listOf(abcBundle))
-        assertEquals(1, stsPages.size)
+        assertEquals(1, alphaPages.size)
         assertEquals(1, abcPages.size)
-        assertEquals(PdfReportGenerator.PORTRAIT_W, stsPages.first().width)
-        assertEquals(PdfReportGenerator.PORTRAIT_H, stsPages.first().height)
+        assertEquals(PdfReportGenerator.PORTRAIT_W, alphaPages.first().width)
+        assertEquals(PdfReportGenerator.PORTRAIT_H, alphaPages.first().height)
 
         // Compare top-left logo box pixels on Annual report card (logoRect is ~39.7..99.7 in both x and y)
         var diffLogoPixels = 0
         for (x in 42..96 step 2) {
             for (y in 42..96 step 2) {
-                if (stsPages.first().getPixel(x, y) != abcPages.first().getPixel(x, y)) {
+                if (alphaPages.first().getPixel(x, y) != abcPages.first().getPixel(x, y)) {
                     diffLogoPixels++
                 }
             }
         }
         assertTrue("Distinct school logos must render distinctly in header", diffLogoPixels > 20)
-        stsPages.forEach { it.recycle() }
+        alphaPages.forEach { it.recycle() }
         abcPages.forEach { it.recycle() }
 
         // Verify Landscape A4 Half-Yearly 2-per-page layout still works identically
@@ -217,7 +217,7 @@ class ExampleRobolectricTest {
             context = context,
             settings = settings,
             reportType = ReportType.HALF_YEARLY,
-            bundles = listOf(stsBundle, stsBundle.copy(student = stsBundle.student.copy(id = 3L, rollNo = 2, name = "आयुष यादव"))),
+            bundles = listOf(alphaBundle, alphaBundle.copy(student = alphaBundle.student.copy(id = 3L, rollNo = 2, name = "आयुष यादव"))),
             slipLayoutMode = SlipLayoutMode.TWO_PER_PAGE
         )
         assertEquals(1, hyPages.size)
@@ -401,7 +401,7 @@ class ExampleRobolectricTest {
                   "id": 77,
                   "session": "2026-2027",
                   "admNo": "LEG-26-007",
-                  "name": "Vivek Kumar",
+                  "name": "Karan Kumar",
                   "fatherName": "Rajesh Kumar",
                   "motherName": "Sunita Devi",
                   "dob": "12-03-2017",
@@ -453,7 +453,7 @@ class ExampleRobolectricTest {
         assertEquals(1, importedSnapshot.students.size)
         val importedStudent = importedSnapshot.students.first()
         assertEquals("LEG-26-007", importedStudent.admNo)
-        assertEquals("Vivek Kumar", importedStudent.name)
+        assertEquals("Karan Kumar", importedStudent.name)
         assertNotEquals(0L, importedStudent.classId)
         assertEquals(3, importedSnapshot.marks.size)
         assertTrue(importedSnapshot.marks.all { it.studentId == importedStudent.id })
@@ -476,7 +476,7 @@ class ExampleRobolectricTest {
                 showClassRank = false
             ),
             schools = listOf(
-                SchoolEntity(10L, "STS School", "Main St", "9000001111", "sts@mail.com", logoA, true),
+                SchoolEntity(10L, "Alpha School", "Main St", "9000001111", "alpha@mail.com", logoA, true),
                 SchoolEntity(20L, "Bright Kids", "North Rd", "9000002222", "bk@mail.com", "", false)
             ),
             classGroups = listOf(
@@ -497,7 +497,7 @@ class ExampleRobolectricTest {
                     schoolId = 10L,
                     classId = 1000L,
                     session = "2026-2027",
-                    admNo = "STS-09-01",
+                    admNo = "ADM-09-01",
                     name = "Rohan Kushwaha",
                     fatherName = "Mahesh",
                     motherName = "Rekha",
@@ -520,7 +520,7 @@ class ExampleRobolectricTest {
         val data = (parsed as ParsedBackupResult.ModernBackup).data
 
         assertEquals(2, data.schools.size)
-        assertEquals("STS School", data.schools[0].name)
+        assertEquals("Alpha School", data.schools[0].name)
         assertEquals(logoA, data.schools[0].logoBase64)
         assertFalse(data.schools[1].active)
         assertEquals(35, data.settings.passPercent)
@@ -550,7 +550,7 @@ class ExampleRobolectricTest {
                 schoolId = 1L,
                 classId = 10L,
                 session = "2026-2027",
-                admNo = "STS-26-001",
+                admNo = "ADM-26-001",
                 name = "Aarav Verma",
                 fatherName = "Rajesh Verma",
                 motherName = "Sunita Devi",
@@ -566,7 +566,7 @@ class ExampleRobolectricTest {
                 schoolId = 1L,
                 classId = 11L,
                 session = "2026-2027",
-                admNo = "STS-26-002",
+                admNo = "ADM-26-002",
                 name = "Diya Sharma",
                 fatherName = "Anil Sharma",
                 motherName = "Meera Sharma",
@@ -585,9 +585,9 @@ class ExampleRobolectricTest {
 
         val csvInput = "\uFEFF" + """
             session,class,section,rollNo,admNo,studentName,subject,T1_IA,T1_UT,T1_EXAM,T2_IA,T2_UT,T2_EXAM
-            2026-2027,2nd,A,1,STS-26-001,Aarav Verma,English,9,26,52,ab,28,55
+            2026-2027,2nd,A,1,ADM-26-001,Aarav Verma,English,9,26,52,ab,28,55
             2026-2027,9th,A,1,,Diya Sharma,Physics,8,25,,12,24,65
-            2026-2027,2nd,A,99,STS-UNKNOWN,Ghost,HINDI,8,20,40,8,20,40
+            2026-2027,2nd,A,99,ADM-UNKNOWN,Ghost,HINDI,8,20,40,8,20,40
         """.trimIndent()
 
         val parsed = BackupAndCsvManager.parseMarksCsv(

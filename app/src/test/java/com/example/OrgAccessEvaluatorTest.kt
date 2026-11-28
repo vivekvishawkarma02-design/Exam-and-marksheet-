@@ -70,9 +70,9 @@ class OrgAccessEvaluatorTest {
 
     @Test
     fun orgCodeValidation_acceptsValidAndRejectsInvalidCodes() {
-        val valid = OrgAccessEvaluator.validateOrgCode("  CPS-Group-01 ")
+        val valid = OrgAccessEvaluator.validateOrgCode("  Demo-Group-01 ")
         assertTrue(valid is OrgCodeValidation.Valid)
-        assertEquals("cps-group-01", (valid as OrgCodeValidation.Valid).normalized)
+        assertEquals("demo-group-01", (valid as OrgCodeValidation.Valid).normalized)
 
         assertTrue(OrgAccessEvaluator.validateOrgCode("abc") is OrgCodeValidation.Invalid) // too short (<4)
         assertTrue(OrgAccessEvaluator.validateOrgCode("a".repeat(31)) is OrgCodeValidation.Invalid) // too long (>30)

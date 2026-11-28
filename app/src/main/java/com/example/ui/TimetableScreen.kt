@@ -132,6 +132,7 @@ fun TimetableScreen(
     val pdfState by viewModel.timetablePdfState.collectAsStateWithLifecycle()
     val autoGenProgress by viewModel.autoGenerateProgress.collectAsStateWithLifecycle()
     val autoGenResult by viewModel.autoGenerateResult.collectAsStateWithLifecycle()
+    val adsUiState by viewModel.adsUiState.collectAsStateWithLifecycle()
 
     var activeTab by remember {
         mutableStateOf(
@@ -533,6 +534,24 @@ fun TimetableScreen(
                     )
                 }
             }
+        }
+
+        // Phase 16B: ONE adaptive banner at bottom of Timetable view tabs only (never on Leave & Subs, edit dialogs, or open PDF)
+        val allowTimetableBannerNow = activeTab != TimetableTab.LEAVE_SUBS &&
+            editingTarget == null &&
+            !showAutoGenerateConfigDialog &&
+            !autoGenProgress.isRunning &&
+            autoGenResult == null &&
+            pdfState.generatedFile == null &&
+            pdfState.generatedZipFile == null &&
+            !pdfState.isGenerating
+        if (allowTimetableBannerNow) {
+            AdaptiveAdBannerSlot(
+                eligibility = adsUiState.bannerEligibility(com.example.domain.AdScreenSurface.TIMETABLE_VIEW),
+                canRequestAds = adsUiState.canRequestAdsFromConsent,
+                bannerUnitId = adsUiState.unitIds.bannerId,
+                testTagPrefix = "timetable_view"
+            )
         }
     }
 

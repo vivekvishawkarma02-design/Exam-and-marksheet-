@@ -157,6 +157,11 @@ fun DashboardScreen(
     onSkipFirstTimeGuide: () -> Unit = {},
     onReopenFirstTimeGuide: () -> Unit = {},
     todayIsoOverride: String? = null,
+    adsUiState: Phase16AdsUiState = Phase16AdsUiState(),
+    onWatchRewardedAd: () -> Unit = {},
+    showOwnerLapsedSubscriptionNotice: Boolean = false,
+    onOpenSubscriptionScreen: () -> Unit = {},
+    onDismissLapsedSubscriptionNotice: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val filtered = uiState.filteredStudents
@@ -268,18 +273,6 @@ fun DashboardScreen(
                 )
             )
         }
-        if (canViewStudents) {
-            add(
-                QuickActionSpec(
-                    title = "Students",
-                    subtitle = if (uiState.canEdit(AppModule.STUDENTS)) "Add, edit, CSV import" else "View class roster",
-                    icon = Icons.Default.Groups,
-                    accent = secondaryColor,
-                    testTag = "tile_students",
-                    onClick = onNavigateToStudents
-                )
-            )
-        }
         if (uiState.canViewFees) {
             add(
                 QuickActionSpec(
@@ -292,11 +285,11 @@ fun DashboardScreen(
                 )
             )
         }
-        if (uiState.canViewStudentRegister) {
+        if (uiState.canViewStudentRegister || canViewStudents) {
             add(
                 QuickActionSpec(
                     title = "Student Register",
-                    subtitle = if (uiState.canEditStudentRegister) "Transport, siblings, ID cards" else "View register & ID cards",
+                    subtitle = if (uiState.canEditStudentRegister) "Add, edit, transport, siblings, ID cards" else "View register & ID cards",
                     icon = Icons.Default.Badge,
                     accent = secondaryColor,
                     testTag = "tile_student_register",
@@ -690,6 +683,17 @@ fun DashboardScreen(
                     onSyncStatusClick = onSyncStatusClick,
                     onReopenSetupGuide = onReopenFirstTimeGuide
                 )
+            }
+
+            if (showOwnerLapsedSubscriptionNotice) {
+                item {
+                    OwnerLapsedSubscriptionNoticeBanner(
+                        subscription = adsUiState.effectiveSubscription,
+                        isHindi = isHindi,
+                        onOpenSubscriptionScreen = onOpenSubscriptionScreen,
+                        onDismiss = onDismissLapsedSubscriptionNotice
+                    )
+                }
             }
 
             // Phase 13: First-Time Setup Guide (8 auto-ticking steps, shown until all done or skipped)
@@ -1531,6 +1535,20 @@ fun DashboardScreen(
             }
         }
 
+        // Phase 16A: Optional "Watch ads to remove ads for a while" card (hidden for paid orgs / offline)
+        if (adsUiState.rewardedOfferStatus.visible) {
+            item {
+                RewardedAdFreeCard(
+                    offerStatus = adsUiState.rewardedOfferStatus,
+                    isHindi = isHindi,
+                    isRewardedLoading = adsUiState.isRewardedLoading,
+                    onWatchConfirmed = onWatchRewardedAd,
+                    compact = true,
+                    testTagPrefix = "today_home_rewarded"
+                )
+            }
+        }
+
         // All Accessible Module Tiles (strictly filtered to modules this member can view)
         item {
             Text(
@@ -1582,7 +1600,7 @@ fun DashboardScreen(
                     onlyActiveClass = onlyActiveClass,
                     onToggleOnlyActiveClass = { onlyActiveClass = !onlyActiveClass },
                     onManageAllStudents = onNavigateToStudents,
-                    showManageButton = canViewStudents
+                    showManageButton = canViewStudents || uiState.canViewStudentRegister
                 )
             }
 
@@ -1596,7 +1614,7 @@ fun DashboardScreen(
                             onlyActiveClass = false
                         },
                         onNavigateToStudents = onNavigateToStudents,
-                        canManageStudents = uiState.canEdit(AppModule.STUDENTS)
+                        canManageStudents = uiState.canEditStudentRegister || uiState.canEdit(AppModule.STUDENTS)
                     )
                 }
             } else {
@@ -1654,6 +1672,14 @@ fun DashboardScreen(
                 modifier = Modifier.fillMaxWidth()
             )
         }
+
+        // Phase 16A: Adaptive Banner strictly pinned at bottom of Today Home (fixed reserved height; collapses to 0.dp when offline/paid/ad-free)
+        AdaptiveAdBannerSlot(
+            eligibility = adsUiState.bannerEligibility(com.example.domain.AdScreenSurface.TODAY_HOME),
+            canRequestAds = adsUiState.canRequestAdsFromConsent,
+            bannerUnitId = adsUiState.unitIds.bannerId,
+            testTagPrefix = "today_home"
+        )
     }
 
     if (showLegacyConfirm) {

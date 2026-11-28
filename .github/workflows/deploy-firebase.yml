@@ -1,0 +1,81 @@
+name: Deploy Firebase
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-firebase:
+    name: Build, Test & Deploy Firebase (Rules, Indexes, Functions)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate required GitHub configuration
+        env:
+          SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          PROJECT_ID_SECRET: ${{ secrets.FIREBASE_PROJECT_ID }}
+          PROJECT_ID_VAR: ${{ vars.FIREBASE_PROJECT_ID }}
+        run: |
+          PROJECT_ID="${PROJECT_ID_SECRET:-$PROJECT_ID_VAR}"
+          if [ -z "$SA_JSON" ]; then
+            echo "::error::Missing GitHub Secret FIREBASE_SERVICE_ACCOUNT_JSON. Add your Firebase service account JSON in GitHub Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          if [ -z "$PROJECT_ID" ]; then
+            echo "::error::Missing FIREBASE_PROJECT_ID. Add your Firebase Project ID as a GitHub Secret or Variable named FIREBASE_PROJECT_ID."
+            exit 1
+          fi
+          echo "Configuration check passed (secrets verified without printing values)."
+
+      - name: Install, build, and test Cloud Functions
+        working-directory: functions
+        run: |
+          npm install
+          npm run build
+          npm test
+
+      - name: Deploy Firestore Rules, Indexes, and Cloud Functions
+        env:
+          SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          PROJECT_ID_SECRET: ${{ secrets.FIREBASE_PROJECT_ID }}
+          PROJECT_ID_VAR: ${{ vars.FIREBASE_PROJECT_ID }}
+          PLAY_SA_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          PROJECT_ID="${PROJECT_ID_SECRET:-$PROJECT_ID_VAR}"
+          CRED_FILE="$RUNNER_TEMP/firebase-service-account.json"
+          printf '%s' "$SA_JSON" > "$CRED_FILE"
+          chmod 600 "$CRED_FILE"
+          export GOOGLE_APPLICATION_CREDENTIALS="$CRED_FILE"
+
+          if [ -n "$PLAY_SA_JSON" ]; then
+            echo "Optional PLAY_SERVICE_ACCOUNT_JSON detected; syncing to functions/.env for deployment without printing values."
+            python3 - <<'PY'
+          import os, json
+          raw = os.environ["PLAY_SA_JSON"].strip()
+          # Validate JSON without printing contents
+          json.loads(raw)
+          with open("functions/.env", "w", encoding="utf-8") as f:
+              f.write("PLAY_SERVICE_ACCOUNT_JSON=" + json.dumps(raw) + "\n")
+          PY
+            chmod 600 functions/.env
+          fi
+
+          npx --yes firebase-tools@latest deploy \
+            --project "$PROJECT_ID" \
+            --only firestore:rules,firestore:indexes,functions \
+            --force
+
+      - name: Clean up temporary credential files
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/firebase-service-account.json" functions/.env

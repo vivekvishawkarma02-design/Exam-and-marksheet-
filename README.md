@@ -344,7 +344,7 @@ All Phase 12 features follow the same mobile-first (`>= 48 dp` touch targets), H
 Keep private Firebase credentials out of public source control where possible:
 
 1. Create or open your Firebase project at [Firebase Console](https://console.firebase.google.com/).
-2. Register your Android app with your `applicationId` (see `app/build.gradle.kts`).
+2. Register your Android app with package name `com.vivek.schoolreportcard` (`applicationId` in `app/build.gradle.kts`).
 3. **Enable BOTH Sign-In Providers:**
    - Go to **Firebase Console -> Authentication -> Sign-in method**.
    - Enable **Google** (select a project support email and save).
@@ -592,4 +592,66 @@ Phase 19 adds sensitive **Student Remarks**, **Parent-Teacher Meetings (PTM)**, 
    - **Early Leave Gate Pass & A5 Pass Slip PDF:** Pick a student, reason, leave time, who is taking the child (from the authorised list or a one-time person with mandatory guardian phone confirmation tick and note), and who approved it. Generates an offline-safe **unique pass number per school and session** (`GP-<SES>-<MMDD>-<SHARD>-<SEQ>`) and an **A5 Pass Slip PDF** for preview, print, save, and share.
    - **Daily Gate Register & Optional Half-Day Attendance:** View early leaves for a date or date range, export **CSV (Owner and Admins only)**, and optionally mark the student's attendance as **Half-Day** (only when the current user has Attendance edit access for that class-section).
    - **Visitor Register & Today Home Tile:** Record visitor name, mobile, purpose, whom to meet, time in, time out, and optional photo, with one-tap **"Sign Out"** and a **Today Home tile** showing today's visitors and early leaves.
+
+---
+
+## Phase 16A: Organisation-Controlled Ads with Rewarded Ad-Free Time (Google AdMob)
+
+Phase 16A adds privacy-safe, non-intrusive Google AdMob advertising for free organisations while preserving all earlier phases (features, data, report layouts, and module access rules) untouched.
+
+1. **Organisation-Level Subscription Gate (`organisations/{orgId}.subscription`):**
+   - Read-only map on each organisation document: `{ status: "none" | "active" | "grace" | "expired", plan: "...", expiresAt: Timestamp }` (default `"none"`).
+   - `firestore.rules` strictly **denies every client write** to `subscription` (only the Phase 16B server will write it).
+   - While `status` is `active` or `grace`, **ZERO ads of any kind** (no banner, no interstitial, no rewarded offer, and no "watch an ad" buttons) are shown to any member of that organisation.
+   - **Debug-only local switch:** In `BuildConfig.DEBUG` builds only, **Settings** includes a hidden developer card to locally simulate subscription `ON / OFF` and bypass the 24-hour first-install grace window. It is stripped from release builds.
+   - **Settings "Remove ads for everyone" card:** Shows **"Coming soon"** (Phase 16B) for the Organisation `OWNER`, and **"Ask your school owner to remove ads"** for all other members.
+2. **Strict Placement Allowlist & Anti-Disruption Rules:**
+   - **Allowed banners (fixed `60 dp` reserved height — zero layout shift; collapses to `0 dp` when offline or ineligible):** Bottom of **Today Home**, **Organisation Chooser**, and **School Chooser** only.
+   - **Allowed optional interstitial:** Only after closing a **finished** PDF preview, capped at **1 per 15 minutes** and **3 per UTC day per device**, non-blocking if not preloaded.
+   - **Strictly forbidden everywhere else:** Login/sign-up, all student/guardian/fee/salary/cash book/marks/attendance/transport/data-entry screens, receipts, certificates, open PDF previews, settings, account deletion, and inside any printed or shared PDF.
+   - **Zero ads in the first 24 hours** after first install, **zero ads offline**, and 100% usable if ads fail, are blocked, or Google Play Services is absent.
+3. **Optional Rewarded Ad-Free Time Ladder (Free Orgs Only):**
+   - Optional card (**"Watch ads to remove ads for a while"**) with a short explanation dialog before any ad starts. Closing early grants nothing.
+   - **24-hour ladder (server-time based):** `1 ad` = ad-free until `now + 2h`; `2 ads` = until `firstAd + 3h`; `3 ads` = until `firstAd + 6h`; `4 ads` = until `firstAd + 24h`. After 4 ads, no further offers appear until the ad-free time expires. Capped at **8 rewarded ads per user per day**.
+   - Persisted on `organisations/{orgId}/members/{uid}` (`adFreeUntil`, `adsWatchedWindow`) using Firestore server timestamps, bounded in `firestore.rules` (own member doc only, `adFreeUntil <= request.time + 24h`, monotonic extension only, count cannot decrease), and cached offline using the last known server clock offset.
+   - **Honest Security Note (Phase 16A vs Phase 16B):** Because Phase 16A has no backend server yet, Firestore rules bound the maximum abuse window (`<= 24 hours` and monotonic counts), but **a determined technical user could still craft a direct Firestore client write to extend their own `adFreeUntil` without actually watching a rewarded ad**. **Phase 16B** closes this completely by verifying rewarded ad completions on the server via **AdMob Server-Side Verification (SSV)** and moving `adFreeUntil` / `subscription` writes strictly to the backend.
+4. **Configuration, Remote Kill-Switch, Consent & Zero-PII Guarantee:**
+   - Debug builds and unit tests use **only Google's official test ad unit IDs**. Release builds read GitHub Secrets `ADMOB_APP_ID`, `ADMOB_BANNER_ID`, `ADMOB_INTERSTITIAL_ID`, and `ADMOB_REWARDED_ID` (if missing in release, ads are cleanly disabled with no crash).
+   - Per-placement remote kill-switch document `appConfig/adsConfig` (readable by signed-in users, writable only by the configured App Owner account).
+   - Workplace/all-audiences ad config (`TAG_FOR_CHILD_DIRECTED_TREATMENT_FALSE`, `MAX_AD_CONTENT_RATING_G`), Google UMP consent flow, **"Privacy and ad choices"** in Settings, and **zero student, guardian, staff, or school PII** passed to the ad SDK.
+   - Full Hindi setup instructions in `/ADMOB_STEPS.md`, Play Data Safety mapping in `/PLAY_DATA_SAFETY.md`, and updated Privacy Policy in `/public/privacy.html`.
+   - **Run Phase 16A/16B Firestore Rules Tests:**
+     ```bash
+     firebase emulators:exec --only firestore --project demo-no-project "node --test firestore.ads.test.js"
+     ```
+
+---
+
+## Phase 16B: School Subscription (Google Play Billing), Cloud Functions Verification & Ad Rule Tuning
+
+Phase 16B adds Google Play school subscriptions verified strictly on the server (Firebase Cloud Functions in `asia-south1`), tunes Phase 16A ad rules, upgrades rewarded ads to support zero-PII AdMob Server-Side Verification (SSV), and provides a phone-friendly GitHub Actions deployment workflow.
+
+1. **Tuned Ad Rules (Equal Across Every Member Role):**
+   - **Interstitial cap:** At most **once per 8 minutes** and **8 per UTC day per device**, shown only after finishing a task (closing a finished PDF preview or returning from a list), never mid-task.
+   - **Banners (strictly ONE per screen, never two):** Today Home, Organisation Chooser, School Chooser, **Student List**, **Teacher List** (Teachers tab only), **Report List** (hidden when PDF preview is open), and **Timetable View** (view tabs only, hidden on Leave/Subs, dialogs, or open PDF). All data-entry and sensitive screens remain strictly forbidden.
+   - **Equal rules for everyone:** While the organisation has no active subscription, every member role (`OWNER`, `ADMIN`, `TEACHER`, `CLERK`, `STAFF`) follows identical ad rules. Rewarded ad-free time (**विज्ञापन-रहित समय** in Hindi) stays per user (`1=2h`, `2=3h`, `3=6h`, `4=24h`, max `8/day`).
+2. **Google Play School Subscription (`school_ad_free`):**
+   - Single subscription product `school_ad_free` with strictly two base plans: `monthly` and `yearly`.
+   - Prices and billing periods are **always read dynamically from Google Play** (never hard-coded); yearly savings are computed dynamically from live Play prices.
+   - **Owner Screen (`Settings → Remove ads for my school`):** Replaces Phase 16A's `"Coming soon"` card. Shows current status (`none`, `active` with renewal date, `grace`, `on_hold`, `cancelled_active` with valid-until date, `expired`, `revoked`), dynamic plan cards, **Subscribe**, **Manage subscription**, **Restore purchase**, required Google Play subscription terms, and Privacy Policy/Terms links. Non-owners see only a status line (`"Your school is ad-free"` or `"Ask your school owner to remove ads"`).
+   - Removes all banners, interstitials, rewarded offers, and `"Watch an ad"` buttons for every member of the organisation. All school work features stay 100% free and never locked.
+3. **Server-Side Verification (`functions/`, TypeScript, region `asia-south1`):**
+   - **`verifyPurchase` (callable):** Verifies caller is active Organisation `OWNER`, calls Google Play Developer API v3 (`subscriptionsv2.get`), enforces `obfuscatedExternalAccountId == orgId`, prevents double-claiming across two organisations via server-only `subscriptionPurchaseLocks/{sha256(token)}`, acknowledges purchases on Play, and writes `organisations/{orgId}.subscription { status, plan, expiresAt, autoRenewing, updatedAt, purchaseTokenHash }` via Admin SDK (never storing raw tokens where clients can read them).
+   - **`handlePlayRtdn` (Pub/Sub topic `play-billing-rtdn`):** Processes Google Play Real-Time Developer Notifications for renewals, cancellations, grace period, account hold, expiry, refunds, and revocations.
+   - **Offline & Resilience:** Pending purchases show a clear pending state; offline purchases queue locally and verify automatically on reconnect; lapsed subscriptions show a short dismissible notice to the Owner; if the server is temporarily unreachable, the app falls back to the last cached subscription status without locking features.
+   - **AdMob Rewarded SSV (`createRewardedAdNonce` + `admobRewardedSsv`):** Generates an opaque random single-use nonce (zero PII passed to AdMob) and verifies Google's ECDSA-SHA256 signature with `transaction_id` replay deduplication. Until the SSV Callback URL is configured in AdMob Console and `appConfig/adsConfig.requireServerVerifiedRewards` is set to `true`, the Phase 16A client-bounded Firestore rules remain active as a non-breaking fallback.
+4. **Phone-Only Firebase Deployment & Setup Guide:**
+   - **`.github/workflows/deploy-firebase.yml` ("Deploy Firebase"):** Manual `workflow_dispatch` workflow that builds & tests `functions/` and deploys `firestore:rules`, `firestore:indexes`, and `functions` using `FIREBASE_SERVICE_ACCOUNT_JSON` and `FIREBASE_PROJECT_ID` secrets — **replacing the earlier manual Firestore rules deployment step**.
+   - Complete sequential Hindi setup guide in **`/PLAY_BILLING_STEPS.md`**.
+   - **Run Cloud Functions Unit Tests:**
+     ```bash
+     cd functions && npm install && npm run build && npm test
+     ```
+
+
 

@@ -100,29 +100,38 @@
       </ul>
 
       <h3>3. What We Do NOT Collect</h3>
-      <p>We do <strong>not</strong> use location tracking, background contacts scraping, or third-party analytics trackers.</p>
+      <p>We do <strong>not</strong> use GPS/precise location tracking, background contacts scraping, or third-party analytics trackers (no Firebase Analytics, no Crashlytics). We <strong>never</strong> share student, guardian, staff, or school records with any advertising network.</p>
 
       <h3>4. Why Data Is Used</h3>
-      <p>All data is used strictly to provide school management, offline-capable sync between authorised staff devices, attendance &amp; marks calculation, class diary &amp; birthday reminders, fee management, and printable PDF report cards/certificates/slips.</p>
+      <p>All school and account data is used strictly to provide school management, offline-capable sync between authorised staff devices, attendance &amp; marks calculation, class diary &amp; birthday reminders, fee management, and printable PDF report cards/certificates/slips.</p>
 
-      <h3>5. Where Data Is Stored</h3>
+      <h3>5. Advertising, School Subscriptions &amp; Consent (Google AdMob &amp; Google Play Billing)</h3>
+      <ul>
+        <li><strong>Free Organisations Only:</strong> Organisations on the free plan display limited, workplace-safe advertisements served by <strong>Google Mobile Ads (AdMob)</strong> only on the Today home screen, Organisation chooser, School chooser, Student list, Teacher list, Report list, and Timetable view, plus an optional capped interstitial after finishing a task (such as closing a finished PDF preview or returning from a list) and optional rewarded ads to earn temporary ad-free time. Organisations with an active, grace, on-hold, or cancelled-but-still-valid school subscription see <strong>zero ads</strong> for every member.</li>
+        <li><strong>Google Play School Subscriptions:</strong> School Owners can optionally subscribe via <strong>Google Play Billing</strong> (product <code>school_ad_free</code>) to remove ads for every member of their organisation. All payment cards, UPI, and billing details are handled strictly by Google Play; our servers never receive or store payment credentials. We verify purchase tokens server-side with Google Play and store only a one-way cryptographic hash (<code>purchaseTokenHash</code>), subscription status, plan type, and renewal/expiry date on the organisation document. All school work features remain 100% free and never locked with or without a subscription.</li>
+        <li><strong>No School or Personal Data Sent to AdMob:</strong> We never pass student names, guardian details, staff names, emails, phone numbers, Firebase user IDs, or school records to Google Mobile Ads (rewarded server verification uses only a random opaque single-use nonce). Ads never appear on login, data-entry forms, fees, salary, cash book, marks, attendance taking, transport, receipts, certificates, open PDF previews, settings, account deletion, or inside any printed/shared PDF.</li>
+        <li><strong>What Google Mobile Ads Collects:</strong> When ads are active on a free organisation while online, Google's Mobile Ads SDK may automatically process the Android Advertising ID, IP-derived approximate region, basic device/diagnostic data, and ad interaction events to deliver workplace-safe ads and prevent fraud, subject to <a href="https://policies.google.com/technologies/ads" target="_blank" rel="noopener">Google's Advertising Privacy Policy</a>.</li>
+        <li><strong>Your Consent &amp; Opt-Out Choices:</strong> Where required by law, the app uses Google's User Messaging Platform (UMP) to ask for your consent. You can review or change choices anytime inside the app at <strong>Settings &rarr; Privacy and ad choices</strong>, or opt out of personalised ads / delete your Advertising ID in Android via <strong>Phone Settings &rarr; Google &rarr; Ads</strong>.</li>
+      </ul>
+
+      <h3>6. Where Data Is Stored</h3>
       <p>Your account credentials and school organisation records are stored on <strong>Google Firebase</strong> (Firebase Authentication and Cloud Firestore) over encrypted HTTPS/TLS connections. For offline work in low-signal areas, Firestore stores a temporary local cache on the staff member's phone, which is cleared when signing out or deleting the account.</p>
 
-      <h3>6. Who Can See Data</h3>
+      <h3>7. Who Can See Data</h3>
       <ul>
         <li>Each school organisation is isolated. People outside your organisation cannot see your data.</li>
         <li>Inside an organisation, Firebase server security rules restrict access according to the role, school list, and module permissions set by the Organisation Owner or Admin.</li>
         <li>We <strong>never sell, rent, or trade</strong> user or student data to anyone.</li>
       </ul>
 
-      <h3>7. Data Retention &amp; Deletion</h3>
+      <h3>8. Data Retention &amp; Deletion</h3>
       <p>School records remain stored while your organisation actively uses the app. Staff can delete their own account at any time in the app via <strong>Settings &rarr; Account &rarr; Delete My Account</strong>, or request deletion by email if the app is uninstalled. See full instructions on <a href="delete-account.html">Delete Account &amp; Data</a>.</p>
       <ul>
         <li>If a <strong>normal staff member</strong> deletes their account, their login, profile, memberships, and device cache are deleted immediately. Historical school records they entered (marks, attendance, receipts) stay inside the school organisation for continuity, and the author name is shown as <code>"deleted user"</code>.</li>
         <li>If the <strong>only Owner</strong> of an organisation deletes their account, they must first transfer ownership to another Admin OR explicitly choose to delete the entire organisation and all its school records.</li>
       </ul>
 
-      <h3>8. Contact Us</h3>
+      <h3>9. Contact Us</h3>
       <p>For privacy questions or deletion help, email: <a href="mailto:[YOUR_CONTACT_EMAIL]">[YOUR_CONTACT_EMAIL]</a></p>
     </section>
 
@@ -141,29 +150,38 @@
       </ul>
 
       <h3>3. हम क्या एकत्र नहीं करते</h3>
-      <p>इस ऐप में कोई विज्ञापन (Ads SDK), एडवरटाइज़िंग ID, बैकग्राउंड लोकेशन ट्रैकिंग या थर्ड-पार्टी एनालिटिक्स ट्रैकर नहीं है।</p>
+      <p>इस ऐप में कोई GPS/सटीक लोकेशन ट्रैकिंग, बैकग्राउंड कॉन्टैक्ट्स स्क्रेपिंग या थर्ड-पार्टी एनालिटिक्स ट्रैकर (Firebase Analytics / Crashlytics) नहीं है। हम छात्र, अभिभावक, स्टाफ या स्कूल का कोई भी डेटा किसी भी विज्ञापन नेटवर्क को <strong>कभी नहीं भेजते</strong>।</p>
 
       <h3>4. डेटा का उपयोग क्यों किया जाता है</h3>
-      <p>डेटा का उपयोग केवल स्कूल के रोज़मर्रा के काम, अधिकृत स्टाफ डिवाइस के बीच सुरक्षित सिंक, उपस्थिति व अंक गणना, फीस रसीद और PDF रिपोर्ट कार्ड बनाने के लिए किया जाता है।</p>
+      <p>सभी स्कूल और अकाउंट डेटा का उपयोग केवल स्कूल के रोज़मर्रा के काम, अधिकृत स्टाफ डिवाइस के बीच सुरक्षित सिंक, उपस्थिति व अंक गणना, फीस रसीद और PDF रिपोर्ट कार्ड बनाने के लिए किया जाता है।</p>
 
-      <h3>5. डेटा कहाँ सेव रहता है</h3>
+      <h3>5. विज्ञापन, स्कूल सब्सक्रिप्शन और सहमति (Google AdMob व Google Play Billing)</h3>
+      <ul>
+        <li><strong>केवल निःशुल्क (Free) संगठनों के लिए:</strong> निःशुल्क प्लान वाले संगठनों में कार्यस्थल के अनुकूल सीमित विज्ञापन <strong>Google Mobile Ads (AdMob)</strong> द्वारा केवल Today होम, संगठन चयन, स्कूल चयन, छात्र सूची, शिक्षक सूची, रिपोर्ट सूची और टाइमटेबल देखने की स्क्रीन पर दिखाए जाते हैं (साथ ही काम पूरा होने के बाद वैकल्पिक सीमित विज्ञापन और वैकल्पिक रिवॉर्ड विज्ञापन से <strong>विज्ञापन-रहित समय</strong>)। सक्रिय, ग्रेस, होल्ड या मान्य अवधि वाले सब्सक्रिप्शन पर किसी भी सदस्य को <strong>कोई भी विज्ञापन नहीं</strong> दिखता।</li>
+        <li><strong>Google Play स्कूल सब्सक्रिप्शन:</strong> स्कूल मालिक (Owner) चाहें तो <strong>Google Play Billing</strong> (<code>school_ad_free</code>) से पूरे स्कूल के लिए विज्ञापन हटा सकते हैं। कार्ड/UPI भुगतान सीधे Google Play संभालता है; हमारे सर्वर पर कभी कोई कार्ड/बैंक जानकारी सेव नहीं होती। सर्वर केवल खरीद की पुष्टि करके हैश (<code>purchaseTokenHash</code>), स्थिति, प्लान और नवीनीकरण/समाप्ति तिथि सेव करता है। सब्सक्रिप्शन हो या न हो, स्कूल के सभी काम के फ़ीचर हमेशा मुफ्त रहते हैं।</li>
+        <li><strong>कोई स्कूल या निजी डेटा AdMob को नहीं जाता:</strong> हम कभी भी छात्र के नाम, अभिभावक की जानकारी, स्टाफ के नाम, ईमेल, मोबाइल नंबर, Firebase UID या स्कूल रिकॉर्ड विज्ञापन SDK को नहीं भेजते। लॉगिन, किसी भी डेटा एंट्री फॉर्म, फीस, वेतन, कैश बुक, अंक, उपस्थिति लेने, ट्रांसपोर्ट, रसीद, सर्टिफिकेट, खुले PDF प्रीव्यू, सेटिंग्स, अकाउंट हटाने या प्रिंटेड/शेयर्ड PDF के अंदर कभी विज्ञापन नहीं आते।</li>
+        <li><strong>Google Mobile Ads SDK द्वारा उपयोग:</strong> ऑनलाइन होने पर निःशुल्क संगठन में विज्ञापन दिखाने व धोखाधड़ी रोकने के लिए Google Mobile Ads SDK Android Advertising ID, IP-आधारित अनुमानित क्षेत्र, डिवाइस डायग्नोस्टिक्स और विज्ञापन इंटरैक्शन डेटा का उपयोग कर सकता है (<a href="https://policies.google.com/technologies/ads" target="_blank" rel="noopener">Google विज्ञापन नीति</a> के अनुसार)।</li>
+        <li><strong>आपकी सहमति और ऑप्ट-आउट विकल्प:</strong> जहाँ कानून आवश्यक हो वहाँ ऐप Google UMP द्वारा आपकी सहमति पूछता है। आप कभी भी ऐप में <strong>Settings &rarr; गोपनीयता और विज्ञापन विकल्प (Privacy and ad choices)</strong> से या फोन में <strong>Settings &rarr; Google &rarr; Ads</strong> में जाकर व्यक्तिगत विज्ञापन बंद कर सकते हैं या Advertising ID हटा सकते हैं।</li>
+      </ul>
+
+      <h3>6. डेटा कहाँ सेव रहता है</h3>
       <p>सभी अकाउंट और स्कूल रिकॉर्ड <strong>Google Firebase</strong> (Firebase Authentication और Cloud Firestore) में एन्क्रिप्टेड कनेक्शन के माध्यम से सेव रहते हैं। बिना इंटरनेट काम करने के लिए फोन में ऑफ़लाइन कैश रहता है, जो साइन-आउट करने या अकाउंट हटाने पर मिटा दिया जाता है।</p>
 
-      <h3>6. डेटा कौन देख सकता है</h3>
+      <h3>7. डेटा कौन देख सकता है</h3>
       <ul>
         <li>प्रत्येक संगठन (Organisation) का डेटा अलग और सुरक्षित रहता है। किसी अन्य स्कूल के सदस्य आपका डेटा नहीं देख सकते।</li>
         <li>संगठन के अंदर भी Firebase सर्वर नियम हर सदस्य को केवल वही स्कूल और मॉड्यूल दिखाते हैं जिनकी अनुमति मालिक या एडमिन ने दी है।</li>
         <li>हम किसी भी छात्र, अभिभावक या स्टाफ का डेटा <strong>कभी नहीं बेचते या किराए पर नहीं देते</strong>।</li>
       </ul>
 
-      <h3>7. डेटा कितने समय रहता है और कैसे हटाएँ</h3>
+      <h3>8. डेटा कितने समय रहता है और कैसे हटाएँ</h3>
       <p>जब तक स्कूल संगठन ऐप का उपयोग करता है, रिकॉर्ड सेव रहते हैं। आप ऐप के अंदर <strong>Settings &rarr; Account &rarr; Delete My Account</strong> से कभी भी अपना अकाउंट हटा सकते हैं। पूरा विवरण <a href="delete-account.html">अकाउंट व डेटा हटाने का पेज</a> पर पढ़ें।</p>
       <ul>
         <li>सामान्य सदस्य (शिक्षक/क्लर्क/एडमिन) का अकाउंट हटाने पर उनका लॉगिन, प्रोफ़ाइल और सदस्यता तुरंत हट जाती है; उनके द्वारा दर्ज किए गए पुराने स्कूल रिकॉर्ड स्कूल के काम के लिए सुरक्षित रहते हैं और लेखक के नाम की जगह <code>"deleted user"</code> दिखता है।</li>
         <li>यदि आप संगठन के <strong>अकेले मालिक (Owner)</strong> हैं, तो पहले किसी अन्य एडमिन को मालिकाना हक देना होगा या स्पष्ट पुष्टि के साथ पूरा संगठन और उसका सारा डेटा हटाने का विकल्प चुनना होगा।</li>
       </ul>
 
-      <h3>8. संपर्क करें</h3>
+      <h3>9. संपर्क करें</h3>
       <p>गोपनीयता से जुड़े किसी भी प्रश्न या सहायता के लिए ईमेल करें: <a href="mailto:[YOUR_CONTACT_EMAIL]">[YOUR_CONTACT_EMAIL]</a></p>
     </section>
 

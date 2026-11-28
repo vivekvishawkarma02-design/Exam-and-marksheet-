@@ -57,10 +57,10 @@ class Phase11PdfRobolectricTest {
 
     private fun makeSchool(): SchoolEntity = SchoolEntity(
         id = 1L,
-        name = "C.P.S. SCHOOL",
-        address = "Harikaranpur Bijaura, Ghazipur (U.P.)",
+        name = "DEMO MODEL SCHOOL",
+        address = "123 Station Road, Demo Nagar",
         mobile = "9876543210",
-        email = "cps@example.edu",
+        email = "office@demoschool.example",
         logoBase64 = samplePngBase64(Color.rgb(30, 58, 95)),
         active = true
     )
@@ -80,7 +80,7 @@ class Phase11PdfRobolectricTest {
         rollNo = i,
         mobile = "98765432%02d".format(i % 100),
         secondMobile = if (i % 2 == 0) "91234567%02d".format(i % 100) else "",
-        address = "Harikaranpur, Ghazipur",
+        address = "123 Station Road, Demo Nagar",
         photoBase64 = if (withPhoto) samplePngBase64(Color.rgb(15, 118, 110)) else "",
         usesTransport = true,
         transportRouteId = "troute_1",

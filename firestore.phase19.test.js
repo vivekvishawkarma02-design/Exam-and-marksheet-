@@ -14,7 +14,7 @@ const OTHER_TEACHER_9B_UID = "ct_9b_uid";
 const GRANTED_REMARKS_VIEW_UID = "granted_remarks_view_uid";
 const GATE_OPERATOR_UID = "gate_operator_uid";
 
-const ORG_ID = "org_sts_001";
+const ORG_ID = "org_demo_001";
 const SCHOOL_1 = "sch_primary_01";
 
 const [emulatorHost, emulatorPortStr] = (process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8085").split(":");
@@ -98,8 +98,8 @@ test("24. Phase 19: Sensitive Student Remarks (Class Teacher/Owner/Admin only, c
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
     await db.doc(`organisations/${ORG_ID}`).set({
-      name: "STS Group",
-      code: "sts-ghazipur",
+      name: "Demo School Group",
+      code: "demo-schools",
       ownerUid: OWNER_UID,
       createdAt: ts,
       updatedAt: ts,

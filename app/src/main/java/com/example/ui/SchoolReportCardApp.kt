@@ -41,6 +41,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -48,6 +49,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import com.example.ads.Phase16AdMobController
+import com.example.ads.findActivityOrNull
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,7 +93,6 @@ import com.google.firebase.auth.auth
 
 object AppRoutes {
     const val ROUTE_DASHBOARD = "dashboard"
-    const val ROUTE_STUDENTS = "students"
     const val ROUTE_MARKS = "marks"
     const val ROUTE_REPORTS = "reports"
     const val ROUTE_MEMBERS = "members"
@@ -121,6 +123,7 @@ object AppRoutes {
     const val ROUTE_BIRTHDAYS = "phase18_birthdays"
     const val ROUTE_STUDENT_REMARKS = "phase19_student_remarks"
     const val ROUTE_GATE_PASS = "phase19_gate_pass"
+    const val ROUTE_SCHOOL_SUBSCRIPTION = "phase16_school_subscription"
 }
 
 private enum class OnboardingSubScreen {
@@ -129,7 +132,7 @@ private enum class OnboardingSubScreen {
     JOIN_ORG
 }
 
-private data class TopNavItem(
+internal data class TopNavItem(
     val route: String,
     val label: String,
     val selectedIcon: ImageVector,
@@ -137,6 +140,39 @@ private data class TopNavItem(
     val testTag: String,
     val badgeCount: Int = 0
 )
+
+internal fun buildWorkspaceTopNavItems(
+    canViewStudents: Boolean,
+    canViewStudentRegister: Boolean,
+    canViewMarks: Boolean,
+    canViewReports: Boolean,
+    canViewMembersOrAdmin: Boolean,
+    pendingJoinRequestCount: Int
+): List<TopNavItem> = buildList {
+    add(TopNavItem(AppRoutes.ROUTE_DASHBOARD, "Home", Icons.Filled.Home, Icons.Outlined.Home, "nav_home"))
+    if (canViewStudents || canViewStudentRegister) {
+        add(TopNavItem(AppRoutes.ROUTE_STUDENT_REGISTER, "Students", Icons.Filled.Groups, Icons.Outlined.Groups, "nav_students"))
+    }
+    if (canViewMarks) {
+        add(TopNavItem(AppRoutes.ROUTE_MARKS, "Marks", Icons.Filled.EditNote, Icons.Outlined.EditNote, "nav_marks"))
+    }
+    if (canViewReports) {
+        add(TopNavItem(AppRoutes.ROUTE_REPORTS, "Reports", Icons.Filled.Description, Icons.Outlined.Description, "nav_reports"))
+    }
+    if (canViewMembersOrAdmin) {
+        add(
+            TopNavItem(
+                AppRoutes.ROUTE_MEMBERS,
+                "Members",
+                Icons.Filled.AdminPanelSettings,
+                Icons.Outlined.AdminPanelSettings,
+                "nav_members",
+                badgeCount = pendingJoinRequestCount
+            )
+        )
+    }
+    add(TopNavItem(AppRoutes.ROUTE_SETTINGS, "Settings", Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings"))
+}
 
 /**
  * Root multi-tenant gate:
@@ -279,7 +315,19 @@ private fun AuthenticatedSessionHost(
         )
     )
     val sessionState by sessionViewModel.state.collectAsStateWithLifecycle()
+    val sessionAdsUiState by sessionViewModel.adsUiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val hostActivity = remember(context) { context.findActivityOrNull() }
+
+    LaunchedEffect(sessionState.isOnline, sessionAdsUiState.effectiveSubscription.suppressesAllAds) {
+        if (sessionState.isOnline && !sessionAdsUiState.effectiveSubscription.suppressesAllAds) {
+            Phase16AdMobController.gatherConsentAndInitializeIfAllowed(
+                activity = hostActivity,
+                isOnline = true,
+                unitIds = sessionAdsUiState.unitIds
+            )
+        }
+    }
 
     var subScreen by remember { mutableStateOf(OnboardingSubScreen.PICKER) }
     var showDeleteAccountDialog by remember { mutableStateOf(false) }
@@ -294,6 +342,7 @@ private fun AuthenticatedSessionHost(
     }
 
     fun performSignOut() {
+        Phase16AdMobController.clearPreloadedAds()
         GoogleAuthHelper.signOutAndClearLocalCache(
             context = context,
             credentialManager = credentialManager,
@@ -332,6 +381,7 @@ private fun AuthenticatedSessionHost(
                         onOpenLegalDoc = onOpenLegalDoc,
                         onDeleteAccountClick = { showDeleteAccountDialog = true },
                         onSignOutClick = ::performSignOut,
+                        adsUiState = sessionAdsUiState,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }
@@ -518,6 +568,28 @@ private fun OrganisationWorkspace(
     var feeJumpQueueRouteId by remember { mutableStateOf<String?>(null) }
     var transportJumpTab by remember { mutableStateOf<Int?>(null) }
     var certificateJumpStudentId by remember { mutableStateOf<Long?>(null) }
+    val workspaceAdsUiState by viewModel.adsUiState.collectAsStateWithLifecycle()
+    val workspaceBillingState by viewModel.billingUiState.collectAsStateWithLifecycle()
+    val dismissedLapsedNoticeMarker by viewModel.dismissedLapsedNoticeMarkerMs.collectAsStateWithLifecycle()
+    val workspaceContext = LocalContext.current
+    val workspaceActivity = remember(workspaceContext) { workspaceContext.findActivityOrNull() }
+
+    LaunchedEffect(
+        uiState.isOnline,
+        workspaceAdsUiState.effectiveSubscription.suppressesAllAds,
+        workspaceAdsUiState.canRequestAdsFromConsent
+    ) {
+        if (uiState.isOnline && !workspaceAdsUiState.effectiveSubscription.suppressesAllAds) {
+            Phase16AdMobController.gatherConsentAndInitializeIfAllowed(
+                activity = workspaceActivity,
+                isOnline = true,
+                unitIds = workspaceAdsUiState.unitIds
+            )
+            if (workspaceAdsUiState.canRequestAdsFromConsent) {
+                viewModel.preloadPdfCloseInterstitialIfEligible()
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.snackbar.collect { msg ->
@@ -576,35 +648,20 @@ private fun OrganisationWorkspace(
     }
 
     // Build navigation bar items strictly from modules the member is allowed to view
+    val canOpenStudentRegister = uiState.canViewStudentRegister || uiState.canView(AppModule.STUDENTS)
     val navItems = remember(
         uiState.currentMember,
-        uiState.pendingJoinRequestCount
+        uiState.pendingJoinRequestCount,
+        canOpenStudentRegister
     ) {
-        buildList {
-            add(TopNavItem(AppRoutes.ROUTE_DASHBOARD, "Home", Icons.Filled.Home, Icons.Outlined.Home, "nav_home"))
-            if (uiState.canView(AppModule.STUDENTS)) {
-                add(TopNavItem(AppRoutes.ROUTE_STUDENTS, "Students", Icons.Filled.Groups, Icons.Outlined.Groups, "nav_students"))
-            }
-            if (uiState.canView(AppModule.MARKS)) {
-                add(TopNavItem(AppRoutes.ROUTE_MARKS, "Marks", Icons.Filled.EditNote, Icons.Outlined.EditNote, "nav_marks"))
-            }
-            if (uiState.canView(AppModule.REPORTS)) {
-                add(TopNavItem(AppRoutes.ROUTE_REPORTS, "Reports", Icons.Filled.Description, Icons.Outlined.Description, "nav_reports"))
-            }
-            if (uiState.canView(AppModule.MEMBERS) || uiState.isAdmin) {
-                add(
-                    TopNavItem(
-                        AppRoutes.ROUTE_MEMBERS,
-                        "Members",
-                        Icons.Filled.AdminPanelSettings,
-                        Icons.Outlined.AdminPanelSettings,
-                        "nav_members",
-                        badgeCount = uiState.pendingJoinRequestCount
-                    )
-                )
-            }
-            add(TopNavItem(AppRoutes.ROUTE_SETTINGS, "Settings", Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings"))
-        }
+        buildWorkspaceTopNavItems(
+            canViewStudents = uiState.canView(AppModule.STUDENTS),
+            canViewStudentRegister = uiState.canViewStudentRegister,
+            canViewMarks = uiState.canView(AppModule.MARKS),
+            canViewReports = uiState.canView(AppModule.REPORTS),
+            canViewMembersOrAdmin = uiState.canView(AppModule.MEMBERS) || uiState.isAdmin,
+            pendingJoinRequestCount = uiState.pendingJoinRequestCount
+        )
     }
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -618,7 +675,6 @@ private fun OrganisationWorkspace(
         currentRoute == AppRoutes.ROUTE_WORKLOAD_REPORT ||
         currentRoute == AppRoutes.ROUTE_TEACHER_ATTENDANCE ||
         currentRoute == AppRoutes.ROUTE_STUDENT_ATTENDANCE ||
-        currentRoute == AppRoutes.ROUTE_STUDENT_REGISTER ||
         currentRoute == AppRoutes.ROUTE_FEE_MANAGEMENT ||
         currentRoute == AppRoutes.ROUTE_CERTIFICATES ||
         currentRoute == AppRoutes.ROUTE_CASH_BOOK ||
@@ -650,6 +706,11 @@ private fun OrganisationWorkspace(
         }
     }
 
+    CompositionLocalProvider(
+        LocalOnFinishedPdfPreviewClosed provides { finishedOk ->
+            viewModel.onFinishedPdfPreviewClosed(workspaceActivity, finishedOk)
+        }
+    ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val useRail = maxWidth >= 600.dp
 
@@ -757,7 +818,7 @@ private fun OrganisationWorkspace(
                                     onDeleteLegacyMarks = viewModel::deleteLegacyMarksData,
                                     onNavigateToSchools = ::openSchoolsScreen,
                                     onNavigateToStudents = {
-                                        if (uiState.canView(AppModule.STUDENTS)) navigateTopLevel(AppRoutes.ROUTE_STUDENTS)
+                                        if (canOpenStudentRegister) navigateTopLevel(AppRoutes.ROUTE_STUDENT_REGISTER)
                                     },
                                     onNavigateToMarks = {
                                         if (uiState.canView(AppModule.MARKS)) navigateTopLevel(AppRoutes.ROUTE_MARKS)
@@ -819,8 +880,8 @@ private fun OrganisationWorkspace(
                                         }
                                     },
                                     onNavigateToStudentRegister = {
-                                        if (uiState.canViewStudentRegister) {
-                                            navController.navigate(AppRoutes.ROUTE_STUDENT_REGISTER) { launchSingleTop = true }
+                                        if (canOpenStudentRegister) {
+                                            navigateTopLevel(AppRoutes.ROUTE_STUDENT_REGISTER)
                                         }
                                     },
                                     onNavigateToFeeManagement = {
@@ -999,19 +1060,21 @@ private fun OrganisationWorkspace(
                                     },
                                     onReopenFirstTimeGuide = {
                                         viewModel.setFirstTimeGuideSkipped(false)
-                                    }
-                                )
-                            }
-
-                            composable(AppRoutes.ROUTE_STUDENTS) {
-                                StudentsScreen(
-                                    uiState = uiState,
-                                    viewModel = viewModel,
-                                    onOpenCoScholastic = {
-                                        if (uiState.canView(AppModule.CO_SCHOLASTIC)) {
-                                            navController.navigate(AppRoutes.ROUTE_COSCHOLASTIC)
+                                    },
+                                    adsUiState = workspaceAdsUiState,
+                                    onWatchRewardedAd = {
+                                        viewModel.watchRewardedAdForAdFreeTime(workspaceActivity)
+                                    },
+                                    showOwnerLapsedSubscriptionNotice = workspaceAdsUiState.shouldShowLapsedNoticeToOwner(
+                                        isOwner = uiState.isOwner,
+                                        dismissedMarkerMs = dismissedLapsedNoticeMarker
+                                    ),
+                                    onOpenSubscriptionScreen = {
+                                        navController.navigate(AppRoutes.ROUTE_SCHOOL_SUBSCRIPTION) {
+                                            launchSingleTop = true
                                         }
-                                    }
+                                    },
+                                    onDismissLapsedSubscriptionNotice = viewModel::dismissLapsedSubscriptionNotice
                                 )
                             }
 
@@ -1020,7 +1083,7 @@ private fun OrganisationWorkspace(
                                     uiState = uiState,
                                     viewModel = viewModel,
                                     onNavigateToStudents = {
-                                        if (uiState.canView(AppModule.STUDENTS)) navigateTopLevel(AppRoutes.ROUTE_STUDENTS)
+                                        if (canOpenStudentRegister) navigateTopLevel(AppRoutes.ROUTE_STUDENT_REGISTER)
                                     },
                                     onNavigateToPendingMarks = {
                                         if (uiState.canView(AppModule.MARKS)) {
@@ -1068,8 +1131,32 @@ private fun OrganisationWorkspace(
                                         showDeleteOrgDialog = true
                                     },
                                     onOpenLegalDoc = onOpenLegalDoc,
+                                    onOpenSubscriptionScreen = {
+                                        navController.navigate(AppRoutes.ROUTE_SCHOOL_SUBSCRIPTION) {
+                                            launchSingleTop = true
+                                        }
+                                    },
                                     onSignOut = onSignOut,
                                     onDeleteAccountClick = onDeleteAccountClick
+                                )
+                            }
+
+                            composable(AppRoutes.ROUTE_SCHOOL_SUBSCRIPTION) {
+                                Phase16SchoolSubscriptionScreen(
+                                    orgName = uiState.activeOrg?.name.orEmpty(),
+                                    isOwner = uiState.isOwner,
+                                    isHindi = uiState.phase10HindiLabels,
+                                    isOnline = uiState.isOnline,
+                                    subscription = workspaceAdsUiState.effectiveSubscription,
+                                    billingState = workspaceBillingState,
+                                    onRefreshOffers = viewModel::refreshSubscriptionOffers,
+                                    onSubscribePlan = { offer ->
+                                        viewModel.startOwnerSubscriptionPurchase(workspaceActivity, offer)
+                                    },
+                                    onRestorePurchase = viewModel::restoreOwnerPurchases,
+                                    onOpenPrivacyAndTerms = { onOpenLegalDoc(LegalDocType.PRIVACY_POLICY) },
+                                    onToggleLanguage = viewModel::togglePhase10HindiLabels,
+                                    onBack = { navController.popBackStack() }
                                 )
                             }
 
@@ -1111,7 +1198,10 @@ private fun OrganisationWorkspace(
                                     TeachersAndAssignmentsScreen(
                                         uiState = uiState,
                                         viewModel = viewModel,
-                                        onBack = { navController.popBackStack() }
+                                        onBack = {
+                                            navController.popBackStack()
+                                            viewModel.onTaskFinishedReturnFromList(workspaceActivity)
+                                        }
                                     )
                                 } else {
                                     LaunchedEffect(Unit) {
@@ -1125,7 +1215,10 @@ private fun OrganisationWorkspace(
                                     TimetableScreen(
                                         uiState = uiState,
                                         viewModel = viewModel,
-                                        onBack = { navController.popBackStack() },
+                                        onBack = {
+                                            navController.popBackStack()
+                                            viewModel.onTaskFinishedReturnFromList(workspaceActivity)
+                                        },
                                         initialTabIndex = timetableJumpTab,
                                         initialSubsDate = timetableJumpSubsDate,
                                         onInitialJumpConsumed = {
@@ -1218,10 +1311,14 @@ private fun OrganisationWorkspace(
                             }
 
                             composable(AppRoutes.ROUTE_STUDENT_REGISTER) {
-                                if (uiState.canViewStudentRegister) {
+                                if (canOpenStudentRegister) {
                                     Phase9StudentRegisterScreen(
                                         viewModel = viewModel,
-                                        onBack = { navController.popBackStack() },
+                                        onBack = {
+                                            if (!navController.popBackStack()) {
+                                                navigateTopLevel(AppRoutes.ROUTE_DASHBOARD)
+                                            }
+                                        },
                                         onOpenFeeCollectionForStudent = { student ->
                                             if (uiState.canViewFees) {
                                                 feeJumpInitialTab = 0
@@ -1233,6 +1330,12 @@ private fun OrganisationWorkspace(
                                             if (uiState.canViewCertificates) {
                                                 certificateJumpStudentId = student.id
                                                 navController.navigate(AppRoutes.ROUTE_CERTIFICATES) { launchSingleTop = true }
+                                            }
+                                        },
+                                        onOpenCoScholasticForStudent = { student ->
+                                            if (uiState.canView(AppModule.CO_SCHOLASTIC)) {
+                                                viewModel.focusStudent(student)
+                                                navController.navigate(AppRoutes.ROUTE_COSCHOLASTIC) { launchSingleTop = true }
                                             }
                                         },
                                         onNavigateToTransport = {
@@ -1264,8 +1367,8 @@ private fun OrganisationWorkspace(
                                             feeJumpQueueRouteId = null
                                         },
                                         onOpenStudentRegister = {
-                                            if (uiState.canViewStudentRegister) {
-                                                navController.navigate(AppRoutes.ROUTE_STUDENT_REGISTER) { launchSingleTop = true }
+                                            if (canOpenStudentRegister) {
+                                                navigateTopLevel(AppRoutes.ROUTE_STUDENT_REGISTER)
                                             }
                                         },
                                         onOpenTransport = {
@@ -1506,6 +1609,7 @@ private fun OrganisationWorkspace(
                 }
             }
         }
+    }
     }
 
     if (showMigrationDialog && localMigrationSummary.hasDataToUpload) {

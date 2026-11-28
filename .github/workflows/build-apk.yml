@@ -141,6 +141,37 @@ jobs:
             mkdir -p app
             printf '%s\n' "${GOOGLE_SERVICES_JSON_SECRET}" > app/google-services.json
             echo "Wrote app/google-services.json from GOOGLE_SERVICES_JSON secret."
+            python3 - <<'PY'
+          import json, sys
+
+          EXPECTED_PACKAGE = "com.vivek.schoolreportcard"
+          try:
+              with open("app/google-services.json", "r", encoding="utf-8") as f:
+                  data = json.load(f)
+          except Exception as exc:
+              print(f"::error::GOOGLE_SERVICES_JSON is not valid JSON: {exc}")
+              sys.exit(1)
+
+          clients = data.get("client") or []
+          found_packages = [
+              c.get("client_info", {}).get("android_client_info", {}).get("package_name", "")
+              for c in clients
+              if isinstance(c, dict)
+          ]
+          found_packages = [p for p in found_packages if p]
+
+          if EXPECTED_PACKAGE not in found_packages:
+              found_str = ", ".join(found_packages) if found_packages else "(none)"
+              print(
+                  f"::error::app/google-services.json does not contain an Android app client for package '{EXPECTED_PACKAGE}' "
+                  f"(found: {found_str}). Add a new Android app with package name '{EXPECTED_PACKAGE}' in Firebase Console, "
+                  f"register its SHA-1 and SHA-256 fingerprints, download the updated google-services.json, and update the "
+                  f"GitHub secret GOOGLE_SERVICES_JSON."
+              )
+              sys.exit(1)
+
+          print(f"Verified app/google-services.json contains Android client for '{EXPECTED_PACKAGE}' (all clients in file: {', '.join(found_packages)}).")
+          PY
           else
             echo "::warning::GOOGLE_SERVICES_JSON secret is empty; building APK without app/google-services.json (app will display the Firebase not configured notice)."
           fi

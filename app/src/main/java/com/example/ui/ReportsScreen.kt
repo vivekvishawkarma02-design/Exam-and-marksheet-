@@ -86,6 +86,7 @@ fun ReportsScreen(
 ) {
     val context = LocalContext.current
     val pdfState by viewModel.pdfState.collectAsStateWithLifecycle()
+    val adsUiState by viewModel.adsUiState.collectAsStateWithLifecycle()
 
     var selectedReportType by remember { mutableStateOf(ReportType.ANNUAL) }
     var batchWholeClass by remember { mutableStateOf(false) }
@@ -131,10 +132,15 @@ fun ReportsScreen(
         }
     }
 
-    LazyColumn(
+    Column(
         modifier = modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+    LazyColumn(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -612,6 +618,17 @@ fun ReportsScreen(
                 }
             }
         }
+    }
+
+    // Phase 16B: ONE adaptive banner at bottom of Report list only (strictly hidden while PDF preview is open or generating)
+    if (pdfState.previewPages.isEmpty() && !pdfState.isGenerating && readinessWarningDialog == null) {
+        AdaptiveAdBannerSlot(
+            eligibility = adsUiState.bannerEligibility(com.example.domain.AdScreenSurface.REPORT_LIST),
+            canRequestAds = adsUiState.canRequestAdsFromConsent,
+            bannerUnitId = adsUiState.unitIds.bannerId,
+            testTagPrefix = "report_list"
+        )
+    }
     }
 
     // Phase 7 Optional "Report Cards Ready" Warning Dialog before batch export

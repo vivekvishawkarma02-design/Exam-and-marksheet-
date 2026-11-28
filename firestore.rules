@@ -50,29 +50,7 @@ service cloud.firestore {
           'salary', 'sessionPromotion', 'resultAnalysis', 'classDiary',
           'studentRemarks', 'gate'
         ]) &&
-        perms.students in ['none', 'view', 'edit'] &&
-        perms.marks in ['none', 'view', 'edit'] &&
-        perms.coScholastic in ['none', 'view', 'edit'] &&
-        perms.reports in ['none', 'view', 'edit'] &&
-        perms.timetable in ['none', 'view', 'edit'] &&
-        perms.teachers in ['none', 'view', 'edit'] &&
-        perms.settings in ['none', 'view', 'edit'] &&
-        perms.members in ['none', 'view', 'edit'] &&
-        (!('attendance' in perms) || perms.attendance in ['none', 'view', 'edit']) &&
-        (!('fees' in perms) || perms.fees in ['none', 'view', 'edit']) &&
-        (!('studentRegister' in perms) || perms.studentRegister in ['none', 'view', 'edit']) &&
-        (!('certificates' in perms) || perms.certificates in ['none', 'view', 'edit']) &&
-        (!('cashBook' in perms) || perms.cashBook in ['none', 'view', 'edit']) &&
-        (!('enquiry' in perms) || perms.enquiry in ['none', 'view', 'edit']) &&
-        (!('exams' in perms) || perms.exams in ['none', 'view', 'edit']) &&
-        (!('stock' in perms) || perms.stock in ['none', 'view', 'edit']) &&
-        (!('transport' in perms) || perms.transport in ['none', 'view', 'edit']) &&
-        (!('salary' in perms) || perms.salary in ['none', 'view', 'edit']) &&
-        (!('sessionPromotion' in perms) || perms.sessionPromotion in ['none', 'view', 'edit']) &&
-        (!('resultAnalysis' in perms) || perms.resultAnalysis in ['none', 'view', 'edit']) &&
-        (!('classDiary' in perms) || perms.classDiary in ['none', 'view', 'edit']) &&
-        (!('studentRemarks' in perms) || perms.studentRemarks in ['none', 'view', 'edit']) &&
-        (!('gate' in perms) || perms.gate in ['none', 'view', 'edit']);
+        perms.values().hasOnly(['none', 'view', 'edit']);
     }
 
     function isValidStringList(listVal, maxLen) {
@@ -411,11 +389,151 @@ service cloud.firestore {
       );
     }
 
+    function isAppOwner() {
+      return isSignedIn() && (
+        ('appOwner' in request.auth.token && request.auth.token.appOwner == true) ||
+        (
+          'email' in request.auth.token &&
+          'email_verified' in request.auth.token &&
+          request.auth.token.email == 'vivekvishawkarma02@gmail.com' &&
+          request.auth.token.email_verified == true
+        )
+      );
+    }
+
+    function isValidOrgSubscriptionMap(sub) {
+      return sub is map &&
+        sub.keys().hasAll(['status']) &&
+        sub.keys().hasOnly(['status', 'plan', 'expiresAt', 'autoRenewing', 'updatedAt', 'purchaseTokenHash']) &&
+        sub.status in ['none', 'active', 'grace', 'on_hold', 'cancelled_active', 'expired', 'revoked'] &&
+        (!('plan' in sub) || (sub.plan is string && sub.plan.size() <= 80)) &&
+        (!('expiresAt' in sub) || sub.expiresAt == null || sub.expiresAt is timestamp) &&
+        (!('autoRenewing' in sub) || sub.autoRenewing is bool) &&
+        (!('updatedAt' in sub) || sub.updatedAt == null || sub.updatedAt is timestamp) &&
+        (!('purchaseTokenHash' in sub) || (sub.purchaseTokenHash is string && sub.purchaseTokenHash.size() <= 128));
+    }
+
+    function isValidAdsWatchedWindow(win) {
+      return win is map &&
+        win.keys().hasAll(['windowStartAt', 'countInWindow', 'dailyDateKey', 'dailyCount', 'totalCount', 'lastRewardedAt']) &&
+        win.keys().hasOnly(['windowStartAt', 'countInWindow', 'dailyDateKey', 'dailyCount', 'totalCount', 'lastRewardedAt', 'verifiedByServer']) &&
+        win.windowStartAt is timestamp &&
+        win.countInWindow is int && win.countInWindow >= 1 && win.countInWindow <= 4 &&
+        win.dailyDateKey is string && win.dailyDateKey.size() == 10 &&
+        win.dailyCount is int && win.dailyCount >= 1 && win.dailyCount <= 8 &&
+        win.totalCount is int && win.totalCount >= 1 &&
+        win.lastRewardedAt is timestamp &&
+        (!('verifiedByServer' in win) || win.verifiedByServer is bool);
+    }
+
+    function isValidRemoteAdsConfig(data) {
+      return data is map &&
+        data.keys().hasOnly([
+          'globalEnabled',
+          'todayBannerEnabled',
+          'orgChooserBannerEnabled',
+          'schoolChooserBannerEnabled',
+          'studentListBannerEnabled',
+          'teacherListBannerEnabled',
+          'reportListBannerEnabled',
+          'timetableViewBannerEnabled',
+          'pdfCloseInterstitialEnabled',
+          'rewardedAdFreeEnabled',
+          'requireServerVerifiedRewards',
+          'updatedAt',
+          'updatedByEmail'
+        ]) &&
+        (!('globalEnabled' in data) || data.globalEnabled is bool) &&
+        (!('todayBannerEnabled' in data) || data.todayBannerEnabled is bool) &&
+        (!('orgChooserBannerEnabled' in data) || data.orgChooserBannerEnabled is bool) &&
+        (!('schoolChooserBannerEnabled' in data) || data.schoolChooserBannerEnabled is bool) &&
+        (!('studentListBannerEnabled' in data) || data.studentListBannerEnabled is bool) &&
+        (!('teacherListBannerEnabled' in data) || data.teacherListBannerEnabled is bool) &&
+        (!('reportListBannerEnabled' in data) || data.reportListBannerEnabled is bool) &&
+        (!('timetableViewBannerEnabled' in data) || data.timetableViewBannerEnabled is bool) &&
+        (!('pdfCloseInterstitialEnabled' in data) || data.pdfCloseInterstitialEnabled is bool) &&
+        (!('rewardedAdFreeEnabled' in data) || data.rewardedAdFreeEnabled is bool) &&
+        (!('requireServerVerifiedRewards' in data) || data.requireServerVerifiedRewards is bool) &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp) &&
+        (!('updatedByEmail' in data) || (data.updatedByEmail is string && data.updatedByEmail.size() <= 160));
+    }
+
+    function isValidSelfAdFreeUpdate(inc, ex) {
+      let hasWindow = 'adsWatchedWindow' in inc && isValidAdsWatchedWindow(inc.adsWatchedWindow);
+      let hasUntil = 'adFreeUntil' in inc && inc.adFreeUntil is timestamp;
+      let within24h = hasUntil && inc.adFreeUntil <= request.time + duration.value(24, 'h');
+      let extendedOnly = hasUntil && (!('adFreeUntil' in ex) || inc.adFreeUntil >= ex.adFreeUntil);
+      let serverTimestamped = hasWindow && inc.adsWatchedWindow.lastRewardedAt == request.time;
+      let firstRewardValid = hasWindow &&
+        !('adsWatchedWindow' in ex) &&
+        inc.adsWatchedWindow.totalCount == 1 &&
+        inc.adsWatchedWindow.countInWindow == 1 &&
+        inc.adsWatchedWindow.dailyCount == 1;
+      let nextRewardValid = hasWindow &&
+        ('adsWatchedWindow' in ex) &&
+        inc.adsWatchedWindow.totalCount >= ex.adsWatchedWindow.totalCount &&
+        inc.adsWatchedWindow.totalCount <= ex.adsWatchedWindow.totalCount + 1 &&
+        (
+          inc.adsWatchedWindow.dailyDateKey > ex.adsWatchedWindow.dailyDateKey ||
+          (
+            inc.adsWatchedWindow.dailyDateKey == ex.adsWatchedWindow.dailyDateKey &&
+            inc.adsWatchedWindow.dailyCount >= ex.adsWatchedWindow.dailyCount
+          )
+        ) &&
+        (
+          inc.adsWatchedWindow.windowStartAt > ex.adsWatchedWindow.windowStartAt ||
+          (
+            inc.adsWatchedWindow.windowStartAt == ex.adsWatchedWindow.windowStartAt &&
+            inc.adsWatchedWindow.countInWindow >= ex.adsWatchedWindow.countInWindow
+          )
+        );
+      return within24h && extendedOnly && serverTimestamped && (firstRewardValid || nextRewardValid);
+    }
+
+    function isSelfRewardedAdFreeUpdate(memberUid) {
+      let inc = request.resource.data;
+      let ex = resource.data;
+      return isSignedIn() &&
+        isValidId(memberUid) &&
+        request.auth.uid == memberUid &&
+        ex.status == 'active' &&
+        inc.diff(ex).affectedKeys().hasOnly(['adFreeUntil', 'adsWatchedWindow', 'updatedAt']) &&
+        isValidTimestamp(inc.updatedAt) &&
+        isValidSelfAdFreeUpdate(inc, ex);
+    }
+
+    function canActorUpdateMember(orgId, memberUid, inc, ex, diffKeys, actor) {
+      return actor.status == 'active' && (
+        (
+          (actor.role in ['OWNER', 'ADMIN'] || actor.permissions.members == 'edit') &&
+          ex.role != 'OWNER' &&
+          inc.role != 'OWNER' &&
+          (
+            actor.role == 'OWNER' ||
+            (('salary' in inc.permissions ? inc.permissions.salary : 'none') == ('salary' in ex.permissions ? ex.permissions.salary : 'none'))
+          ) &&
+          diffKeys.hasOnly([
+            'role', 'status', 'allSchools', 'schools', 'permissions',
+            'assignedClassSubjects', 'updatedAt'
+          ])
+        ) || (
+          actor.role == 'OWNER' &&
+          inc.status == 'active' &&
+          diffKeys.hasOnly(['role', 'allSchools', 'permissions', 'updatedAt']) &&
+          getAfter(orgPath(orgId)).data.ownerUid != request.auth.uid && (
+            (memberUid == getAfter(orgPath(orgId)).data.ownerUid && inc.role == 'OWNER' && inc.allSchools == true) ||
+            (memberUid == request.auth.uid && ex.role == 'OWNER' && inc.role == 'ADMIN')
+          )
+        )
+      );
+    }
+
     function canUpdateMember(orgId, memberUid) {
       let inc = request.resource.data;
       let ex = resource.data;
       let diffKeys = inc.diff(ex).affectedKeys();
-      let isSelf = request.auth.uid == memberUid &&
+      return (
+        request.auth.uid == memberUid &&
         ex.status == 'active' &&
         inc.role == ex.role &&
         inc.status == ex.status &&
@@ -426,27 +544,10 @@ service cloud.firestore {
         diffKeys.hasOnly([
           'name', 'mobile', 'teacherProfileCompleted', 'teacherPhotoBase64',
           'requestedSubjects', 'requestedClasses', 'lastActiveAt', 'updatedAt'
-        ]);
-      let actor = memberData(orgId);
-      let actorActive = memberExists(orgId) && actor.status == 'active';
-      let actorAdmin = actorActive && actor.role in ['OWNER', 'ADMIN'];
-      let actorCanManage = actorAdmin || (actorActive && actor.permissions.members == 'edit');
-      let isAdminManage = actorCanManage &&
-        ex.role != 'OWNER' &&
-        inc.role != 'OWNER' &&
-        salaryPrivilegeUnchangedOrOwner(orgId, inc.permissions, ex.permissions) &&
-        diffKeys.hasOnly([
-          'role', 'status', 'allSchools', 'schools', 'permissions',
-          'assignedClassSubjects', 'updatedAt'
-        ]);
-      let isOwnershipTransfer = actorActive && actor.role == 'OWNER' &&
-        inc.status == 'active' &&
-        diffKeys.hasOnly(['role', 'allSchools', 'permissions', 'updatedAt']) &&
-        getAfter(orgPath(orgId)).data.ownerUid != request.auth.uid && (
-          (memberUid == getAfter(orgPath(orgId)).data.ownerUid && inc.role == 'OWNER' && inc.allSchools == true) ||
-          (memberUid == request.auth.uid && ex.role == 'OWNER' && inc.role == 'ADMIN')
-        );
-      return isSelf || isAdminManage || isOwnershipTransfer;
+        ])
+      ) || (
+        memberExists(orgId) && canActorUpdateMember(orgId, memberUid, inc, ex, diffKeys, memberData(orgId))
+      );
     }
 
     // =========================================================================
@@ -475,13 +576,14 @@ service cloud.firestore {
 
     function isValidOrganisation(data) {
       return data.keys().hasAll(['name', 'code', 'ownerUid', 'contactMobile', 'contactEmail', 'settings', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['name', 'code', 'ownerUid', 'contactMobile', 'contactEmail', 'settings', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['name', 'code', 'ownerUid', 'contactMobile', 'contactEmail', 'settings', 'subscription', 'createdAt', 'updatedAt']) &&
         data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
         isValidOrgCode(data.code) &&
         data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
         data.contactMobile is string && data.contactMobile.size() <= 40 &&
         data.contactEmail is string && data.contactEmail.size() <= 160 &&
         isValidSettingsMap(data.settings) &&
+        (!('subscription' in data) || isValidOrgSubscriptionMap(data.subscription)) &&
         isValidTimestamp(data.createdAt) &&
         isValidTimestamp(data.updatedAt);
     }
@@ -499,7 +601,7 @@ service cloud.firestore {
           'allSchools', 'schools', 'permissions',
           'teacherProfileCompleted', 'teacherPhotoBase64',
           'requestedSubjects', 'requestedClasses', 'assignedClassSubjects',
-          'inviteCodeUsed', 'lastActiveAt', 'createdAt', 'updatedAt'
+          'inviteCodeUsed', 'adFreeUntil', 'adsWatchedWindow', 'lastActiveAt', 'createdAt', 'updatedAt'
         ]) &&
         data.uid == memberUid &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
@@ -516,6 +618,8 @@ service cloud.firestore {
         isValidStringList(data.requestedClasses, 30) &&
         isValidStringList(data.assignedClassSubjects, 100) &&
         (!('inviteCodeUsed' in data) || (data.inviteCodeUsed is string && data.inviteCodeUsed.size() <= 32)) &&
+        (!('adFreeUntil' in data) || data.adFreeUntil is timestamp) &&
+        (!('adsWatchedWindow' in data) || data.adsWatchedWindow is map) &&
         isValidTimestamp(data.lastActiveAt) &&
         isValidTimestamp(data.createdAt) &&
         isValidTimestamp(data.updatedAt);
@@ -2635,9 +2739,11 @@ service cloud.firestore {
       allow list: if false;
 
       // Atomic creation: reserves orgCode and creates OWNER member in the same transaction
+      // Phase 16A: subscription is server-only; clients can NEVER set subscription on create
       allow create: if isSignedIn() &&
         isValidId(orgId) &&
         isValidOrganisation(incoming()) &&
+        !('subscription' in incoming()) &&
         incoming().ownerUid == request.auth.uid &&
         existsAfter(/databases/$(database)/documents/orgCodes/$(incoming().code)) &&
         existsAfter(memberPath(orgId, request.auth.uid)) &&
@@ -2647,6 +2753,7 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
         isValidId(orgId) &&
         isValidOrganisation(incoming()) &&
+        !incoming().diff(existing()).affectedKeys().hasAny(['subscription']) &&
         incoming().code == existing().code &&
         incoming().createdAt == existing().createdAt && (
           // Action 1: Admin or settings-editor updating org profile or global settings
@@ -2697,7 +2804,9 @@ service cloud.firestore {
 
         allow create: if isSignedIn() &&
           isValidId(memberUid) &&
-          isValidMember(incoming(), memberUid) && (
+          isValidMember(incoming(), memberUid) &&
+          !('adFreeUntil' in incoming()) &&
+          !('adsWatchedWindow' in incoming()) && (
             // Action 1: Org creation bootstrap (Owner creates their own OWNER record atomically)
             (
               request.auth.uid == memberUid &&
@@ -2733,12 +2842,15 @@ service cloud.firestore {
             )
           );
 
-        allow update: if isSignedIn() &&
-          isValidId(memberUid) &&
-          isValidMember(incoming(), memberUid) &&
-          incoming().uid == existing().uid &&
-          incoming().createdAt == existing().createdAt &&
-          canUpdateMember(orgId, memberUid);
+        allow update: if isSignedIn() && isValidId(memberUid) && (
+          (request.auth.uid == memberUid && isSelfRewardedAdFreeUpdate(memberUid)) || (
+            !incoming().diff(existing()).affectedKeys().hasAny(['adFreeUntil', 'adsWatchedWindow']) &&
+            incoming().uid == existing().uid &&
+            incoming().createdAt == existing().createdAt &&
+            isValidMember(incoming(), memberUid) &&
+            canUpdateMember(orgId, memberUid)
+          )
+        );
 
         allow delete: if isSignedIn() && isValidId(memberUid) && (
           // Owner can never be removed individually; only deleted when the entire organisation is deleted by Owner
@@ -4576,6 +4688,34 @@ service cloud.firestore {
 
         allow delete: if isSignedIn() && isOrgOwner(orgId) && !existsAfter(orgPath(orgId));
       }
+    }
+
+    // =========================================================================
+    // 4. PHASE 16A/16B: REMOTE ADS CONFIG (Readable by signed-in users; writable ONLY by App Owner)
+    // =========================================================================
+    match /appConfig/{configId} {
+      allow get: if isSignedIn() && configId == 'adsConfig';
+      allow list: if false;
+      allow create, update: if isAppOwner() &&
+        configId == 'adsConfig' &&
+        isValidRemoteAdsConfig(incoming());
+      allow delete: if isAppOwner() && configId == 'adsConfig';
+    }
+
+    // =========================================================================
+    // 5. PHASE 16B: SERVER-ONLY BILLING LOCKS & ADMOB SSV COLLECTIONS
+    //    (Admin SDK Cloud Functions only — ZERO client read or write access)
+    // =========================================================================
+    match /subscriptionPurchaseLocks/{tokenHash} {
+      allow read, write: if false;
+    }
+
+    match /rewardedAdNonces/{nonceId} {
+      allow read, write: if false;
+    }
+
+    match /rewardedAdTransactions/{txHash} {
+      allow read, write: if false;
     }
   }
 }

@@ -23,6 +23,7 @@ import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.security.SecureRandom
@@ -734,6 +735,7 @@ class OrgCloudRepository(
                     contactMobile = snap.getString("contactMobile").orEmpty(),
                     contactEmail = snap.getString("contactEmail").orEmpty(),
                     settings = CloudOrgSettings.fromMap(snap.get("settings") as? Map<*, *>),
+                    subscription = CloudOrgSubscription.fromMap(snap.get("subscription") as? Map<*, *>),
                     createdAt = snap.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
                     updatedAt = snap.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
                 )
@@ -844,10 +846,175 @@ class OrgCloudRepository(
         requestedClasses = (doc.get("requestedClasses") as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
         assignedClassSubjects = (doc.get("assignedClassSubjects") as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
         inviteCodeUsed = doc.getString("inviteCodeUsed"),
+        adFreeUntil = doc.getTimestamp("adFreeUntil", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
+        adsWatchedWindow = CloudAdsWatchedWindow.fromMap(doc.get("adsWatchedWindow") as? Map<*, *>),
         lastActiveAt = doc.getTimestamp("lastActiveAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
         createdAt = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
         updatedAt = doc.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
     )
+
+    // =========================================================================
+    // PHASE 16A: REMOTE ADS CONFIG, SERVER CLOCK OFFSET & REWARDED AD-FREE WRITE
+    // =========================================================================
+    fun observeRemoteAdsConfig(): Flow<com.example.domain.RemoteAdsConfig> =
+        db.collection("appConfig").document("adsConfig")
+            .snapshots()
+            .map { snap ->
+                if (!snap.exists()) {
+                    com.example.domain.RemoteAdsConfig()
+                } else {
+                    com.example.domain.RemoteAdsConfig(
+                        globalEnabled = snap.getBoolean("globalEnabled") ?: true,
+                        todayBannerEnabled = snap.getBoolean("todayBannerEnabled") ?: true,
+                        orgChooserBannerEnabled = snap.getBoolean("orgChooserBannerEnabled") ?: true,
+                        schoolChooserBannerEnabled = snap.getBoolean("schoolChooserBannerEnabled") ?: true,
+                        studentListBannerEnabled = snap.getBoolean("studentListBannerEnabled") ?: true,
+                        teacherListBannerEnabled = snap.getBoolean("teacherListBannerEnabled") ?: true,
+                        reportListBannerEnabled = snap.getBoolean("reportListBannerEnabled") ?: true,
+                        timetableViewBannerEnabled = snap.getBoolean("timetableViewBannerEnabled") ?: true,
+                        pdfCloseInterstitialEnabled = snap.getBoolean("pdfCloseInterstitialEnabled") ?: true,
+                        rewardedAdFreeEnabled = snap.getBoolean("rewardedAdFreeEnabled") ?: true,
+                        requireServerVerifiedRewards = snap.getBoolean("requireServerVerifiedRewards") ?: false
+                    )
+                }
+            }
+            .catch { emit(com.example.domain.RemoteAdsConfig()) }
+
+    /**
+     * Phase 16B: Calls Cloud Function `verifyPurchase` (region asia-south1) so the server
+     * verifies the Google Play purchase token with Play Developer API and writes `organisations/{orgId}.subscription`.
+     * Clients NEVER write `subscription` directly.
+     */
+    suspend fun verifyPlaySubscriptionWithServer(
+        orgId: String,
+        purchaseToken: String,
+        productId: String = com.example.domain.Phase16BillingConstants.SUBSCRIPTION_PRODUCT_ID,
+        basePlanId: String = ""
+    ): Result<com.example.domain.OrgSubscription> {
+        if (auth.currentUser == null) {
+            return Result.failure(IllegalStateException("Not signed in"))
+        }
+        if (!isOnlineProvider()) {
+            return Result.failure(IllegalStateException("Offline"))
+        }
+        return try {
+            val functions = com.google.firebase.functions.FirebaseFunctions.getInstance(
+                com.example.domain.Phase16BillingConstants.FUNCTIONS_REGION
+            )
+            val payload = hashMapOf<String, Any>(
+                "orgId" to orgId,
+                "purchaseToken" to purchaseToken,
+                "productId" to productId,
+                "basePlanId" to basePlanId
+            )
+            val result = functions
+                .getHttpsCallable(com.example.domain.Phase16BillingConstants.FN_VERIFY_PURCHASE)
+                .call(payload)
+                .await()
+            val dataMap = result.data as? Map<*, *>
+            val subMap = (dataMap?.get("subscription") as? Map<*, *>) ?: dataMap
+            val parsed = com.example.domain.OrgSubscription(
+                status = com.example.domain.OrgSubscriptionStatus.fromWire(subMap?.get("status") as? String),
+                plan = (subMap?.get("plan") as? String).orEmpty(),
+                expiresAtMs = (subMap?.get("expiresAtMs") as? Number)?.toLong(),
+                autoRenewing = (subMap?.get("autoRenewing") as? Boolean) ?: false,
+                updatedAtMs = (subMap?.get("updatedAtMs") as? Number)?.toLong(),
+                purchaseTokenHash = (subMap?.get("purchaseTokenHash") as? String).orEmpty()
+            )
+            Result.success(parsed)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Phase 16B: Requests a single-use opaque random nonce from Cloud Function `createRewardedAdNonce`
+     * for AdMob Server-Side Verification (SSV). The nonce contains ZERO user/school PII.
+     * Returns null cleanly if Cloud Functions is not yet deployed or offline.
+     */
+    suspend fun requestRewardedAdSsvNonce(orgId: String): String? {
+        if (auth.currentUser == null || !isOnlineProvider() || orgId.isBlank()) return null
+        return try {
+            val functions = com.google.firebase.functions.FirebaseFunctions.getInstance(
+                com.example.domain.Phase16BillingConstants.FUNCTIONS_REGION
+            )
+            val result = functions
+                .getHttpsCallable(com.example.domain.Phase16BillingConstants.FN_CREATE_REWARDED_NONCE)
+                .call(hashMapOf("orgId" to orgId))
+                .await()
+            val dataMap = result.data as? Map<*, *>
+            (dataMap?.get("nonce") as? String)?.trim()?.takeIf { it.isNotBlank() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Derives server clock offset (`serverMs - phoneMs`) using Firestore `FieldValue.serverTimestamp()`
+     * on the user's own profile doc so time comparisons never rely on the phone clock alone.
+     */
+    suspend fun syncServerClockOffset(uid: String): Long? {
+        if (uid.isBlank() || !isOnlineProvider()) return null
+        return try {
+            val userRef = db.collection("users").document(uid)
+            val beforeMs = System.currentTimeMillis()
+            userRef.update("updatedAt", FieldValue.serverTimestamp()).await()
+            val snap = userRef.get(Source.SERVER).await()
+            val afterMs = System.currentTimeMillis()
+            val serverTs = snap.getTimestamp("updatedAt")?.toDate()?.time ?: return null
+            val midpointPhoneMs = beforeMs + (afterMs - beforeMs) / 2L
+            serverTs - midpointPhoneMs
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Persists a completed rewarded ad-free extension on the user's own organisation member document.
+     * Strictly updates only `adFreeUntil`, `adsWatchedWindow`, and `updatedAt` (validated by Firestore rules).
+     */
+    suspend fun recordMemberRewardedAdCompletion(
+        orgId: String,
+        uid: String,
+        updatedState: com.example.domain.RewardedAdFreeState
+    ): Result<Unit> {
+        val currentUid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
+        if (currentUid != uid) {
+            return Result.failure(IllegalAccessException("Can only update your own ad-free state."))
+        }
+        val path = "organisations/$orgId/members/$uid"
+        return try {
+            val memberRef = db.collection("organisations").document(orgId)
+                .collection("members").document(uid)
+            val windowMap = mapOf(
+                "windowStartAt" to Timestamp(Date(updatedState.window.windowStartAtMs)),
+                "countInWindow" to updatedState.window.countInWindow.toLong(),
+                "dailyDateKey" to updatedState.window.dailyDateKey,
+                "dailyCount" to updatedState.window.dailyCount.toLong(),
+                "totalCount" to updatedState.window.totalCount,
+                "lastRewardedAt" to FieldValue.serverTimestamp()
+            )
+            memberRef.update(
+                mapOf(
+                    "adFreeUntil" to Timestamp(Date(updatedState.adFreeUntilMs)),
+                    "adsWatchedWindow" to windowMap,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
 
     // =========================================================================
     // 6. MEMBER MANAGEMENT, TEACHER PROFILE, OWNERSHIP TRANSFER & DELETION

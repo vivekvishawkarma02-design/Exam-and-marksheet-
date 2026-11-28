@@ -16,7 +16,7 @@ android {
   val appVersionName = findProperty("APP_VERSION_NAME")?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: "1.0.0"
 
   defaultConfig {
-    applicationId = "com.aistudio.cpireportcard.ghzpkr"
+    applicationId = "com.vivek.schoolreportcard"
     minSdk = 24
     targetSdk = 36
     versionCode = appVersionCode
@@ -43,17 +43,39 @@ android {
     }
   }
 
+  val releaseAdmobAppId = (System.getenv("ADMOB_APP_ID") ?: findProperty("ADMOB_APP_ID")?.toString()).orEmpty().trim()
+  val releaseAdmobBannerId = (System.getenv("ADMOB_BANNER_ID") ?: findProperty("ADMOB_BANNER_ID")?.toString()).orEmpty().trim()
+  val releaseAdmobInterstitialId = (System.getenv("ADMOB_INTERSTITIAL_ID") ?: findProperty("ADMOB_INTERSTITIAL_ID")?.toString()).orEmpty().trim()
+  val releaseAdmobRewardedId = (System.getenv("ADMOB_REWARDED_ID") ?: findProperty("ADMOB_REWARDED_ID")?.toString()).orEmpty().trim()
+  fun quoteBuildConfig(v: String): String = "\"${v.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
   buildTypes {
     release {
       isCrunchPngs = false
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      // Real AdMob IDs come strictly from CI/GitHub secrets (never hard-coded or committed).
+      // When ADMOB_APP_ID is absent, BuildConfig.ADMOB_APP_ID is empty (disabling all ads in Kotlin),
+      // while manifestPlaceholders uses a syntactically valid inert dummy ID so MobileAdsInitProvider
+      // never crashes at startup before Kotlin disables the SDK.
+      manifestPlaceholders["admobApplicationId"] =
+        releaseAdmobAppId.ifBlank { "ca-app-pub-0000000000000000~0000000000" }
+      buildConfigField("String", "ADMOB_APP_ID", quoteBuildConfig(releaseAdmobAppId))
+      buildConfigField("String", "ADMOB_BANNER_ID", quoteBuildConfig(releaseAdmobBannerId))
+      buildConfigField("String", "ADMOB_INTERSTITIAL_ID", quoteBuildConfig(releaseAdmobInterstitialId))
+      buildConfigField("String", "ADMOB_REWARDED_ID", quoteBuildConfig(releaseAdmobRewardedId))
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
+      // Debug and tests use ONLY Google's official TEST ad unit IDs.
+      manifestPlaceholders["admobApplicationId"] = "ca-app-pub-3940256099942544~3347511713"
+      buildConfigField("String", "ADMOB_APP_ID", "\"ca-app-pub-3940256099942544~3347511713\"")
+      buildConfigField("String", "ADMOB_BANNER_ID", "\"ca-app-pub-3940256099942544/9214589741\"")
+      buildConfigField("String", "ADMOB_INTERSTITIAL_ID", "\"ca-app-pub-3940256099942544/1033173712\"")
+      buildConfigField("String", "ADMOB_REWARDED_ID", "\"ca-app-pub-3940256099942544/5224354917\"")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
       signingConfig = signingConfigs.getByName("debugConfig")
@@ -125,9 +147,13 @@ dependencies {
   // implementation(libs.firebase.ai)
   implementation(libs.firebase.firestore)
   implementation(libs.firebase.auth)
+  implementation(libs.firebase.functions)
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)
+  implementation(libs.play.services.ads)
+  implementation(libs.user.messaging.platform)
+  implementation(libs.android.billing.ktx)
   // implementation(libs.firebase.appcheck.recaptcha)
   // implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)

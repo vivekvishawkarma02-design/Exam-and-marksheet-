@@ -19,3 +19,6 @@ debug.keystore
 *-debug.log
 google-services.json
 app/google-services.json
+functions/node_modules/
+functions/lib/
+

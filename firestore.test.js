@@ -13,8 +13,8 @@ const TEACHER_UID = "teacher_phone_b";
 const ADMIN_UID = "admin_user_c";
 const OTHER_ORG_UID = "outsider_phone_c";
 
-const ORG_ID = "org_sts_001";
-const ORG_CODE = "sts-ghazipur";
+const ORG_ID = "org_demo_001";
+const ORG_CODE = "demo-schools";
 const SCHOOL_1 = "sch_primary_01";
 const SCHOOL_2 = "sch_inter_02";
 const OTHER_ORG_ID = "org_rival_999";
@@ -138,16 +138,16 @@ async function seedOrgWithOwnerAndSchools() {
     const db = ctx.firestore();
     await db.collection("orgCodes").doc(ORG_CODE).set({
       orgId: ORG_ID,
-      name: "STS Group of Schools",
+      name: "Demo Group of Schools",
       ownerUid: OWNER_UID,
       createdAt: ts,
     });
     await db.collection("organisations").doc(ORG_ID).set({
-      name: "STS Group of Schools",
+      name: "Demo Group of Schools",
       code: ORG_CODE,
       ownerUid: OWNER_UID,
       contactMobile: "9000000001",
-      contactEmail: "owner@sts.edu",
+      contactEmail: "owner@demoschool.example",
       settings: defaultSettings(),
       createdAt: ts,
       updatedAt: ts,
@@ -163,10 +163,10 @@ async function seedOrgWithOwnerAndSchools() {
       })
     );
     await db.collection("organisations").doc(ORG_ID).collection("schools").doc(SCHOOL_1).set(
-      makeSchoolPayload(SCHOOL_1, "STS Primary")
+      makeSchoolPayload(SCHOOL_1, "Demo Primary")
     );
     await db.collection("organisations").doc(ORG_ID).collection("schools").doc(SCHOOL_2).set(
-      makeSchoolPayload(SCHOOL_2, "STS Inter")
+      makeSchoolPayload(SCHOOL_2, "Demo Senior")
     );
     await db.collection("organisations").doc(ORG_ID).collection("schools").doc(SCHOOL_1)
       .collection("students").doc("stu_1").set(makeStudentPayload(SCHOOL_1));
@@ -219,16 +219,16 @@ test("Acceptance (a): Phone A atomically creates organisation, reserves code, ad
 
   batch.set(ownerDb.collection("orgCodes").doc(ORG_CODE), {
     orgId: ORG_ID,
-    name: "STS Ghazipur",
+    name: "Demo Schools",
     ownerUid: OWNER_UID,
     createdAt: ts,
   });
   batch.set(ownerDb.collection("organisations").doc(ORG_ID), {
-    name: "STS Ghazipur",
+    name: "Demo Schools",
     code: ORG_CODE,
     ownerUid: OWNER_UID,
     contactMobile: "9000000001",
-    contactEmail: "owner@sts.edu",
+    contactEmail: "owner@demoschool.example",
     settings: defaultSettings(),
     createdAt: ts,
     updatedAt: ts,
@@ -245,7 +245,7 @@ test("Acceptance (a): Phone A atomically creates organisation, reserves code, ad
   );
   batch.set(
     ownerDb.collection("organisations").doc(ORG_ID).collection("schools").doc(SCHOOL_1),
-    makeSchoolPayload(SCHOOL_1, "STS Primary")
+    makeSchoolPayload(SCHOOL_1, "Demo Primary")
   );
   await assertSucceeds(batch.commit());
 
@@ -430,7 +430,7 @@ test("Acceptance (c) & (d): Approved Teacher sees only assigned school & modules
   );
 });
 
-test("Acceptance (e): Third user with their own organisation cannot see or touch any data of sts-ghazipur", async () => {
+test("Acceptance (e): Third user with their own organisation cannot see or touch any data of demo-schools", async () => {
   await seedOrgWithOwnerAndSchools();
   const outsiderDb = testEnv.authenticatedContext(OTHER_ORG_UID).firestore();
   const ts = pastDate(2000);
@@ -464,7 +464,7 @@ test("Acceptance (e): Third user with their own organisation cannot see or touch
   );
   await assertSucceeds(batch.commit());
 
-  // Outsider has ZERO access to STS Ghazipur
+  // Outsider has ZERO access to Demo Schools
   await assertFails(outsiderDb.collection("organisations").doc(ORG_ID).get());
   await assertFails(outsiderDb.collection("organisations").doc(ORG_ID).collection("schools").doc(SCHOOL_1).get());
   await assertFails(
@@ -527,7 +527,7 @@ test("One-time invite code redemption joins atomically without approval and cann
     ownerDb.collection("organisations").doc(ORG_ID).collection("inviteCodes").doc(code).set({
       code,
       orgId: ORG_ID,
-      orgName: "STS Group of Schools",
+      orgName: "Demo Group of Schools",
       presetRole: "TEACHER",
       allSchools: false,
       schools: [SCHOOL_1],
@@ -615,7 +615,7 @@ test("Audit log is append-only for active members and readable only by Admins; u
     ownerDb.collection("users").doc(OWNER_UID).set({
       uid: OWNER_UID,
       name: "Principal A",
-      email: "owner@sts.edu",
+      email: "owner@demoschool.example",
       memberships: [],
       pendingRequests: [],
       createdAt: ts,
@@ -863,7 +863,7 @@ test("Phase 4: Teachers and assignments module enforces edit, view-only, no-acce
   const teacherPayload = {
     name: "Mr. Verma",
     mobile: "9800000011",
-    email: "verma@sts.edu",
+    email: "verma@demoschool.example",
     photoBase64: "",
     subjects: ["MATHEMATICS", "SCIENCE"],
     schoolIds: [SCHOOL_1, SCHOOL_2],
@@ -2198,7 +2198,7 @@ test("Phase 9: Student Register (11th module) & Fees (10th module) permissions, 
     await orgRef.collection("members").doc(FEE_CLERK).set({
       uid: FEE_CLERK,
       name: "Mr. Fee Clerk",
-      email: "clerk@sts.edu",
+      email: "clerk@demoschool.example",
       mobile: "9800000101",
       role: "OFFICE_OPERATOR",
       status: "active",
@@ -2231,7 +2231,7 @@ test("Phase 9: Student Register (11th module) & Fees (10th module) permissions, 
     await orgRef.collection("members").doc(FEE_VIEWER).set({
       uid: FEE_VIEWER,
       name: "Ms. Fee Viewer",
-      email: "viewer@sts.edu",
+      email: "viewer@demoschool.example",
       mobile: "9800000102",
       role: "OTHER",
       status: "active",
@@ -2264,7 +2264,7 @@ test("Phase 9: Student Register (11th module) & Fees (10th module) permissions, 
     await orgRef.collection("members").doc(REG_ONLY_EDITOR).set({
       uid: REG_ONLY_EDITOR,
       name: "Register Clerk",
-      email: "reg@sts.edu",
+      email: "reg@demoschool.example",
       mobile: "9800000103",
       role: "OFFICE_OPERATOR",
       status: "active",
@@ -2297,7 +2297,7 @@ test("Phase 9: Student Register (11th module) & Fees (10th module) permissions, 
     await orgRef.collection("members").doc(LEGACY_MEMBER).set({
       uid: LEGACY_MEMBER,
       name: "Legacy Teacher",
-      email: "legacy9@sts.edu",
+      email: "legacy9@demoschool.example",
       mobile: "9800000104",
       role: "TEACHER",
       status: "active",
@@ -2345,7 +2345,7 @@ test("Phase 9: Student Register (11th module) & Fees (10th module) permissions, 
     dob: "2017-03-14",
     mobile: "9839100001",
     secondMobile: "9839100002",
-    address: "Civil Lines, Ghazipur",
+    address: "123 Station Road, Demo Nagar",
     photoBase64: "",
     className: "3rd",
     section: "A",
@@ -2726,7 +2726,7 @@ test("17. Phase 10: Certificates, Cash Book & Enquiry RBAC, missing-key denial, 
       orgRef.collection("members").doc(uid).set({
         uid,
         name,
-        email: `${uid}@sts.edu`,
+        email: `${uid}@demoschool.example`,
         mobile: "9800000200",
         role,
         status: "active",
@@ -4245,7 +4245,7 @@ test("21. Phase 15: Normal member deletion preserves records + blocks deleted us
       uid: TEACHER_UID,
       name: "Mrs. Sharma",
       email: "sharma@example.org",
-      memberships: [{ orgId: ORG_ID, orgName: "STS Group of Schools", orgCode: ORG_CODE, role: "TEACHER", status: "active" }],
+      memberships: [{ orgId: ORG_ID, orgName: "Demo Group of Schools", orgCode: ORG_CODE, role: "TEACHER", status: "active" }],
       pendingRequests: [],
       createdAt: ts,
       updatedAt: ts,
@@ -4253,8 +4253,8 @@ test("21. Phase 15: Normal member deletion preserves records + blocks deleted us
     await db.collection("users").doc(OWNER_UID).set({
       uid: OWNER_UID,
       name: "Principal A",
-      email: "owner@sts.edu",
-      memberships: [{ orgId: ORG_ID, orgName: "STS Group of Schools", orgCode: ORG_CODE, role: "OWNER", status: "active" }],
+      email: "owner@demoschool.example",
+      memberships: [{ orgId: ORG_ID, orgName: "Demo Group of Schools", orgCode: ORG_CODE, role: "OWNER", status: "active" }],
       pendingRequests: [],
       createdAt: ts,
       updatedAt: ts,
@@ -4567,7 +4567,7 @@ test("Phase 17: Result Analysis enforces missing-key denial, read-only access, a
       name: "Mrs. Verma",
       shortCode: "MV",
       mobile: "9000000111",
-      email: "verma@sts.edu",
+      email: "verma@demoschool.example",
       active: true,
       maxPeriodsPerWeek: 30,
       maxPeriodsPerDay: 6,

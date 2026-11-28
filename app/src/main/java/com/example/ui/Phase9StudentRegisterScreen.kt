@@ -41,9 +41,11 @@ import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DirectionsBus
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.FamilyRestroom
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
@@ -91,6 +93,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.StudentEntity
+import com.example.domain.AdScreenSurface
+import com.example.domain.AppModule
 import com.example.domain.Phase6DateUtils
 import com.example.domain.Phase9AccessEvaluator
 import com.example.domain.StudentRegisterEngine
@@ -205,6 +209,71 @@ fun StudentRegisterHeader(
     }
 }
 
+@Composable
+fun StudentRegisterEmptyState(
+    hasAnyStudentsInSession: Boolean,
+    canEditRegister: Boolean,
+    onAddFirstStudent: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 16.dp)
+            .testTag("register_empty_state_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = if (!hasAnyStudentsInSession) {
+                    "Add First Student"
+                } else {
+                    "No students match the current filter."
+                },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.testTag("register_empty_state_title")
+            )
+            Text(
+                text = if (!hasAnyStudentsInSession) {
+                    if (canEditRegister) {
+                        "Add your first student to the register, or use Bulk Import for CSV and Excel files."
+                    } else {
+                        "No students have been added to this school yet (view-only access)."
+                    }
+                } else {
+                    "Adjust search/filter chips or add a new student to the register."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (canEditRegister) {
+                Button(
+                    onClick = onAddFirstStudent,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("register_add_first_student_button")
+                ) {
+                    Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Add First Student",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Phase9StudentRegisterScreen(
@@ -212,12 +281,14 @@ fun Phase9StudentRegisterScreen(
     onBack: () -> Unit,
     onOpenFeeCollectionForStudent: (StudentEntity) -> Unit = {},
     onOpenCertificatesForStudent: (StudentEntity) -> Unit = {},
+    onOpenCoScholasticForStudent: (StudentEntity) -> Unit = {},
     onNavigateToTransport: () -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val pdfState by viewModel.timetablePdfState.collectAsStateWithLifecycle()
+    val adsUiState by viewModel.adsUiState.collectAsStateWithLifecycle()
 
     val activeSchool = uiState.activeSchool
     val activeSchoolDocId = uiState.activeSchoolDocId
@@ -225,6 +296,7 @@ fun Phase9StudentRegisterScreen(
         uiState.accessProfile,
         activeSchoolDocId
     ) || uiState.canEditStudentRegister
+    val canViewCoScholastic = uiState.canView(AppModule.CO_SCHOLASTIC)
 
     var searchQuery by remember { mutableStateOf("") }
     var statusFilter by remember { mutableStateOf<StudentRegisterStatus?>(StudentRegisterStatus.ACTIVE) }
@@ -235,6 +307,7 @@ fun Phase9StudentRegisterScreen(
 
     var editingStudent by remember { mutableStateOf<StudentEntity?>(null) }
     var showAddEditDialog by remember { mutableStateOf(false) }
+    var deletingStudent by remember { mutableStateOf<StudentEntity?>(null) }
     var classChangeTarget by remember { mutableStateOf<StudentEntity?>(null) }
     var statusChangeTarget by remember { mutableStateOf<StudentEntity?>(null) }
     var siblingLinkTarget by remember { mutableStateOf<StudentEntity?>(null) }
@@ -295,8 +368,13 @@ fun Phase9StudentRegisterScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("phase9_student_register_screen")
+    ) {
+    Column(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         // Two-row responsive header bar
         StudentRegisterHeader(
@@ -464,30 +542,14 @@ fun Phase9StudentRegisterScreen(
         Spacer(modifier = Modifier.height(6.dp))
 
         if (filteredStudents.isEmpty()) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 24.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "No students match the current filter.",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = "Adjust search/filter chips or add a new student to the register.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            StudentRegisterEmptyState(
+                hasAnyStudentsInSession = schoolStudents.isNotEmpty(),
+                canEditRegister = canEditRegister,
+                onAddFirstStudent = {
+                    editingStudent = null
+                    showAddEditDialog = true
                 }
-            }
+            )
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -539,6 +601,7 @@ fun Phase9StudentRegisterScreen(
                         siblings = siblings,
                         canEditRegister = canEditRegister,
                         canViewFees = uiState.canViewFees,
+                        canViewCoScholastic = canViewCoScholastic,
                         idCardSelectionMode = idCardSelectionMode,
                         isSelectedForIdCard = student.id in selectedIdsForIdCards,
                         onToggleIdCardSelect = {
@@ -554,11 +617,13 @@ fun Phase9StudentRegisterScreen(
                         },
                         onChangeClassSection = { classChangeTarget = student },
                         onChangeStatus = { statusChangeTarget = student },
+                        onDeleteStudent = { deletingStudent = student },
                         onLinkSiblings = { siblingLinkTarget = student },
                         onFilterBySiblingGroup = { grp -> siblingGroupFilter = grp },
                         onPrintAdmissionForm = { viewModel.generateStudentAdmissionFormPdf(student) },
                         onPrintSingleIdCard = { viewModel.generateStudentIdCardsPdf(listOf(student), student.name) },
                         onOpenFees = { onOpenFeeCollectionForStudent(student) },
+                        onOpenCoScholastic = { onOpenCoScholasticForStudent(student) },
                         canViewCertificates = uiState.canViewCertificates,
                         onOpenCertificates = { onOpenCertificatesForStudent(student) },
                         onOpenSessionHistory = { historyTarget = student },
@@ -571,6 +636,28 @@ fun Phase9StudentRegisterScreen(
                 }
             }
         }
+    }
+
+    // Phase 16B: ONE adaptive banner at bottom of the single Student Register list (never during dialogs or open PDFs)
+    val allowStudentListBanner = !showAddEditDialog &&
+        deletingStudent == null &&
+        classChangeTarget == null &&
+        statusChangeTarget == null &&
+        siblingLinkTarget == null &&
+        historyTarget == null &&
+        pickupTarget == null &&
+        remarksTarget == null &&
+        !pdfState.isGenerating &&
+        pdfState.generatedFile == null &&
+        pdfState.generatedZipFile == null
+    if (allowStudentListBanner) {
+        AdaptiveAdBannerSlot(
+            eligibility = adsUiState.bannerEligibility(AdScreenSurface.STUDENT_LIST),
+            canRequestAds = adsUiState.canRequestAdsFromConsent,
+            bannerUnitId = adsUiState.unitIds.bannerId,
+            testTagPrefix = "student_list"
+        )
+    }
     }
 
     if (showAddEditDialog) {
@@ -600,6 +687,19 @@ fun Phase9StudentRegisterScreen(
             viewModel = viewModel,
             student = statusChangeTarget!!,
             onDismiss = { statusChangeTarget = null }
+        )
+    }
+
+    deletingStudent?.let { st ->
+        ConfirmDangerDialog(
+            title = "Delete Student?",
+            message = "Delete ${st.name} (Adm No. ${st.admNo}) along with all their marks, attendance, and co-scholastic records? This cannot be undone.",
+            confirmLabel = "Delete",
+            onConfirm = {
+                viewModel.deleteStudent(st)
+                deletingStudent = null
+            },
+            onDismiss = { deletingStudent = null }
         )
     }
 
@@ -902,17 +1002,20 @@ private fun StudentRegisterCard(
     siblings: List<StudentEntity>,
     canEditRegister: Boolean,
     canViewFees: Boolean,
+    canViewCoScholastic: Boolean = false,
     idCardSelectionMode: Boolean,
     isSelectedForIdCard: Boolean,
     onToggleIdCardSelect: () -> Unit,
     onEditStudent: () -> Unit,
     onChangeClassSection: () -> Unit,
     onChangeStatus: () -> Unit,
+    onDeleteStudent: () -> Unit = {},
     onLinkSiblings: () -> Unit,
     onFilterBySiblingGroup: (String) -> Unit,
     onPrintAdmissionForm: () -> Unit,
     onPrintSingleIdCard: () -> Unit,
     onOpenFees: () -> Unit,
+    onOpenCoScholastic: () -> Unit = {},
     canViewCertificates: Boolean = false,
     onOpenCertificates: () -> Unit = {},
     onOpenSessionHistory: () -> Unit = {},
@@ -1211,6 +1314,16 @@ private fun StudentRegisterCard(
                         .heightIn(min = 48.dp)
                         .testTag("register_pickups_${student.admNo}")
                 )
+                if (canViewCoScholastic) {
+                    AssistChip(
+                        onClick = onOpenCoScholastic,
+                        label = { Text("Co-Scholastic") },
+                        leadingIcon = { Icon(Icons.Default.FactCheck, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("register_coscholastic_${student.admNo}")
+                    )
+                }
                 if (canViewRemarksForStudent) {
                     AssistChip(
                         onClick = onOpenRemarks,
@@ -1219,6 +1332,23 @@ private fun StudentRegisterCard(
                         modifier = Modifier
                             .heightIn(min = 48.dp)
                             .testTag("register_remarks_${student.admNo}")
+                    )
+                }
+                if (canEditRegister) {
+                    AssistChip(
+                        onClick = onDeleteStudent,
+                        label = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.DeleteOutline,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("register_delete_${student.admNo}")
                     )
                 }
             }

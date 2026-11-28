@@ -20,6 +20,14 @@ import com.example.util.OperationType
 import com.example.util.friendlyFirestoreErrorMessage
 import com.example.util.handleFirestoreError
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.example.BuildConfig
+import com.example.ads.AdMobRequestFactory
+import com.example.ads.Phase16AdMobController
+import com.example.domain.DebugSubscriptionSimulation
+import com.example.domain.OrgSubscription
+import com.example.domain.OrgSubscriptionStatus
+import com.example.domain.Phase16AdsPolicyEngine
+import com.example.domain.RemoteAdsConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -27,11 +35,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -89,11 +101,89 @@ class OrgSessionViewModel(
     private var codeCheckJob: Job? = null
     private var wasOffline = !connectivityMonitor.isCurrentlyOnline()
 
+    // Phase 16A: Org-Chooser ads state (zero ads if any cached membership is active/grace)
+    private val _remoteAdsConfig = MutableStateFlow(RemoteAdsConfig())
+    private val _serverOffsetMs = MutableStateFlow(offlinePrefs.getLastKnownServerOffsetMs())
+    private val _adsClockTick = MutableStateFlow(System.currentTimeMillis())
+
+    val adsUiState: StateFlow<Phase16AdsUiState> = combine(
+        _state,
+        _remoteAdsConfig,
+        _serverOffsetMs,
+        _adsClockTick,
+        Phase16AdMobController.canRequestAds
+    ) { ui, remoteCfg, offsetMs, phoneNowMs, canReqAds ->
+        val unitIds = AdMobRequestFactory.currentBuildUnitIds()
+        val serverNow = Phase16AdsPolicyEngine.serverNowMs(phoneNowMs, offsetMs)
+        val firstInstallMs = offlinePrefs.getOrInitFirstInstallMs(serverNow)
+        val membershipOrgIds = ui.userAccount?.memberships?.map { it.orgId }.orEmpty()
+        val cachedPaid = offlinePrefs.hasAnyCachedAdFreeSubscription(membershipOrgIds)
+        val baseSub = if (cachedPaid) {
+            OrgSubscription(status = OrgSubscriptionStatus.ACTIVE)
+        } else {
+            OrgSubscription.DEFAULT_FREE
+        }
+        val debugSim = if (BuildConfig.DEBUG) offlinePrefs.getDebugSubscriptionSimulation() else DebugSubscriptionSimulation.FOLLOW_SERVER
+        val debugBypass = if (BuildConfig.DEBUG) offlinePrefs.getDebugBypassInstallGrace() else false
+        val effectiveSub = Phase16AdsPolicyEngine.resolveEffectiveSubscription(
+            orgSubscription = baseSub,
+            isDebugBuild = BuildConfig.DEBUG,
+            debugSimulation = debugSim
+        )
+        Phase16AdsUiState(
+            orgSubscription = baseSub,
+            effectiveSubscription = effectiveSub,
+            rewardedState = offlinePrefs.loadLatestRewardedAdFreeStateForUser(currentUserId),
+            remoteConfig = remoteCfg,
+            unitIds = unitIds,
+            interstitialFrequency = offlinePrefs.loadInterstitialFrequencyState(),
+            isOnline = ui.isOnline,
+            firstInstallServerMs = firstInstallMs,
+            serverNowMs = serverNow,
+            canRequestAdsFromConsent = canReqAds,
+            isPrivacyOptionsRequired = Phase16AdMobController.isPrivacyOptionsRequired.value,
+            isRewardedLoading = Phase16AdMobController.isRewardedLoading.value,
+            debugSimulation = debugSim,
+            debugBypassInstallGrace = debugBypass
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = Phase16AdsUiState(isOnline = connectivityMonitor.isCurrentlyOnline())
+    )
+
     init {
         observeConnectivity()
         observeUserAccount()
         bootstrapAndSyncAccount()
         inspectLocalPhoneData()
+        observePhase16AdsSupport()
+    }
+
+    private fun observePhase16AdsSupport() {
+        viewModelScope.launch {
+            orgRepo.observeRemoteAdsConfig().collect { cfg ->
+                _remoteAdsConfig.value = cfg
+            }
+        }
+        viewModelScope.launch {
+            syncServerClockOffsetBestEffort()
+        }
+        viewModelScope.launch {
+            while (isActive) {
+                delay(30_000L)
+                _adsClockTick.value = System.currentTimeMillis()
+            }
+        }
+    }
+
+    private suspend fun syncServerClockOffsetBestEffort() {
+        val offset = orgRepo.syncServerClockOffset(currentUserId)
+        if (offset != null) {
+            offlinePrefs.setLastKnownServerOffsetMs(offset)
+            _serverOffsetMs.value = offset
+            _adsClockTick.value = System.currentTimeMillis()
+        }
     }
 
     private fun observeConnectivity() {
@@ -103,6 +193,7 @@ class OrgSessionViewModel(
                 if (online && wasOffline) {
                     wasOffline = false
                     refreshMemberships(silent = true)
+                    syncServerClockOffsetBestEffort()
                 } else if (!online) {
                     wasOffline = true
                 }

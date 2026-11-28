@@ -78,7 +78,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.cloud.CloudMember
+import com.example.domain.AdScreenSurface
 import com.example.domain.AppModule
 import com.example.domain.DayOfWeekCode
 import com.example.domain.MemberStatus
@@ -103,6 +105,7 @@ fun TeachersAndAssignmentsScreen(
     BackHandler(onBack = onBack)
 
     val canEdit = uiState.canEdit(AppModule.TEACHERS)
+    val adsUiState by viewModel.adsUiState.collectAsStateWithLifecycle()
     val allWarnings = remember(
         uiState.teachers,
         uiState.periodStructuresBySchool,
@@ -250,6 +253,16 @@ fun TeachersAndAssignmentsScreen(
                 viewModel = viewModel,
                 canEdit = canEdit,
                 modifier = Modifier.weight(1f)
+            )
+        }
+
+        // Phase 16B: ONE adaptive banner at bottom of Teacher list tab only (never on Period/Assignment/Rule editing tabs)
+        if (selectedTab == 0) {
+            AdaptiveAdBannerSlot(
+                eligibility = adsUiState.bannerEligibility(AdScreenSurface.TEACHER_LIST),
+                canRequestAds = adsUiState.canRequestAdsFromConsent,
+                bannerUnitId = adsUiState.unitIds.bannerId,
+                testTagPrefix = "teacher_list"
             )
         }
     }

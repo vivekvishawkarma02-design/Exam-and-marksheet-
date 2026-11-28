@@ -44,10 +44,10 @@ class Phase12PdfRobolectricTest {
 
     private fun makeSchool(): SchoolEntity = SchoolEntity(
         id = 1L,
-        name = "C.P.S. SCHOOL",
-        address = "Harikaranpur Bijaura, Ghazipur (U.P.)",
+        name = "DEMO MODEL SCHOOL",
+        address = "123 Station Road, Demo Nagar",
         mobile = "9876543210",
-        email = "cps@example.edu",
+        email = "office@demoschool.example",
         logoBase64 = samplePngBase64(Color.rgb(30, 58, 95)),
         active = true
     )

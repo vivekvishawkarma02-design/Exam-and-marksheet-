@@ -68,14 +68,55 @@ jobs:
         run: |
           PROJECT_ID="${PROJECT_ID_SECRET:-$PROJECT_ID_VAR}"
           CRED_FILE="$RUNNER_TEMP/firebase-service-account.json"
+          LOG_FILE="$RUNNER_TEMP/firebase-indexes-deploy.log"
+          SUMMARY_FILE="$RUNNER_TEMP/rules-release-summary.txt"
           printf '%s' "$SA_JSON" > "$CRED_FILE"
           chmod 600 "$CRED_FILE"
           export GOOGLE_APPLICATION_CREDENTIALS="$CRED_FILE"
 
-          npx --yes firebase-tools@latest deploy \
-            --only firestore:rules,firestore:indexes \
+          WAITS=(20 40 60 90 120)
+          MAX_ATTEMPTS=6
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            echo "Attempt $attempt of $MAX_ATTEMPTS: deploying Firestore indexes..."
+            set +e
+            npx --yes firebase-tools@latest deploy \
+              --only firestore:indexes \
+              --project "$PROJECT_ID" \
+              --force > "$LOG_FILE" 2>&1
+            STATUS=$?
+            set -e
+            cat "$LOG_FILE"
+
+            if [ "$STATUS" -eq 0 ]; then
+              rm -f "$LOG_FILE"
+              echo "Indexes deploy succeeded on attempt $attempt of $MAX_ATTEMPTS."
+              break
+            fi
+
+            if grep -Eiq 'HTTP Error: (400|403|409)|\b(400|403|409)\b' "$LOG_FILE"; then
+              rm -f "$LOG_FILE"
+              echo "::error::Non-retryable error during indexes deploy (exit code $STATUS). Failing immediately."
+              exit "$STATUS"
+            elif grep -Eiq '503|unavailable|ETIMEDOUT|ECONNRESET' "$LOG_FILE"; then
+              rm -f "$LOG_FILE"
+              if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+                WAIT_SEC="${WAITS[$((attempt - 1))]}"
+                echo "Transient error detected (503/unavailable/ETIMEDOUT/ECONNRESET). Waiting ${WAIT_SEC}s before retry..."
+                sleep "$WAIT_SEC"
+              else
+                echo "::error::Indexes deploy failed after $MAX_ATTEMPTS attempts (exit code $STATUS)."
+                exit "$STATUS"
+              fi
+            else
+              rm -f "$LOG_FILE"
+              echo "::error::Non-retryable error during indexes deploy (exit code $STATUS). Failing immediately."
+              exit "$STATUS"
+            fi
+          done
+
+          node scripts/release-firestore-rules.mjs \
             --project "$PROJECT_ID" \
-            --force
+            --summary-out "$SUMMARY_FILE"
 
       - name: Deploy Firestore Rules, Indexes, and Cloud Functions
         if: ${{ (inputs.target || 'rules-only') == 'rules-and-functions' }}
@@ -87,6 +128,7 @@ jobs:
         run: |
           PROJECT_ID="${PROJECT_ID_SECRET:-$PROJECT_ID_VAR}"
           CRED_FILE="$RUNNER_TEMP/firebase-service-account.json"
+          SUMMARY_FILE="$RUNNER_TEMP/rules-release-summary.txt"
           printf '%s' "$SA_JSON" > "$CRED_FILE"
           chmod 600 "$CRED_FILE"
           export GOOGLE_APPLICATION_CREDENTIALS="$CRED_FILE"
@@ -109,6 +151,11 @@ jobs:
             --only firestore:rules,firestore:indexes,functions \
             --force
 
+          node scripts/release-firestore-rules.mjs \
+            --project "$PROJECT_ID" \
+            --readback-only \
+            --summary-out "$SUMMARY_FILE"
+
       - name: Clean up temporary credential files
         if: always()
         run: |
@@ -117,5 +164,10 @@ jobs:
       - name: Confirm released rules database
         if: success()
         run: |
-          DB_NAME=$(node -e "const cfg = require('./firebase.json'); console.log(cfg.firestore[0].database);")
-          echo "Rules released to database $DB_NAME"
+          SUMMARY_FILE="$RUNNER_TEMP/rules-release-summary.txt"
+          if [ ! -s "$SUMMARY_FILE" ]; then
+            echo "::error::Missing real rules readback summary ($SUMMARY_FILE)."
+            exit 1
+          fi
+          cat "$SUMMARY_FILE"
+          rm -f "$SUMMARY_FILE"

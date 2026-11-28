@@ -44,6 +44,11 @@ jobs:
           npm run build
           npm test
 
+      - name: Check Firestore Rules compiled size (<= 230,000 bytes)
+        run: |
+          npx --yes firebase-tools@latest setup:emulators:firestore
+          node scripts/check-firestore-rules-size.mjs firestore.rules 230000
+
       - name: Deploy Firestore Rules, Indexes, and Cloud Functions
         env:
           SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}

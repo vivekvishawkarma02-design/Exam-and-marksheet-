@@ -2,13 +2,22 @@ name: Deploy Firebase
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: "Deployment target"
+        required: true
+        default: "rules-only"
+        type: choice
+        options:
+          - rules-only
+          - rules-and-functions
 
 permissions:
   contents: read
 
 jobs:
   deploy-firebase:
-    name: Build, Test & Deploy Firebase (Rules, Indexes, Functions)
+    name: Build, Test & Deploy Firebase
     runs-on: ubuntu-latest
 
     steps:
@@ -38,6 +47,7 @@ jobs:
           echo "Configuration check passed (secrets verified without printing values)."
 
       - name: Install, build, and test Cloud Functions
+        if: ${{ (inputs.target || 'rules-only') == 'rules-and-functions' }}
         working-directory: functions
         run: |
           npm install
@@ -49,7 +59,26 @@ jobs:
           npx --yes firebase-tools@latest setup:emulators:firestore
           node scripts/check-firestore-rules-size.mjs firestore.rules 230000
 
+      - name: Deploy Firestore Rules and Indexes (named database)
+        if: ${{ (inputs.target || 'rules-only') == 'rules-only' }}
+        env:
+          SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          PROJECT_ID_SECRET: ${{ secrets.FIREBASE_PROJECT_ID }}
+          PROJECT_ID_VAR: ${{ vars.FIREBASE_PROJECT_ID }}
+        run: |
+          PROJECT_ID="${PROJECT_ID_SECRET:-$PROJECT_ID_VAR}"
+          CRED_FILE="$RUNNER_TEMP/firebase-service-account.json"
+          printf '%s' "$SA_JSON" > "$CRED_FILE"
+          chmod 600 "$CRED_FILE"
+          export GOOGLE_APPLICATION_CREDENTIALS="$CRED_FILE"
+
+          npx --yes firebase-tools@latest deploy \
+            --only firestore:rules,firestore:indexes \
+            --project "$PROJECT_ID" \
+            --force
+
       - name: Deploy Firestore Rules, Indexes, and Cloud Functions
+        if: ${{ (inputs.target || 'rules-only') == 'rules-and-functions' }}
         env:
           SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           PROJECT_ID_SECRET: ${{ secrets.FIREBASE_PROJECT_ID }}
@@ -84,3 +113,9 @@ jobs:
         if: always()
         run: |
           rm -f "$RUNNER_TEMP/firebase-service-account.json" functions/.env
+
+      - name: Confirm released rules database
+        if: success()
+        run: |
+          DB_NAME=$(node -e "const cfg = require('./firebase.json'); console.log(cfg.firestore[0].database);")
+          echo "Rules released to database $DB_NAME"

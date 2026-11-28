@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Restore
@@ -98,6 +99,8 @@ import com.example.ads.findActivityOrNull
 import com.example.domain.LegalConfig
 import com.example.ui.theme.AbsentAmber
 import com.example.ui.theme.AbsentAmberContainer
+import com.example.ui.theme.AppearancePrefsStore
+import com.example.ui.theme.LocalAppearanceController
 import com.example.util.PdfExportHelper
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -119,9 +122,13 @@ fun SettingsScreen(
     onOpenSubscriptionScreen: () -> Unit = {},
     onSignOut: () -> Unit = {},
     onDeleteAccountClick: () -> Unit = {},
+    onOpenDesignPreview: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val appearanceController = LocalAppearanceController.current
+        ?: remember(context) { AppearancePrefsStore(context.applicationContext) }
+    val appearanceSettings by appearanceController.settings.collectAsStateWithLifecycle()
     val activity = remember(context) { context.findActivityOrNull() }
     val adsUiState by viewModel.adsUiState.collectAsStateWithLifecycle()
     val isHindi = uiState.phase10HindiLabels
@@ -156,7 +163,7 @@ fun SettingsScreen(
 
     LaunchedEffect(focusBackupSection) {
         if (focusBackupSection && canEditSettings) {
-            listState.animateScrollToItem(5)
+            listState.animateScrollToItem(6)
             onBackupFocusConsumed()
         } else if (focusBackupSection) {
             onBackupFocusConsumed()
@@ -376,6 +383,15 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        // 0.75 APPEARANCE (Light / Dark / System + Simple Look)
+        item {
+            AppearanceSettingsCard(
+                settings = appearanceSettings,
+                onThemeModeChange = appearanceController::setThemeMode,
+                onSimpleLookChange = appearanceController::setSimpleLook
+            )
         }
 
         if (canViewSettings && !canEditSettings) {
@@ -1288,7 +1304,8 @@ fun SettingsScreen(
             SettingsAboutAndLegalCard(
                 versionName = BuildConfig.VERSION_NAME,
                 versionCode = BuildConfig.VERSION_CODE,
-                onOpenLegalDoc = onOpenLegalDoc
+                onOpenLegalDoc = onOpenLegalDoc,
+                onOpenDesignPreview = if (BuildConfig.DEBUG) onOpenDesignPreview else null
             )
         }
     }
@@ -1609,6 +1626,7 @@ fun SettingsAboutAndLegalCard(
     versionName: String,
     versionCode: Int,
     onOpenLegalDoc: (LegalDocType) -> Unit,
+    onOpenDesignPreview: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -1697,6 +1715,18 @@ fun SettingsAboutAndLegalCard(
                     Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Delete Account Info")
+                }
+                if (BuildConfig.DEBUG && onOpenDesignPreview != null) {
+                    TextButton(
+                        onClick = onOpenDesignPreview,
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("settings_about_design_preview_button")
+                    ) {
+                        Icon(Icons.Default.Palette, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Design Preview (Debug)")
+                    }
                 }
             }
         }

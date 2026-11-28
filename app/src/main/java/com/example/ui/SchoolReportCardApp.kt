@@ -49,6 +49,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import com.example.BuildConfig
 import com.example.ads.Phase16AdMobController
 import com.example.ads.findActivityOrNull
 import kotlinx.coroutines.launch
@@ -124,6 +125,7 @@ object AppRoutes {
     const val ROUTE_STUDENT_REMARKS = "phase19_student_remarks"
     const val ROUTE_GATE_PASS = "phase19_gate_pass"
     const val ROUTE_SCHOOL_SUBSCRIPTION = "phase16_school_subscription"
+    const val ROUTE_DESIGN_PREVIEW = "debug_design_preview"
 }
 
 private enum class OnboardingSubScreen {
@@ -682,7 +684,8 @@ private fun OrganisationWorkspace(
         currentRoute == AppRoutes.ROUTE_EXAMS ||
         currentRoute == AppRoutes.ROUTE_STOCK ||
         currentRoute == AppRoutes.ROUTE_TRANSPORT ||
-        currentRoute == AppRoutes.ROUTE_RESULT_ANALYSIS
+        currentRoute == AppRoutes.ROUTE_RESULT_ANALYSIS ||
+        currentRoute == AppRoutes.ROUTE_DESIGN_PREVIEW
 
     fun navigateTopLevel(route: String) {
         navController.navigate(route) {
@@ -791,7 +794,10 @@ private fun OrganisationWorkspace(
                 }
 
                 Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    if (currentRoute != AppRoutes.ROUTE_SCHOOLS && currentRoute != AppRoutes.ROUTE_TEACHER_PROFILE) {
+                    if (currentRoute != AppRoutes.ROUTE_SCHOOLS &&
+                        currentRoute != AppRoutes.ROUTE_TEACHER_PROFILE &&
+                        currentRoute != AppRoutes.ROUTE_DESIGN_PREVIEW
+                    ) {
                         SchoolSwitcherBar(
                             uiState = uiState,
                             onSelectSchool = viewModel::selectSchool,
@@ -1137,7 +1143,16 @@ private fun OrganisationWorkspace(
                                         }
                                     },
                                     onSignOut = onSignOut,
-                                    onDeleteAccountClick = onDeleteAccountClick
+                                    onDeleteAccountClick = onDeleteAccountClick,
+                                    onOpenDesignPreview = if (BuildConfig.DEBUG) {
+                                        {
+                                            navController.navigate(AppRoutes.ROUTE_DESIGN_PREVIEW) {
+                                                launchSingleTop = true
+                                            }
+                                        }
+                                    } else {
+                                        null
+                                    }
                                 )
                             }
 
@@ -1604,6 +1619,10 @@ private fun OrganisationWorkspace(
                                     }
                                 }
                             }
+
+                            addDebugDesignPreviewRoute(
+                                onBack = { navController.popBackStack() }
+                            )
                         }
                     }
                 }

@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -25,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
@@ -123,8 +125,12 @@ fun SettingsScreen(
     onSignOut: () -> Unit = {},
     onDeleteAccountClick: () -> Unit = {},
     onOpenDesignPreview: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    if (onBack != null) {
+        BackHandler(onBack = onBack)
+    }
     val context = LocalContext.current
     val appearanceController = LocalAppearanceController.current
         ?: remember(context) { AppearancePrefsStore(context.applicationContext) }
@@ -163,7 +169,10 @@ fun SettingsScreen(
 
     LaunchedEffect(focusBackupSection) {
         if (focusBackupSection && canEditSettings) {
-            listState.animateScrollToItem(6)
+            val idx = listState.layoutInfo.totalItemsCount - 3
+            if (idx >= 0) {
+                listState.animateScrollToItem(idx)
+            }
             onBackupFocusConsumed()
         } else if (focusBackupSection) {
             onBackupFocusConsumed()
@@ -192,20 +201,40 @@ fun SettingsScreen(
     ) {
         // 0. Header
         item {
-            Column {
-                Text(
-                    text = if (canViewSettings) "Settings, Cloud & Backup" else "Account & Organisation",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = if (canViewSettings)
-                        "Organisation account, session rules, school subjects, and JSON backup"
-                    else
-                        "Switch organisation, view privacy terms, sign out, or manage your account",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (onBack != null) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("settings_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (canViewSettings) "Settings, Cloud & Backup" else "Account & Organisation",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = if (canViewSettings)
+                            "Organisation account, session rules, school subjects, and JSON backup"
+                        else
+                            "Switch organisation, view privacy terms, sign out, or manage your account",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 

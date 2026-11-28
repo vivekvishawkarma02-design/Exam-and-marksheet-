@@ -89,18 +89,7 @@ import com.example.ui.theme.AbsentAmber
 import com.example.ui.theme.AbsentAmberContainer
 import com.example.ui.theme.FailRed
 import com.example.ui.theme.FailRedContainer
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
-
-private data class QuickActionSpec(
-    val title: String,
-    val subtitle: String,
-    val icon: ImageVector,
-    val accent: Color,
-    val testTag: String,
-    val onClick: () -> Unit
-)
 
 @Composable
 fun DashboardScreen(
@@ -162,6 +151,7 @@ fun DashboardScreen(
     showOwnerLapsedSubscriptionNotice: Boolean = false,
     onOpenSubscriptionScreen: () -> Unit = {},
     onDismissLapsedSubscriptionNotice: () -> Unit = {},
+    onOpenExamDuties: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val filtered = uiState.filteredStudents
@@ -183,22 +173,8 @@ fun DashboardScreen(
     val canViewMarks = uiState.canView(AppModule.MARKS)
     val canViewCoScholastic = uiState.canView(AppModule.CO_SCHOLASTIC)
     val canViewReports = uiState.canView(AppModule.REPORTS)
-    val canViewTeachers = uiState.canView(AppModule.TEACHERS)
-    val canViewTimetable = uiState.canView(AppModule.TIMETABLE)
-    val canViewSettings = uiState.canView(AppModule.SETTINGS)
     val canEditSettings = uiState.canEdit(AppModule.SETTINGS)
-    val canViewMembers = uiState.canView(AppModule.MEMBERS) || uiState.isAdmin
     val canViewAcademicDirectory = canViewStudents || canViewMarks || canViewReports
-
-    val timetableClashCount = remember(
-        canViewTimetable,
-        uiState.activeSessionTimetableCells,
-        uiState.teachers,
-        uiState.effectivePeriodStructuresBySchool,
-        uiState.schoolNamesByDocId
-    ) {
-        if (canViewTimetable) uiState.timetableClashes().size else 0
-    }
 
     val allSessionSummaries = remember(
         uiState.schools,
@@ -253,393 +229,6 @@ fun DashboardScreen(
                 item.schoolName.contains(q, ignoreCase = true)
             statusMatches && queryMatches
         }
-    }
-
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val secondaryColor = MaterialTheme.colorScheme.secondary
-    val tertiaryColor = MaterialTheme.colorScheme.tertiary
-    val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant
-
-    val quickActions = buildList {
-        if (canViewMarks) {
-            add(
-                QuickActionSpec(
-                    title = if (uiState.canEdit(AppModule.MARKS)) "Enter Marks" else "View Marks",
-                    subtitle = "IA 10, UT 30, Exam 60",
-                    icon = Icons.Default.EditNote,
-                    accent = primaryColor,
-                    testTag = "tile_enter_marks",
-                    onClick = onNavigateToMarks
-                )
-            )
-        }
-        if (uiState.canViewFees) {
-            add(
-                QuickActionSpec(
-                    title = "Fee Management",
-                    subtitle = if (uiState.canEditFees) "Collect, receipts, dues & queue" else "View fee accounts & reports",
-                    icon = Icons.Default.AccountBalanceWallet,
-                    accent = primaryColor,
-                    testTag = "tile_fee_management",
-                    onClick = onNavigateToFeeManagement
-                )
-            )
-        }
-        if (uiState.canViewStudentRegister || canViewStudents) {
-            add(
-                QuickActionSpec(
-                    title = "Student Register",
-                    subtitle = if (uiState.canEditStudentRegister) "Add, edit, transport, siblings, ID cards" else "View register & ID cards",
-                    icon = Icons.Default.Badge,
-                    accent = secondaryColor,
-                    testTag = "tile_student_register",
-                    onClick = onNavigateToStudentRegister
-                )
-            )
-        }
-        if (uiState.canViewCertificates) {
-            add(
-                QuickActionSpec(
-                    title = "Certificates",
-                    subtitle = if (uiState.canEditCertificates) "TC, Bonafide, Character PDF" else "View issued register & PDF",
-                    icon = Icons.Default.Verified,
-                    accent = primaryColor,
-                    testTag = "tile_certificates",
-                    onClick = onNavigateToCertificates
-                )
-            )
-        }
-        if (uiState.canViewCashBook) {
-            add(
-                QuickActionSpec(
-                    title = "Cash Book",
-                    subtitle = if (uiState.canEditCashBook) "Expenses, fee income & closing" else "View day book & reports",
-                    icon = Icons.Default.AccountBalance,
-                    accent = secondaryColor,
-                    testTag = "tile_cash_book",
-                    onClick = onNavigateToCashBook
-                )
-            )
-        }
-        if (uiState.canViewEnquiry) {
-            add(
-                QuickActionSpec(
-                    title = "Enquiry",
-                    subtitle = if (uiState.canEditEnquiry) "Follow-ups, WhatsApp & admit" else "View admission enquiries",
-                    icon = Icons.Default.ContactPhone,
-                    accent = tertiaryColor,
-                    testTag = "tile_enquiry",
-                    onClick = onNavigateToEnquiry
-                )
-            )
-        }
-        if (uiState.canViewExams) {
-            add(
-                QuickActionSpec(
-                    title = "Exams & Admit",
-                    subtitle = if (uiState.canEditExams) "Schedule, seating, duties & PDF" else "View exams & admit cards",
-                    icon = Icons.Default.EventNote,
-                    accent = primaryColor,
-                    testTag = "tile_exams",
-                    onClick = onNavigateToExams
-                )
-            )
-        }
-        if (uiState.canViewStock) {
-            add(
-                QuickActionSpec(
-                    title = "Stock",
-                    subtitle = if (uiState.canEditStock) "Purchases, sales & low alerts" else "View stock summary & PDF",
-                    icon = Icons.Default.Inventory2,
-                    accent = secondaryColor,
-                    testTag = "tile_stock",
-                    onClick = onNavigateToStock
-                )
-            )
-        }
-        if (uiState.canViewTransport) {
-            add(
-                QuickActionSpec(
-                    title = "Transport",
-                    subtitle = if (uiState.canEditTransport) "Routes, stops & driver list" else "View routes & students",
-                    icon = Icons.Default.DirectionsBus,
-                    accent = tertiaryColor,
-                    testTag = "tile_transport",
-                    onClick = onNavigateToTransport
-                )
-            )
-        }
-        if (uiState.canViewSalary) {
-            add(
-                QuickActionSpec(
-                    title = "Staff Salary",
-                    subtitle = if (uiState.canEditSalary) "Setup, sheet, advances & slips" else "View salary sheet & slips",
-                    icon = Icons.Default.Payments,
-                    accent = primaryColor,
-                    testTag = "tile_salary",
-                    onClick = onNavigateToSalary
-                )
-            )
-        }
-        if (uiState.canViewSessionPromotion) {
-            add(
-                QuickActionSpec(
-                    title = p10Label(isHindi, "नया सत्र व प्रमोशन", "Session & Promotion"),
-                    subtitle = if (uiState.canEditSessionPromotion) "New session, promote & alumni" else "View promotion register & alumni",
-                    icon = Icons.Default.School,
-                    accent = secondaryColor,
-                    testTag = "tile_session_promotion",
-                    onClick = onNavigateToSessionPromotion
-                )
-            )
-        }
-        if (uiState.canUseBulkStudentImport) {
-            add(
-                QuickActionSpec(
-                    title = p10Label(isHindi, "बल्क छात्र इम्पोर्ट", "Bulk Student Import"),
-                    subtitle = "CSV / Excel (.xlsx) import",
-                    icon = Icons.Default.Groups,
-                    accent = tertiaryColor,
-                    testTag = "tile_bulk_import",
-                    onClick = onNavigateToBulkImport
-                )
-            )
-        }
-        if (uiState.canAccessStudentAttendance) {
-            add(
-                QuickActionSpec(
-                    title = "Student Attendance",
-                    subtitle = "Daily roll, calendar & PDF",
-                    icon = Icons.Default.FactCheck,
-                    accent = primaryColor,
-                    testTag = "tile_student_attendance",
-                    onClick = { onNavigateToStudentAttendance(uiState.activeSchoolDocId, null) }
-                )
-            )
-        }
-        if (canViewCoScholastic) {
-            add(
-                QuickActionSpec(
-                    title = "Co-Scholastic",
-                    subtitle = "Grades & attendance",
-                    icon = Icons.Default.FactCheck,
-                    accent = secondaryColor,
-                    testTag = "tile_coscholastic",
-                    onClick = onNavigateToCoScholastic
-                )
-            )
-        }
-        if (canViewReports) {
-            add(
-                QuickActionSpec(
-                    title = "A4 Reports",
-                    subtitle = "Slips, Annual & ZIP",
-                    icon = Icons.Default.Description,
-                    accent = primaryColor,
-                    testTag = "tile_reports",
-                    onClick = onNavigateToReports
-                )
-            )
-        }
-        if (uiState.canViewResultAnalysis) {
-            add(
-                QuickActionSpec(
-                    title = p10Label(isHindi, "रिज़ल्ट विश्लेषण", "Result Analysis"),
-                    subtitle = p10Label(
-                        isHindi,
-                        "टॉपर्स, विषय, कमज़ोर छात्र व PDF",
-                        "Toppers, subjects, weak list & PDF"
-                    ),
-                    icon = Icons.Default.Analytics,
-                    accent = tertiaryColor,
-                    testTag = "tile_result_analysis",
-                    onClick = onNavigateToResultAnalysis
-                )
-            )
-        }
-        if (uiState.canViewClassDiary) {
-            add(
-                QuickActionSpec(
-                    title = p10Label(isHindi, "कक्षा डायरी", "Class Diary"),
-                    subtitle = p10Label(
-                        isHindi,
-                        "कक्षा कार्य, गृहकार्य, व्हाट्सएप व साप्ताहिक PDF",
-                        "Classwork, homework, share & weekly PDF"
-                    ),
-                    icon = Icons.Default.MenuBook,
-                    accent = primaryColor,
-                    testTag = "tile_class_diary",
-                    onClick = onNavigateToClassDiary
-                )
-            )
-        }
-        if (uiState.canViewBirthdays) {
-            add(
-                QuickActionSpec(
-                    title = p10Label(isHindi, "जन्मदिन", "Birthdays"),
-                    subtitle = p10Label(
-                        isHindi,
-                        "आज व अगले 7 दिन, व्हाट्सएप बधाई व कार्ड",
-                        "Today & next 7 days, WhatsApp wishes & card"
-                    ),
-                    icon = Icons.Default.Cake,
-                    accent = secondaryColor,
-                    testTag = "tile_birthdays",
-                    onClick = onNavigateToBirthdays
-                )
-            )
-        }
-        if (uiState.canOpenStudentRemarksModule) {
-            add(
-                QuickActionSpec(
-                    title = p10Label(isHindi, "टिप्पणियाँ व PTM", "Remarks & PTM"),
-                    subtitle = p10Label(
-                        isHindi,
-                        "छात्र टिप्पणियाँ, फॉलो-अप व अभिभावक बैठक",
-                        "Student remarks, follow-ups & Parent Meetings"
-                    ),
-                    icon = Icons.AutoMirrored.Filled.Assignment,
-                    accent = tertiaryColor,
-                    testTag = "tile_student_remarks",
-                    onClick = onNavigateToStudentRemarks
-                )
-            )
-        }
-        if (uiState.canViewGateModule) {
-            add(
-                QuickActionSpec(
-                    title = p10Label(isHindi, "गेट पास व आगंतुक", "Gate & Visitors"),
-                    subtitle = p10Label(
-                        isHindi,
-                        "A5 छुट्टी पर्ची, गेट रजिस्टर व आगंतुक",
-                        "A5 early leave pass, gate & visitor register"
-                    ),
-                    icon = Icons.Default.Badge,
-                    accent = primaryColor,
-                    testTag = "tile_gate_pass",
-                    onClick = onNavigateToGatePass
-                )
-            )
-        }
-        if (canViewTeachers) {
-            val activeTeachers = uiState.teachers.count { it.active }
-            add(
-                QuickActionSpec(
-                    title = "Teachers & Setup",
-                    subtitle = "$activeTeachers active • periods & load",
-                    icon = Icons.Default.School,
-                    accent = secondaryColor,
-                    testTag = "tile_teachers_assignments",
-                    onClick = onNavigateToTeachers
-                )
-            )
-        }
-        if (canViewTimetable) {
-            val ttSub = when {
-                timetableClashCount > 0 -> "$timetableClashCount clash(es) to fix"
-                uiState.canEdit(AppModule.TIMETABLE) -> "Edit, clashes & A4 PDF"
-                else -> "View schedules & PDF"
-            }
-            add(
-                QuickActionSpec(
-                    title = "Timetable",
-                    subtitle = ttSub,
-                    icon = Icons.Default.CalendarMonth,
-                    accent = if (timetableClashCount > 0) FailRed else primaryColor,
-                    testTag = "tile_timetable",
-                    onClick = onNavigateToTimetable
-                )
-            )
-            add(
-                QuickActionSpec(
-                    title = "Staff Attendance",
-                    subtitle = if (uiState.canEdit(AppModule.TIMETABLE)) "Daily sheet & A4 PDF" else "View staff attendance",
-                    icon = Icons.Default.HowToReg,
-                    accent = secondaryColor,
-                    testTag = "tile_teacher_attendance",
-                    onClick = onNavigateToTeacherAttendance
-                )
-            )
-        }
-        if (canViewMarks) {
-            add(
-                QuickActionSpec(
-                    title = "Pending Marks",
-                    subtitle = if (uiState.isTeacherRestricted) "My incomplete marks" else "By exam & reminders",
-                    icon = Icons.Default.AssignmentLate,
-                    accent = AbsentAmber,
-                    testTag = "tile_pending_marks",
-                    onClick = onNavigateToPendingMarks
-                )
-            )
-        }
-        if (canViewTimetable || canViewTeachers) {
-            add(
-                QuickActionSpec(
-                    title = "Workload Report",
-                    subtitle = "Periods, subs, PDF/CSV",
-                    icon = Icons.Default.Assessment,
-                    accent = primaryColor,
-                    testTag = "tile_workload_report",
-                    onClick = onNavigateToWorkloadReport
-                )
-            )
-        }
-        if (canViewMembers) {
-            val reqSub = if (uiState.pendingJoinRequestCount > 0) {
-                "${uiState.pendingJoinRequestCount} pending request(s)"
-            } else {
-                "${uiState.orgMembers.count { it.status == "active" }} active member(s)"
-            }
-            add(
-                QuickActionSpec(
-                    title = "Members",
-                    subtitle = reqSub,
-                    icon = Icons.Default.AdminPanelSettings,
-                    accent = tertiaryColor,
-                    testTag = "tile_members",
-                    onClick = onNavigateToMembers
-                )
-            )
-        }
-        if (canEditSettings) {
-            add(
-                QuickActionSpec(
-                    title = "Schools",
-                    subtitle = "${uiState.activeSchools.size} active • logos & classes",
-                    icon = Icons.Default.Apartment,
-                    accent = primaryColor,
-                    testTag = "tile_schools",
-                    onClick = onNavigateToSchools
-                )
-            )
-            val backupSub = if (uiState.settings.lastBackupEpochMs > 0L) {
-                val fmt = SimpleDateFormat("dd MMM yyyy", Locale.US)
-                "Last: ${fmt.format(Date(uiState.settings.lastBackupEpochMs))}"
-            } else {
-                "Export / Restore JSON"
-            }
-            add(
-                QuickActionSpec(
-                    title = "Backup",
-                    subtitle = backupSub,
-                    icon = Icons.Default.Backup,
-                    accent = tertiaryColor,
-                    testTag = "tile_backup",
-                    onClick = onNavigateToBackup
-                )
-            )
-        }
-        add(
-            QuickActionSpec(
-                title = "Settings",
-                subtitle = if (canViewSettings) "Session, pass %, account" else "Account & organisation",
-                icon = Icons.Default.Settings,
-                accent = mutedColor,
-                testTag = "tile_settings",
-                onClick = onNavigateToSettings
-            )
-        )
     }
 
     val hasBottomQuickBar = todaySnapshot.quickActions.isNotEmpty()
@@ -820,10 +409,11 @@ fun DashboardScreen(
                                 dateIso = todayIso,
                                 isHindi = isHindi,
                                 canViewMarks = canViewMarks,
-                                canViewTimetable = canViewTimetable,
+                                canViewTimetable = uiState.canView(AppModule.TIMETABLE),
                                 onTakeAttendance = onTakeStudentAttendanceSection,
                                 onOpenPendingMarks = onNavigateToPendingMarks,
-                                onOpenLeaveTab = { onOpenTimetableSubstitutions(todayIso) }
+                                onOpenLeaveTab = { onOpenTimetableSubstitutions(todayIso) },
+                                onOpenExamDuties = onOpenExamDuties
                             )
                         }
                     }
@@ -1549,41 +1139,6 @@ fun DashboardScreen(
             }
         }
 
-        // All Accessible Module Tiles (strictly filtered to modules this member can view)
-        item {
-            Text(
-                text = p10Label(isHindi, "सभी मॉड्यूल", "All Modules"),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                quickActions.chunked(2).forEach { rowItems ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        rowItems.forEach { spec ->
-                            DashboardActionTile(
-                                title = spec.title,
-                                subtitle = spec.subtitle,
-                                icon = spec.icon,
-                                accent = spec.accent,
-                                onClick = spec.onClick,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag(spec.testTag)
-                            )
-                        }
-                        if (rowItems.size == 1) {
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
-            }
-        }
-
         // Student Dashboard Summary List (only shown if member has Students, Marks, or Reports access)
         if (canViewAcademicDirectory) {
             item {
@@ -1693,61 +1248,5 @@ fun DashboardScreen(
             },
             onDismiss = { showLegacyConfirm = false }
         )
-    }
-}
-
-@Composable
-private fun DashboardActionTile(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    accent: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = modifier
-            .minimumInteractiveComponentSize()
-            .clickable(onClick = onClick)
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = accent.copy(alpha = 0.12f),
-                modifier = Modifier.size(44.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = title,
-                        tint = accent,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
     }
 }

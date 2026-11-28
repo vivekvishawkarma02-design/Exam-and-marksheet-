@@ -171,73 +171,91 @@ fun GlassBottomBar(
             .fillMaxWidth()
             .then(if (applyNavigationBarInsets) Modifier.windowInsetsPadding(WindowInsets.navigationBars) else Modifier)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 64.dp)
-                .padding(horizontal = spacing.sm, vertical = spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(spacing.xs)
-        ) {
-            items.forEach { item ->
-                val selected = item.id == selectedId
-                val interactionSource = remember { MutableInteractionSource() }
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp)
-                        .clip(RoundedCornerShape(radii.md))
-                        .calmPressFeedback(interactionSource = interactionSource)
-                        .clickable(
-                            interactionSource = interactionSource,
-                            indication = androidx.compose.material3.ripple(),
-                            role = Role.Tab,
-                            onClick = { onSelect(item) }
-                        )
-                        .then(if (item.testTag != null) Modifier.testTag(item.testTag) else Modifier)
-                        .padding(horizontal = spacing.xs, vertical = spacing.xs),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = if (selected) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            androidx.compose.ui.graphics.Color.Transparent
-                        }
+        androidx.compose.foundation.layout.BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val isTightFiveTab = items.size >= 5 && maxWidth < 360.dp
+            val rowHorizontalPad = if (isTightFiveTab) spacing.xs else spacing.sm
+            val itemGap = if (isTightFiveTab) 2.dp else spacing.xs
+            val itemHorizontalPad = if (isTightFiveTab) 2.dp else spacing.xs
+            val pillHorizontalPad = if (isTightFiveTab) spacing.sm else spacing.md
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 64.dp)
+                    .padding(horizontal = rowHorizontalPad, vertical = spacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(itemGap)
+            ) {
+                items.forEach { item ->
+                    val selected = item.id == selectedId
+                    val interactionSource = remember { MutableInteractionSource() }
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .clip(RoundedCornerShape(radii.md))
+                            .calmPressFeedback(interactionSource = interactionSource)
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = androidx.compose.material3.ripple(),
+                                role = Role.Tab,
+                                onClick = { onSelect(item) }
+                            )
+                            .then(if (item.testTag != null) Modifier.testTag(item.testTag) else Modifier)
+                            .padding(horizontal = itemHorizontalPad, vertical = spacing.xs),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
-                        Box(
-                            modifier = Modifier.padding(horizontal = spacing.md, vertical = spacing.xs),
-                            contentAlignment = Alignment.Center
+                        Surface(
+                            shape = CircleShape,
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                androidx.compose.ui.graphics.Color.Transparent
+                            }
                         ) {
-                            BadgedBox(
-                                badge = {
-                                    if (item.badgeCount > 0) {
-                                        Badge {
-                                            Text(text = if (item.badgeCount > 99) "99+" else item.badgeCount.toString())
+                            Box(
+                                modifier = Modifier.padding(horizontal = pillHorizontalPad, vertical = spacing.xs),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                BadgedBox(
+                                    badge = {
+                                        if (item.badgeCount > 0) {
+                                            Badge {
+                                                Text(text = if (item.badgeCount > 99) "99+" else item.badgeCount.toString())
+                                            }
                                         }
                                     }
+                                ) {
+                                    Icon(
+                                        imageVector = if (selected) item.selectedIcon else item.icon,
+                                        contentDescription = item.contentDescription,
+                                        tint = if (selected) colors.primaryAccent else colors.textSecondary,
+                                        modifier = Modifier.size(22.dp)
+                                    )
                                 }
-                            ) {
-                                Icon(
-                                    imageVector = if (selected) item.selectedIcon else item.icon,
-                                    contentDescription = item.contentDescription,
-                                    tint = if (selected) colors.primaryAccent else colors.textSecondary,
-                                    modifier = Modifier.size(22.dp)
-                                )
                             }
                         }
+                        Spacer(modifier = Modifier.size(2.dp))
+                        Text(
+                            text = item.label,
+                            style = if (isTightFiveTab) {
+                                MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = androidx.compose.ui.unit.TextUnit(
+                                        10f,
+                                        androidx.compose.ui.unit.TextUnitType.Sp
+                                    )
+                                )
+                            } else {
+                                MaterialTheme.typography.labelSmall
+                            },
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (selected) colors.primaryAccent else colors.textSecondary,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-                    Spacer(modifier = Modifier.size(2.dp))
-                    Text(
-                        text = item.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                        color = if (selected) colors.primaryAccent else colors.textSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
                 }
             }
         }

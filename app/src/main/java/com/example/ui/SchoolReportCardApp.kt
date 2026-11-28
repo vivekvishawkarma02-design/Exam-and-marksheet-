@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.app.Application
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -11,27 +12,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AdminPanelSettings
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.EditNote
-import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.AdminPanelSettings
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.EditNote
-import androidx.compose.material.icons.outlined.Groups
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
@@ -52,10 +38,10 @@ import androidx.compose.runtime.setValue
 import com.example.BuildConfig
 import com.example.ads.Phase16AdMobController
 import com.example.ads.findActivityOrNull
+import com.example.ui.designsystem.GlassBottomBar
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -94,6 +80,10 @@ import com.google.firebase.auth.auth
 
 object AppRoutes {
     const val ROUTE_DASHBOARD = "dashboard"
+    const val ROUTE_SECTION_STUDENTS = "section_students"
+    const val ROUTE_SECTION_ACADEMICS = "section_academics"
+    const val ROUTE_SECTION_FINANCE = "section_finance"
+    const val ROUTE_SECTION_MANAGE = "section_manage"
     const val ROUTE_MARKS = "marks"
     const val ROUTE_REPORTS = "reports"
     const val ROUTE_MEMBERS = "members"
@@ -113,6 +103,7 @@ object AppRoutes {
     const val ROUTE_CASH_BOOK = "cash_book"
     const val ROUTE_ENQUIRY = "enquiry"
     const val ROUTE_EXAMS = "exams"
+    const val ROUTE_MY_EXAM_DUTIES = "my_exam_duties"
     const val ROUTE_STOCK = "stock"
     const val ROUTE_TRANSPORT = "transport"
     const val ROUTE_SALARY = "salary"
@@ -132,48 +123,6 @@ private enum class OnboardingSubScreen {
     PICKER,
     CREATE_ORG,
     JOIN_ORG
-}
-
-internal data class TopNavItem(
-    val route: String,
-    val label: String,
-    val selectedIcon: ImageVector,
-    val unselectedIcon: ImageVector,
-    val testTag: String,
-    val badgeCount: Int = 0
-)
-
-internal fun buildWorkspaceTopNavItems(
-    canViewStudents: Boolean,
-    canViewStudentRegister: Boolean,
-    canViewMarks: Boolean,
-    canViewReports: Boolean,
-    canViewMembersOrAdmin: Boolean,
-    pendingJoinRequestCount: Int
-): List<TopNavItem> = buildList {
-    add(TopNavItem(AppRoutes.ROUTE_DASHBOARD, "Home", Icons.Filled.Home, Icons.Outlined.Home, "nav_home"))
-    if (canViewStudents || canViewStudentRegister) {
-        add(TopNavItem(AppRoutes.ROUTE_STUDENT_REGISTER, "Students", Icons.Filled.Groups, Icons.Outlined.Groups, "nav_students"))
-    }
-    if (canViewMarks) {
-        add(TopNavItem(AppRoutes.ROUTE_MARKS, "Marks", Icons.Filled.EditNote, Icons.Outlined.EditNote, "nav_marks"))
-    }
-    if (canViewReports) {
-        add(TopNavItem(AppRoutes.ROUTE_REPORTS, "Reports", Icons.Filled.Description, Icons.Outlined.Description, "nav_reports"))
-    }
-    if (canViewMembersOrAdmin) {
-        add(
-            TopNavItem(
-                AppRoutes.ROUTE_MEMBERS,
-                "Members",
-                Icons.Filled.AdminPanelSettings,
-                Icons.Outlined.AdminPanelSettings,
-                "nav_members",
-                badgeCount = pendingJoinRequestCount
-            )
-        )
-    }
-    add(TopNavItem(AppRoutes.ROUTE_SETTINGS, "Settings", Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings"))
 }
 
 /**
@@ -649,45 +598,26 @@ private fun OrganisationWorkspace(
         return
     }
 
-    // Build navigation bar items strictly from modules the member is allowed to view
+    // Build 5-section navigation items from the single route registry
     val canOpenStudentRegister = uiState.canViewStudentRegister || uiState.canView(AppModule.STUDENTS)
     val navItems = remember(
         uiState.currentMember,
         uiState.pendingJoinRequestCount,
-        canOpenStudentRegister
+        uiState.phase10HindiLabels,
+        uiState.ownExamDuties,
+        uiState.teachers,
+        uiState.activeSchool.id
     ) {
-        buildWorkspaceTopNavItems(
-            canViewStudents = uiState.canView(AppModule.STUDENTS),
-            canViewStudentRegister = uiState.canViewStudentRegister,
-            canViewMarks = uiState.canView(AppModule.MARKS),
-            canViewReports = uiState.canView(AppModule.REPORTS),
-            canViewMembersOrAdmin = uiState.canView(AppModule.MEMBERS) || uiState.isAdmin,
-            pendingJoinRequestCount = uiState.pendingJoinRequestCount
-        )
+        AppNavigationRegistry.buildBottomNavItems(uiState)
     }
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: AppRoutes.ROUTE_DASHBOARD
-    val isSubScreen = currentRoute == AppRoutes.ROUTE_COSCHOLASTIC ||
-        currentRoute == AppRoutes.ROUTE_SCHOOLS ||
-        currentRoute == AppRoutes.ROUTE_TEACHER_PROFILE ||
-        currentRoute == AppRoutes.ROUTE_TEACHERS ||
-        currentRoute == AppRoutes.ROUTE_TIMETABLE ||
-        currentRoute == AppRoutes.ROUTE_PENDING_MARKS ||
-        currentRoute == AppRoutes.ROUTE_WORKLOAD_REPORT ||
-        currentRoute == AppRoutes.ROUTE_TEACHER_ATTENDANCE ||
-        currentRoute == AppRoutes.ROUTE_STUDENT_ATTENDANCE ||
-        currentRoute == AppRoutes.ROUTE_FEE_MANAGEMENT ||
-        currentRoute == AppRoutes.ROUTE_CERTIFICATES ||
-        currentRoute == AppRoutes.ROUTE_CASH_BOOK ||
-        currentRoute == AppRoutes.ROUTE_ENQUIRY ||
-        currentRoute == AppRoutes.ROUTE_EXAMS ||
-        currentRoute == AppRoutes.ROUTE_STOCK ||
-        currentRoute == AppRoutes.ROUTE_TRANSPORT ||
-        currentRoute == AppRoutes.ROUTE_RESULT_ANALYSIS ||
-        currentRoute == AppRoutes.ROUTE_DESIGN_PREVIEW
+    val isSubScreen = AppNavigationRegistry.isSubScreenRoute(currentRoute)
+    val activeSection = AppNavigationRegistry.parentSectionFor(currentRoute)
 
     fun navigateTopLevel(route: String) {
+        if (!AppNavigationRegistry.canAccessRoute(route, uiState)) return
         navController.navigate(route) {
             popUpTo(navController.graph.findStartDestination().id) {
                 saveState = true
@@ -697,16 +627,51 @@ private fun OrganisationWorkspace(
         }
     }
 
-    fun openSchoolsScreen() {
-        if (uiState.canEdit(AppModule.SETTINGS) && currentRoute != AppRoutes.ROUTE_SCHOOLS) {
-            navController.navigate(AppRoutes.ROUTE_SCHOOLS) { launchSingleTop = true }
+    fun navigateSectionChild(route: String) {
+        if (!AppNavigationRegistry.canAccessRoute(route, uiState)) return
+        if (currentRoute != route) {
+            navController.navigate(route) { launchSingleTop = true }
         }
     }
 
-    LaunchedEffect(jumpToMembersTrigger) {
-        if (jumpToMembersTrigger > 0 && (uiState.canView(AppModule.MEMBERS) || uiState.isAdmin)) {
-            navigateTopLevel(AppRoutes.ROUTE_MEMBERS)
+    fun resetJumpArgsBeforeOpening(route: String) {
+        when (route) {
+            AppRoutes.ROUTE_TIMETABLE -> {
+                timetableJumpTab = null
+                timetableJumpSubsDate = null
+            }
+            AppRoutes.ROUTE_STUDENT_ATTENDANCE -> {
+                attendanceJumpSchoolDocId = null
+                attendanceJumpClassName = null
+                attendanceJumpSection = null
+                attendanceJumpDateIso = null
+                attendanceJumpTab = null
+            }
+            AppRoutes.ROUTE_FEE_MANAGEMENT -> {
+                feeJumpInitialTab = 0
+                feeJumpPreselectedStudent = null
+                feeJumpQueueMessageType = null
+                feeJumpQueueMonthFilter = null
+                feeJumpQueueRouteId = null
+            }
+            AppRoutes.ROUTE_CERTIFICATES -> certificateJumpStudentId = null
+            AppRoutes.ROUTE_TRANSPORT -> transportJumpTab = null
+            AppRoutes.ROUTE_SETTINGS -> focusBackupSection = false
         }
+    }
+
+    fun openSchoolsScreen() {
+        navigateSectionChild(AppRoutes.ROUTE_SCHOOLS)
+    }
+
+    LaunchedEffect(jumpToMembersTrigger) {
+        if (jumpToMembersTrigger > 0 && AppNavigationRegistry.canAccessRoute(AppRoutes.ROUTE_MEMBERS, uiState)) {
+            navigateSectionChild(AppRoutes.ROUTE_MEMBERS)
+        }
+    }
+
+    BackHandler(enabled = !isSubScreen && activeSection != NavSection.HOME) {
+        navigateTopLevel(AppRoutes.ROUTE_DASHBOARD)
     }
 
     CompositionLocalProvider(
@@ -722,46 +687,12 @@ private fun OrganisationWorkspace(
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             bottomBar = {
                 if (!useRail && !isSubScreen) {
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        windowInsets = WindowInsets.navigationBars
-                    ) {
-                        navItems.forEach { item ->
-                            val selected = currentRoute == item.route
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = { navigateTopLevel(item.route) },
-                                icon = {
-                                    if (item.badgeCount > 0) {
-                                        BadgedBox(badge = { Badge { Text("${item.badgeCount}") } }) {
-                                            Icon(
-                                                imageVector = if (selected) item.selectedIcon else item.unselectedIcon,
-                                                contentDescription = item.label
-                                            )
-                                        }
-                                    } else {
-                                        Icon(
-                                            imageVector = if (selected) item.selectedIcon else item.unselectedIcon,
-                                            contentDescription = item.label
-                                        )
-                                    }
-                                },
-                                label = {
-                                    Text(
-                                        text = item.label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        maxLines = 1
-                                    )
-                                },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = MaterialTheme.colorScheme.primary,
-                                    selectedTextColor = MaterialTheme.colorScheme.primary,
-                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer
-                                ),
-                                modifier = Modifier.testTag(item.testTag)
-                            )
-                        }
-                    }
+                    GlassBottomBar(
+                        items = navItems,
+                        selectedId = activeSection.route,
+                        onSelect = { item -> navigateTopLevel(item.id) },
+                        applyNavigationBarInsets = true
+                    )
                 }
             }
         ) { innerPadding ->
@@ -773,31 +704,39 @@ private fun OrganisationWorkspace(
                 if (useRail && !isSubScreen) {
                     NavigationRail(
                         containerColor = MaterialTheme.colorScheme.surface,
-                        modifier = Modifier.fillMaxHeight()
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .windowInsetsPadding(WindowInsets.navigationBars)
                     ) {
                         navItems.forEach { item ->
-                            val selected = currentRoute == item.route
+                            val selected = activeSection.route == item.id
                             NavigationRailItem(
                                 selected = selected,
-                                onClick = { navigateTopLevel(item.route) },
+                                onClick = { navigateTopLevel(item.id) },
                                 icon = {
-                                    Icon(
-                                        imageVector = if (selected) item.selectedIcon else item.unselectedIcon,
-                                        contentDescription = item.label
-                                    )
+                                    if (item.badgeCount > 0) {
+                                        BadgedBox(badge = { Badge { Text("${item.badgeCount}") } }) {
+                                            Icon(
+                                                imageVector = if (selected) item.selectedIcon else item.icon,
+                                                contentDescription = item.contentDescription
+                                            )
+                                        }
+                                    } else {
+                                        Icon(
+                                            imageVector = if (selected) item.selectedIcon else item.icon,
+                                            contentDescription = item.contentDescription
+                                        )
+                                    }
                                 },
                                 label = { Text(item.label, maxLines = 1) },
-                                modifier = Modifier.testTag(item.testTag)
+                                modifier = if (item.testTag != null) Modifier.testTag(item.testTag) else Modifier
                             )
                         }
                     }
                 }
 
                 Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    if (currentRoute != AppRoutes.ROUTE_SCHOOLS &&
-                        currentRoute != AppRoutes.ROUTE_TEACHER_PROFILE &&
-                        currentRoute != AppRoutes.ROUTE_DESIGN_PREVIEW
-                    ) {
+                    if (!isSubScreen) {
                         SchoolSwitcherBar(
                             uiState = uiState,
                             onSelectSchool = viewModel::selectSchool,
@@ -824,19 +763,19 @@ private fun OrganisationWorkspace(
                                     onDeleteLegacyMarks = viewModel::deleteLegacyMarksData,
                                     onNavigateToSchools = ::openSchoolsScreen,
                                     onNavigateToStudents = {
-                                        if (canOpenStudentRegister) navigateTopLevel(AppRoutes.ROUTE_STUDENT_REGISTER)
+                                        navigateSectionChild(AppRoutes.ROUTE_STUDENT_REGISTER)
                                     },
                                     onNavigateToMarks = {
-                                        if (uiState.canView(AppModule.MARKS)) navigateTopLevel(AppRoutes.ROUTE_MARKS)
+                                        navigateSectionChild(AppRoutes.ROUTE_MARKS)
                                     },
                                     onNavigateToCoScholastic = {
-                                        if (uiState.canView(AppModule.CO_SCHOLASTIC)) navController.navigate(AppRoutes.ROUTE_COSCHOLASTIC)
+                                        navigateSectionChild(AppRoutes.ROUTE_COSCHOLASTIC)
                                     },
                                     onNavigateToReports = {
-                                        if (uiState.canView(AppModule.REPORTS)) navigateTopLevel(AppRoutes.ROUTE_REPORTS)
+                                        navigateSectionChild(AppRoutes.ROUTE_REPORTS)
                                     },
                                     onNavigateToMembers = {
-                                        if (uiState.canView(AppModule.MEMBERS) || uiState.isAdmin) navigateTopLevel(AppRoutes.ROUTE_MEMBERS)
+                                        navigateSectionChild(AppRoutes.ROUTE_MEMBERS)
                                     },
                                     onNavigateToTeachers = {
                                         if (uiState.canView(AppModule.TEACHERS)) {
@@ -886,9 +825,7 @@ private fun OrganisationWorkspace(
                                         }
                                     },
                                     onNavigateToStudentRegister = {
-                                        if (canOpenStudentRegister) {
-                                            navigateTopLevel(AppRoutes.ROUTE_STUDENT_REGISTER)
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_STUDENT_REGISTER)
                                     },
                                     onNavigateToFeeManagement = {
                                         if (uiState.canViewFees) {
@@ -914,71 +851,52 @@ private fun OrganisationWorkspace(
                                         }
                                     },
                                     onNavigateToExams = {
-                                        if (uiState.canViewExams) {
-                                            navController.navigate(AppRoutes.ROUTE_EXAMS) { launchSingleTop = true }
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_EXAMS)
+                                    },
+                                    onOpenExamDuties = {
+                                        navigateSectionChild(AppRoutes.ROUTE_MY_EXAM_DUTIES)
                                     },
                                     onNavigateToStock = {
-                                        if (uiState.canViewStock) {
-                                            navController.navigate(AppRoutes.ROUTE_STOCK) { launchSingleTop = true }
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_STOCK)
                                     },
                                     onNavigateToTransport = {
                                         if (uiState.canViewTransport) {
                                             transportJumpTab = 0
-                                            navController.navigate(AppRoutes.ROUTE_TRANSPORT) { launchSingleTop = true }
+                                            navigateSectionChild(AppRoutes.ROUTE_TRANSPORT)
                                         }
                                     },
                                     onNavigateToTransportVehiclesDocs = {
                                         if (uiState.canViewTransport) {
                                             transportJumpTab = 3
-                                            navController.navigate(AppRoutes.ROUTE_TRANSPORT) { launchSingleTop = true }
+                                            navigateSectionChild(AppRoutes.ROUTE_TRANSPORT)
                                         }
                                     },
                                     onNavigateToSalary = {
-                                        if (uiState.canViewSalary) {
-                                            navController.navigate(AppRoutes.ROUTE_SALARY) { launchSingleTop = true }
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_SALARY)
                                     },
                                     onNavigateToSessionPromotion = {
-                                        if (uiState.canViewSessionPromotion) {
-                                            navController.navigate(AppRoutes.ROUTE_SESSION_PROMOTION) { launchSingleTop = true }
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_SESSION_PROMOTION)
                                     },
                                     onNavigateToBulkImport = {
-                                        if (uiState.canUseBulkStudentImport) {
-                                            navController.navigate(AppRoutes.ROUTE_BULK_IMPORT) { launchSingleTop = true }
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_BULK_IMPORT)
                                     },
                                     onNavigateToBackupExport = {
-                                        if (uiState.canUseBackupExport) {
-                                            navController.navigate(AppRoutes.ROUTE_BACKUP_EXPORT) { launchSingleTop = true }
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_BACKUP_EXPORT)
                                     },
                                     onNavigateToResultAnalysis = {
-                                        if (uiState.canViewResultAnalysis) {
-                                            navController.navigate(AppRoutes.ROUTE_RESULT_ANALYSIS) { launchSingleTop = true }
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_RESULT_ANALYSIS)
                                     },
                                     onNavigateToClassDiary = {
-                                        if (uiState.canViewClassDiary) {
-                                            navController.navigate(AppRoutes.ROUTE_CLASS_DIARY) { launchSingleTop = true }
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_CLASS_DIARY)
                                     },
                                     onNavigateToBirthdays = {
-                                        if (uiState.canViewBirthdays) {
-                                            navController.navigate(AppRoutes.ROUTE_BIRTHDAYS) { launchSingleTop = true }
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_BIRTHDAYS)
                                     },
                                     onNavigateToStudentRemarks = {
-                                        if (uiState.canOpenStudentRemarksModule) {
-                                            navController.navigate(AppRoutes.ROUTE_STUDENT_REMARKS) { launchSingleTop = true }
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_STUDENT_REMARKS)
                                     },
                                     onNavigateToGatePass = {
-                                        if (uiState.canViewGateModule) {
-                                            navController.navigate(AppRoutes.ROUTE_GATE_PASS) { launchSingleTop = true }
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_GATE_PASS)
                                     },
                                     onPrintOwnSalarySlip = { slip, pageSize ->
                                         viewModel.generateSalarySlipPdfAndPreview(slip, pageSize)
@@ -987,46 +905,46 @@ private fun OrganisationWorkspace(
                                         if (uiState.canView(AppModule.MARKS)) {
                                             viewModel.focusSchoolClassSection(item.schoolDocId, item.className, item.section)
                                             pendingMarksJumpTarget = item.exam to item.subjectName
-                                            navigateTopLevel(AppRoutes.ROUTE_MARKS)
+                                            navigateSectionChild(AppRoutes.ROUTE_MARKS)
                                         }
                                     },
                                     onOpenCoScholasticSection = { schId, cls, sec ->
                                         if (uiState.canView(AppModule.CO_SCHOLASTIC)) {
                                             viewModel.focusSchoolClassSection(schId, cls, sec)
-                                            navController.navigate(AppRoutes.ROUTE_COSCHOLASTIC) { launchSingleTop = true }
+                                            navigateSectionChild(AppRoutes.ROUTE_COSCHOLASTIC)
                                         }
                                     },
                                     onEditOwnTeacherProfile = {
-                                        navController.navigate(AppRoutes.ROUTE_TEACHER_PROFILE) { launchSingleTop = true }
+                                        navigateSectionChild(AppRoutes.ROUTE_TEACHER_PROFILE)
                                     },
                                     onNavigateToSettings = {
                                         focusBackupSection = false
-                                        navigateTopLevel(AppRoutes.ROUTE_SETTINGS)
+                                        navigateSectionChild(AppRoutes.ROUTE_SETTINGS)
                                     },
                                     onNavigateToBackup = {
                                         if (uiState.canUseBackupExport) {
-                                            navController.navigate(AppRoutes.ROUTE_BACKUP_EXPORT) { launchSingleTop = true }
+                                            navigateSectionChild(AppRoutes.ROUTE_BACKUP_EXPORT)
                                         } else {
                                             focusBackupSection = true
-                                            navigateTopLevel(AppRoutes.ROUTE_SETTINGS)
+                                            navigateSectionChild(AppRoutes.ROUTE_SETTINGS)
                                         }
                                     },
                                     onOpenStudentMarks = { student ->
                                         if (uiState.canView(AppModule.MARKS)) {
                                             viewModel.focusStudent(student)
-                                            navigateTopLevel(AppRoutes.ROUTE_MARKS)
+                                            navigateSectionChild(AppRoutes.ROUTE_MARKS)
                                         }
                                     },
                                     onOpenStudentCoScholastic = { student ->
                                         if (uiState.canView(AppModule.CO_SCHOLASTIC)) {
                                             viewModel.focusStudent(student)
-                                            navController.navigate(AppRoutes.ROUTE_COSCHOLASTIC)
+                                            navigateSectionChild(AppRoutes.ROUTE_COSCHOLASTIC)
                                         }
                                     },
                                     onOpenStudentReport = { student ->
                                         if (uiState.canView(AppModule.REPORTS)) {
                                             viewModel.focusStudent(student)
-                                            navigateTopLevel(AppRoutes.ROUTE_REPORTS)
+                                            navigateSectionChild(AppRoutes.ROUTE_REPORTS)
                                         }
                                     },
                                     onOpenFeeManagementTab = { tabIdx, preselected ->
@@ -1084,36 +1002,134 @@ private fun OrganisationWorkspace(
                                 )
                             }
 
-                            composable(AppRoutes.ROUTE_MARKS) {
-                                MarksEntryScreen(
+                            composable(AppRoutes.ROUTE_SECTION_STUDENTS) {
+                                if (AppNavigationRegistry.canAccessRoute(AppRoutes.ROUTE_SECTION_STUDENTS, uiState)) {
+                                    SectionHomePage(
+                                        section = NavSection.STUDENTS,
+                                        uiState = uiState,
+                                        onNavigateToRoute = { route ->
+                                            resetJumpArgsBeforeOpening(route)
+                                            navigateSectionChild(route)
+                                        },
+                                        onOpenLegalDoc = onOpenLegalDoc
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navigateTopLevel(AppRoutes.ROUTE_DASHBOARD)
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_SECTION_ACADEMICS) {
+                                if (AppNavigationRegistry.canAccessRoute(AppRoutes.ROUTE_SECTION_ACADEMICS, uiState)) {
+                                    SectionHomePage(
+                                        section = NavSection.ACADEMICS,
+                                        uiState = uiState,
+                                        onNavigateToRoute = { route ->
+                                            resetJumpArgsBeforeOpening(route)
+                                            navigateSectionChild(route)
+                                        },
+                                        onOpenLegalDoc = onOpenLegalDoc
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navigateTopLevel(AppRoutes.ROUTE_DASHBOARD)
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_SECTION_FINANCE) {
+                                if (AppNavigationRegistry.canAccessRoute(AppRoutes.ROUTE_SECTION_FINANCE, uiState)) {
+                                    SectionHomePage(
+                                        section = NavSection.FINANCE_OPS,
+                                        uiState = uiState,
+                                        onNavigateToRoute = { route ->
+                                            resetJumpArgsBeforeOpening(route)
+                                            navigateSectionChild(route)
+                                        },
+                                        onOpenLegalDoc = onOpenLegalDoc
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navigateTopLevel(AppRoutes.ROUTE_DASHBOARD)
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_SECTION_MANAGE) {
+                                SectionHomePage(
+                                    section = NavSection.MANAGE,
                                     uiState = uiState,
-                                    viewModel = viewModel,
-                                    onNavigateToStudents = {
-                                        if (canOpenStudentRegister) navigateTopLevel(AppRoutes.ROUTE_STUDENT_REGISTER)
+                                    onNavigateToRoute = { route ->
+                                        resetJumpArgsBeforeOpening(route)
+                                        navigateSectionChild(route)
                                     },
-                                    onNavigateToPendingMarks = {
-                                        if (uiState.canView(AppModule.MARKS)) {
-                                            navController.navigate(AppRoutes.ROUTE_PENDING_MARKS) { launchSingleTop = true }
-                                        }
-                                    },
-                                    initialJumpExam = pendingMarksJumpTarget?.first,
-                                    initialJumpSubject = pendingMarksJumpTarget?.second,
-                                    onJumpConsumed = { pendingMarksJumpTarget = null }
+                                    onOpenLegalDoc = onOpenLegalDoc
                                 )
+                            }
+
+                            composable(AppRoutes.ROUTE_MY_EXAM_DUTIES) {
+                                if (AppNavigationRegistry.canAccessRoute(AppRoutes.ROUTE_MY_EXAM_DUTIES, uiState)) {
+                                    MyExamDutiesScreen(
+                                        uiState = uiState,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            }
+
+                            composable(AppRoutes.ROUTE_MARKS) {
+                                if (AppNavigationRegistry.canAccessRoute(AppRoutes.ROUTE_MARKS, uiState)) {
+                                    MarksEntryScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onNavigateToStudents = {
+                                            navigateSectionChild(AppRoutes.ROUTE_STUDENT_REGISTER)
+                                        },
+                                        onNavigateToPendingMarks = {
+                                            navigateSectionChild(AppRoutes.ROUTE_PENDING_MARKS)
+                                        },
+                                        initialJumpExam = pendingMarksJumpTarget?.first,
+                                        initialJumpSubject = pendingMarksJumpTarget?.second,
+                                        onJumpConsumed = { pendingMarksJumpTarget = null },
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
                             }
 
                             composable(AppRoutes.ROUTE_REPORTS) {
-                                ReportsScreen(
-                                    uiState = uiState,
-                                    viewModel = viewModel
-                                )
+                                if (AppNavigationRegistry.canAccessRoute(AppRoutes.ROUTE_REPORTS, uiState)) {
+                                    ReportsScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
                             }
 
                             composable(AppRoutes.ROUTE_MEMBERS) {
-                                MembersScreen(
-                                    uiState = uiState,
-                                    viewModel = viewModel
-                                )
+                                if (AppNavigationRegistry.canAccessRoute(AppRoutes.ROUTE_MEMBERS, uiState)) {
+                                    MembersScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
                             }
 
                             composable(AppRoutes.ROUTE_SETTINGS) {
@@ -1138,21 +1154,16 @@ private fun OrganisationWorkspace(
                                     },
                                     onOpenLegalDoc = onOpenLegalDoc,
                                     onOpenSubscriptionScreen = {
-                                        navController.navigate(AppRoutes.ROUTE_SCHOOL_SUBSCRIPTION) {
-                                            launchSingleTop = true
-                                        }
+                                        navigateSectionChild(AppRoutes.ROUTE_SCHOOL_SUBSCRIPTION)
                                     },
                                     onSignOut = onSignOut,
                                     onDeleteAccountClick = onDeleteAccountClick,
                                     onOpenDesignPreview = if (BuildConfig.DEBUG) {
-                                        {
-                                            navController.navigate(AppRoutes.ROUTE_DESIGN_PREVIEW) {
-                                                launchSingleTop = true
-                                            }
-                                        }
+                                        { navigateSectionChild(AppRoutes.ROUTE_DESIGN_PREVIEW) }
                                     } else {
                                         null
-                                    }
+                                    },
+                                    onBack = { navController.popBackStack() }
                                 )
                             }
 
@@ -1176,23 +1187,36 @@ private fun OrganisationWorkspace(
                             }
 
                             composable(AppRoutes.ROUTE_COSCHOLASTIC) {
-                                CoScholasticScreen(
-                                    uiState = uiState,
-                                    viewModel = viewModel,
-                                    onBack = { navController.popBackStack() }
-                                )
+                                if (AppNavigationRegistry.canAccessRoute(AppRoutes.ROUTE_COSCHOLASTIC, uiState)) {
+                                    CoScholasticScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
                             }
 
                             composable(AppRoutes.ROUTE_SCHOOLS) {
-                                SchoolsScreen(
-                                    uiState = uiState,
-                                    viewModel = viewModel,
-                                    onBack = { navController.popBackStack() }
-                                )
+                                if (AppNavigationRegistry.canAccessRoute(AppRoutes.ROUTE_SCHOOLS, uiState)) {
+                                    SchoolsScreen(
+                                        uiState = uiState,
+                                        viewModel = viewModel,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
+                                }
                             }
 
                             composable(AppRoutes.ROUTE_TEACHER_PROFILE) {
-                                uiState.currentMember?.let { member ->
+                                val member = uiState.currentMember
+                                if (member != null && AppNavigationRegistry.canAccessRoute(AppRoutes.ROUTE_TEACHER_PROFILE, uiState)) {
                                     TeacherProfileOnboardingScreen(
                                         orgName = uiState.activeOrg?.name.orEmpty(),
                                         member = member,
@@ -1205,6 +1229,10 @@ private fun OrganisationWorkspace(
                                         },
                                         onSwitchOrg = { navController.popBackStack() }
                                     )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        navController.popBackStack()
+                                    }
                                 }
                             }
 
@@ -1256,7 +1284,7 @@ private fun OrganisationWorkspace(
                                         onOpenMarksForItem = { item ->
                                             viewModel.focusSchoolClassSection(item.schoolDocId, item.className, item.section)
                                             pendingMarksJumpTarget = item.exam to item.subjectName
-                                            navigateTopLevel(AppRoutes.ROUTE_MARKS)
+                                            navigateSectionChild(AppRoutes.ROUTE_MARKS)
                                         }
                                     )
                                 } else {
@@ -1382,9 +1410,7 @@ private fun OrganisationWorkspace(
                                             feeJumpQueueRouteId = null
                                         },
                                         onOpenStudentRegister = {
-                                            if (canOpenStudentRegister) {
-                                                navigateTopLevel(AppRoutes.ROUTE_STUDENT_REGISTER)
-                                            }
+                                            navigateSectionChild(AppRoutes.ROUTE_STUDENT_REGISTER)
                                         },
                                         onOpenTransport = {
                                             if (uiState.canViewTransport) {

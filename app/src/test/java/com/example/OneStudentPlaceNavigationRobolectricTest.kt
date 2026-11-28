@@ -1,13 +1,12 @@
 package com.example
 
+import androidx.activity.OnBackPressedDispatcher
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
@@ -29,12 +28,22 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.data.SchoolEntity
+import com.example.data.cloud.CloudMember
+import com.example.data.cloud.CloudOrganisation
+import com.example.domain.AccessLevel
+import com.example.domain.MemberPermissions
+import com.example.domain.OrgRole
+import com.example.ui.AppNavigationRegistry
 import com.example.ui.AppRoutes
 import com.example.ui.DashboardStatusFilter
+import com.example.ui.NavSection
+import com.example.ui.SchoolUiState
+import com.example.ui.SectionHomePage
 import com.example.ui.StudentDashboardHeaderControls
 import com.example.ui.StudentRegisterEmptyState
 import com.example.ui.StudentRegisterHeader
-import com.example.ui.buildWorkspaceTopNavItems
+import com.example.ui.designsystem.GlassBottomBar
 import com.example.ui.theme.SchoolAppTheme
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -53,32 +62,51 @@ class OneStudentPlaceNavigationRobolectricTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    @Test
-    fun bottomNavStudents_opensStudentRegisterAndNothingElse() {
-        var currentObservedRoute = AppRoutes.ROUTE_DASHBOARD
-        val navItems = buildWorkspaceTopNavItems(
-            canViewStudents = true,
-            canViewStudentRegister = true,
-            canViewMarks = true,
-            canViewReports = true,
-            canViewMembersOrAdmin = true,
-            pendingJoinRequestCount = 0
+    private fun testUiState(
+        role: OrgRole = OrgRole.OWNER,
+        permissions: MemberPermissions = MemberPermissions.presetFor(role)
+    ): SchoolUiState {
+        val school = SchoolEntity(id = 1L, name = "Sunrise Public School")
+        return SchoolUiState(
+            isInitialized = true,
+            schools = listOf(school),
+            activeOrg = CloudOrganisation(id = "org1", name = "Sunrise Group", code = "sunrise"),
+            currentMember = CloudMember(
+                id = "m1",
+                uid = "u1",
+                name = "Test User",
+                role = role.name,
+                status = "active",
+                allSchools = true,
+                permissions = permissions.toFirestoreMap()
+            ),
+            phase10HindiLabels = false
         )
+    }
+
+    @Test
+    fun bottomNavStudents_opensStudentsSectionAndLeadsToStudentRegister() {
+        var currentObservedRoute = AppRoutes.ROUTE_DASHBOARD
+        val ownerState = testUiState(OrgRole.OWNER)
+        val navItems = AppNavigationRegistry.buildBottomNavItems(ownerState, isHindi = false)
 
         val studentsNavItem = navItems.single { it.testTag == "nav_students" }
         assertEquals("Students", studentsNavItem.label)
         assertEquals(
-            "Bottom nav 'Students' must point directly to ROUTE_STUDENT_REGISTER",
-            AppRoutes.ROUTE_STUDENT_REGISTER,
-            studentsNavItem.route
+            "Bottom nav 'Students' must point to ROUTE_SECTION_STUDENTS",
+            AppRoutes.ROUTE_SECTION_STUDENTS,
+            studentsNavItem.id
         )
 
+        var backDispatcher: OnBackPressedDispatcher? = null
         composeRule.setContent {
+            backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
             SchoolAppTheme {
                 val navController = rememberNavController()
                 val backStack by navController.currentBackStackEntryAsState()
                 val activeRoute = backStack?.destination?.route ?: AppRoutes.ROUTE_DASHBOARD
                 currentObservedRoute = activeRoute
+                val activeSection = AppNavigationRegistry.parentSectionFor(activeRoute)
 
                 fun navigateTopLevel(route: String) {
                     navController.navigate(route) {
@@ -92,22 +120,13 @@ class OneStudentPlaceNavigationRobolectricTest {
 
                 Scaffold(
                     bottomBar = {
-                        NavigationBar {
-                            navItems.forEach { item ->
-                                val selected = activeRoute == item.route
-                                NavigationBarItem(
-                                    selected = selected,
-                                    onClick = { navigateTopLevel(item.route) },
-                                    icon = {
-                                        Icon(
-                                            imageVector = if (selected) item.selectedIcon else item.unselectedIcon,
-                                            contentDescription = item.label
-                                        )
-                                    },
-                                    label = { Text(item.label) },
-                                    modifier = Modifier.testTag(item.testTag)
-                                )
-                            }
+                        if (!AppNavigationRegistry.isSubScreenRoute(activeRoute)) {
+                            GlassBottomBar(
+                                items = navItems,
+                                selectedId = activeSection.route,
+                                onSelect = { navigateTopLevel(it.id) },
+                                applyNavigationBarInsets = false
+                            )
                         }
                     }
                 ) { innerPadding ->
@@ -133,18 +152,30 @@ class OneStudentPlaceNavigationRobolectricTest {
                                     onStatusFilterSelected = {},
                                     onlyActiveClass = false,
                                     onToggleOnlyActiveClass = {},
-                                    onManageAllStudents = { navigateTopLevel(AppRoutes.ROUTE_STUDENT_REGISTER) },
+                                    onManageAllStudents = {
+                                        navController.navigate(AppRoutes.ROUTE_STUDENT_REGISTER) {
+                                            launchSingleTop = true
+                                        }
+                                    },
                                     showManageButton = true
                                 )
                             }
                         }
+                        composable(AppRoutes.ROUTE_SECTION_STUDENTS) {
+                            SectionHomePage(
+                                section = NavSection.STUDENTS,
+                                uiState = ownerState,
+                                onNavigateToRoute = { route ->
+                                    navController.navigate(route) { launchSingleTop = true }
+                                }
+                            )
+                        }
+                        composable(AppRoutes.ROUTE_SECTION_ACADEMICS) { Text("Academics") }
+                        composable(AppRoutes.ROUTE_SECTION_FINANCE) { Text("Finance") }
+                        composable(AppRoutes.ROUTE_SECTION_MANAGE) { Text("Manage") }
                         composable(AppRoutes.ROUTE_STUDENT_REGISTER) {
                             Text("Student Register", modifier = Modifier.testTag("phase9_student_register_screen"))
                         }
-                        composable(AppRoutes.ROUTE_MARKS) { Text("Marks") }
-                        composable(AppRoutes.ROUTE_REPORTS) { Text("Reports") }
-                        composable(AppRoutes.ROUTE_MEMBERS) { Text("Members") }
-                        composable(AppRoutes.ROUTE_SETTINGS) { Text("Settings") }
                     }
                 }
             }
@@ -152,13 +183,22 @@ class OneStudentPlaceNavigationRobolectricTest {
         composeRule.waitForIdle()
         assertEquals(AppRoutes.ROUTE_DASHBOARD, currentObservedRoute)
 
-        // 1. Tap bottom nav "Students" -> must open Student Register
+        // 1. Tap bottom nav "Students" -> opens Students Section Home -> tap Student Register card
         composeRule.onNodeWithTag("nav_students").performClick()
+        composeRule.waitForIdle()
+        assertEquals(AppRoutes.ROUTE_SECTION_STUDENTS, currentObservedRoute)
+        composeRule.onNodeWithTag("section_card_student_register").assertIsDisplayed().performClick()
         composeRule.waitForIdle()
         assertEquals(AppRoutes.ROUTE_STUDENT_REGISTER, currentObservedRoute)
         composeRule.onNodeWithTag("phase9_student_register_screen").assertIsDisplayed()
 
-        // 2. Return Home and tap Dashboard "Manage" ("manage all students") -> must open Student Register
+        // 2. Pop back to Students, switch to Home, and tap Dashboard "Manage" -> opens Student Register
+        composeRule.runOnUiThread {
+            backDispatcher?.onBackPressed()
+        }
+        composeRule.waitForIdle()
+        assertEquals(AppRoutes.ROUTE_SECTION_STUDENTS, currentObservedRoute)
+
         composeRule.onNodeWithTag("nav_home").performClick()
         composeRule.waitForIdle()
         assertEquals(AppRoutes.ROUTE_DASHBOARD, currentObservedRoute)
@@ -170,28 +210,32 @@ class OneStudentPlaceNavigationRobolectricTest {
     }
 
     @Test
-    fun buildWorkspaceTopNavItems_respectsStudentViewPermissionsWithoutDuplicateTabs() {
-        // Teacher with STUDENTS=VIEW and STUDENT_REGISTER=NONE still sees ONE "Students" tab pointing to Register
-        val teacherItems = buildWorkspaceTopNavItems(
-            canViewStudents = true,
-            canViewStudentRegister = false,
-            canViewMarks = true,
-            canViewReports = true,
-            canViewMembersOrAdmin = false,
-            pendingJoinRequestCount = 0
+    fun buildBottomNavItems_respectsStudentViewPermissionsWithoutDuplicateTabs() {
+        // Teacher with STUDENTS=VIEW and STUDENT_REGISTER=NONE still sees ONE "Students" tab pointing to Section Home
+        val teacherPerms = MemberPermissions.presetFor(OrgRole.TEACHER).copy(
+            students = AccessLevel.VIEW,
+            studentRegister = AccessLevel.NONE
         )
-        assertEquals(1, teacherItems.count { it.route == AppRoutes.ROUTE_STUDENT_REGISTER })
-        assertEquals("Students", teacherItems.single { it.route == AppRoutes.ROUTE_STUDENT_REGISTER }.label)
+        val teacherState = testUiState(OrgRole.TEACHER, teacherPerms)
+        val teacherItems = AppNavigationRegistry.buildBottomNavItems(teacherState, isHindi = false)
+        assertEquals(1, teacherItems.count { it.id == AppRoutes.ROUTE_SECTION_STUDENTS })
+        assertEquals("Students", teacherItems.single { it.id == AppRoutes.ROUTE_SECTION_STUDENTS }.label)
 
-        // Member with neither STUDENTS nor STUDENT_REGISTER sees no Students tab
-        val restrictedItems = buildWorkspaceTopNavItems(
-            canViewStudents = false,
-            canViewStudentRegister = false,
-            canViewMarks = false,
-            canViewReports = false,
-            canViewMembersOrAdmin = false,
-            pendingJoinRequestCount = 0
+        val studentCards = AppNavigationRegistry.cardsForSection(NavSection.STUDENTS, teacherState)
+        assertEquals(1, studentCards.count { it.route == AppRoutes.ROUTE_STUDENT_REGISTER })
+
+        // Member with zero Students-section permissions sees no Students tab
+        val restrictedPerms = MemberPermissions(
+            students = AccessLevel.NONE,
+            studentRegister = AccessLevel.NONE,
+            enquiry = AccessLevel.NONE,
+            certificates = AccessLevel.NONE,
+            studentRemarks = AccessLevel.NONE,
+            gate = AccessLevel.NONE,
+            sessionPromotion = AccessLevel.NONE
         )
+        val restrictedState = testUiState(OrgRole.OTHER, restrictedPerms)
+        val restrictedItems = AppNavigationRegistry.buildBottomNavItems(restrictedState, isHindi = false)
         assertTrue(restrictedItems.none { it.testTag == "nav_students" })
     }
 
@@ -237,7 +281,6 @@ class OneStudentPlaceNavigationRobolectricTest {
         assertTrue("Add First Student button >= 48dp tall, got ${btnBounds.height}", btnBounds.height >= 47.5.dp)
         assertTrue("Add First Student button fits 320dp, right=${btnBounds.right}", btnBounds.right <= 320.5.dp)
 
-        // Both header Add Student and empty-state Add First Student trigger the same action
         composeRule.onNodeWithTag("register_add_student_button").performClick()
         composeRule.onNodeWithTag("register_add_first_student_button").performClick()
         assertEquals(2, addStudentClicks)

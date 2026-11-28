@@ -1023,6 +1023,7 @@ fun TeacherTodayHeroSection(
     onTakeAttendance: (String, String, String, String) -> Unit,
     onOpenPendingMarks: () -> Unit,
     onOpenLeaveTab: () -> Unit,
+    onOpenExamDuties: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -1145,7 +1146,7 @@ fun TeacherTodayHeroSection(
                 icon = Icons.Default.EventNote,
                 accentColor = MaterialTheme.colorScheme.primary,
                 containerTint = MaterialTheme.colorScheme.surface,
-                onClick = {},
+                onClick = onOpenExamDuties,
                 modifier = Modifier
                     .weight(1f)
                     .testTag("teacher_today_exam_duties")

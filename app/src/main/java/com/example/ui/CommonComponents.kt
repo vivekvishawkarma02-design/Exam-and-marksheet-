@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -120,7 +121,8 @@ fun SchoolSwitcherBar(
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                         uiState.currentMember?.orgRole?.let { role ->
                             Surface(
@@ -167,6 +169,7 @@ fun SchoolSwitcherBar(
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .heightIn(min = 48.dp)
                             .minimumInteractiveComponentSize()
                             .clickable(enabled = switchableSchools.size > 1 || canManageSchools) { expanded = true }
                             .testTag("top_school_switcher")
@@ -186,7 +189,8 @@ fun SchoolSwitcherBar(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary,
                                     fontWeight = FontWeight.Bold,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = activeSchool.name,
@@ -279,6 +283,7 @@ fun SchoolSwitcherBar(
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         modifier = Modifier
+                            .heightIn(min = 48.dp)
                             .minimumInteractiveComponentSize()
                             .clickable(onClick = onManageSchools)
                             .testTag("top_manage_schools_button")
@@ -298,7 +303,9 @@ fun SchoolSwitcherBar(
                                 text = "Schools",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }
